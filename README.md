@@ -1,2 +1,3 @@
-# c-lean
+# lantern
+
 C implementation of Lean consensus
