@@ -1,0 +1,7 @@
+[submodule "external/c-libp2p"]
+	path = external/c-libp2p
+	url = https://github.com/Pier-Two/c-libp2p.git
+
+[submodule "external/c-ssz"]
+	path = external/c-ssz
+	url = https://github.com/Pier-Two/c-ssz.git
