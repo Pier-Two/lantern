@@ -8,13 +8,27 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 include(cmake/Dependencies.cmake)
 
+set(SECP256K1_DISABLE_SHARED ON CACHE BOOL "" FORCE)
+set(SECP256K1_INSTALL OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_EXHAUSTIVE_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_CTIME_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+add_subdirectory(${PROJECT_SOURCE_DIR}/external/c-libp2p/external/secp256k1 ${CMAKE_BINARY_DIR}/secp256k1 EXCLUDE_FROM_ALL)
+
+set(WITH_LTM OFF CACHE BOOL "" FORCE)
+set(WITH_TFM OFF CACHE BOOL "" FORCE)
+set(WITH_GMP OFF CACHE BOOL "" FORCE)
+add_subdirectory(${PROJECT_SOURCE_DIR}/external/c-libp2p/external/libtomcrypt ${CMAKE_BINARY_DIR}/libtomcrypt EXCLUDE_FROM_ALL)
+
 add_library(lantern STATIC
-    src/client.c
-    src/genesis.c
-    src/enr.c
-    src/rlp.c
+    src/core/client.c
+    src/genesis/genesis.c
+    src/networking/enr.c
+    src/encoding/rlp.c
     src/string_list.c
-    src/internal/strings.c
+    src/support/strings.c
     src/internal/yaml_parser.c
     external/c-libp2p/src/multiformats/multibase/encoding/base64_url.c
 )
@@ -24,11 +38,13 @@ target_include_directories(lantern
         ${PROJECT_SOURCE_DIR}/include
     PRIVATE
         ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/secp256k1/include
 )
 
 lantern_configure_dependencies(lantern)
+target_link_libraries(lantern PRIVATE secp256k1 libtomcrypt)
 
-add_executable(lantern_cli src/main.c)
+add_executable(lantern_cli src/core/main.c)
 target_link_libraries(lantern_cli PRIVATE lantern)
 
 option(LANTERN_BUILD_TESTS "Build lantern unit tests" ON)

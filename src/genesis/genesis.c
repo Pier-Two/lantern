@@ -1,6 +1,6 @@
-#include "lantern/genesis.h"
+#include "lantern/genesis/genesis.h"
 
-#include "internal/strings.h"
+#include "lantern/support/strings.h"
 #include "internal/yaml_parser.h"
 
 #include <ctype.h>

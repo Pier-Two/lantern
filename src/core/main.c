@@ -1,4 +1,4 @@
-#include "lantern/client.h"
+#include "lantern/core/client.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -16,6 +16,8 @@ enum {
     OPT_GENESIS_STATE,
     OPT_VALIDATOR_CONFIG,
     OPT_NODE_ID,
+    OPT_NODE_KEY,
+    OPT_NODE_KEY_PATH,
     OPT_LISTEN_ADDRESS,
     OPT_HTTP_PORT,
     OPT_METRICS_PORT,
@@ -46,6 +48,8 @@ int main(int argc, char **argv) {
         {"genesis-state", required_argument, NULL, OPT_GENESIS_STATE},
         {"validator-config", required_argument, NULL, OPT_VALIDATOR_CONFIG},
         {"node-id", required_argument, NULL, OPT_NODE_ID},
+        {"node-key", required_argument, NULL, OPT_NODE_KEY},
+        {"node-key-path", required_argument, NULL, OPT_NODE_KEY_PATH},
         {"listen-address", required_argument, NULL, OPT_LISTEN_ADDRESS},
         {"http-port", required_argument, NULL, OPT_HTTP_PORT},
         {"metrics-port", required_argument, NULL, OPT_METRICS_PORT},
@@ -87,6 +91,12 @@ int main(int argc, char **argv) {
         case OPT_NODE_ID:
             options.node_id = optarg;
             break;
+        case OPT_NODE_KEY:
+            options.node_key_hex = optarg;
+            break;
+        case OPT_NODE_KEY_PATH:
+            options.node_key_path = optarg;
+            break;
         case OPT_LISTEN_ADDRESS:
             options.listen_address = optarg;
             break;
@@ -119,6 +129,11 @@ int main(int argc, char **argv) {
         }
     }
 
+    if (options.node_key_hex && options.node_key_path) {
+        fprintf(stderr, "lantern: specify only one of --node-key or --node-key-path\n");
+        goto error;
+    }
+
     if (show_version) {
         printf("lantern devnet0 preview\n");
         goto cleanup;
@@ -140,11 +155,12 @@ int main(int argc, char **argv) {
     }
 
     printf(
-        "lantern ready | genesis_time=%" PRIu64 " validators=%" PRIu64 " enr=%zu manual_bootnodes=%zu\n",
+        "lantern ready | genesis_time=%" PRIu64 " validators=%" PRIu64 " enr=%zu manual_bootnodes=%zu local_enr=%s\n",
         client.genesis.chain_config.genesis_time,
         client.genesis.chain_config.validator_count,
         client.genesis.enrs.count,
-        client.bootnodes.len);
+        client.bootnodes.len,
+        client.local_enr.encoded ? client.local_enr.encoded : "-");
 
 cleanup:
     lantern_shutdown(&client);
@@ -169,6 +185,8 @@ static void print_usage(const char *prog) {
         "  --genesis-state PATH         Path to genesis.ssz\n"
         "  --validator-config PATH      Path to validator-config.yaml\n"
         "  --node-id NAME               Node identifier (e.g., ream_0)\n"
+        "  --node-key HEX               Local node private key (32-byte hex)\n"
+        "  --node-key-path PATH         Path to file containing node private key hex\n"
         "  --listen-address ADDR        QUIC listen multiaddr\n"
         "  --http-port PORT             HTTP API port\n"
         "  --metrics-port PORT          Metrics port\n"

@@ -1,4 +1,4 @@
-#include "lantern/client.h"
+#include "lantern/core/client.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -55,6 +55,19 @@ static int verify_client_state(const struct lantern_client *client, const struct
         fprintf(stderr, "Validator assignment missing or incorrect\n");
         return 1;
     }
+    if (!client->local_enr.encoded) {
+        fprintf(stderr, "Local ENR missing\n");
+        return 1;
+    }
+    if (client->local_enr.sequence != client->assigned_validators->enr.sequence) {
+        fprintf(stderr, "Local ENR sequence mismatch\n");
+        return 1;
+    }
+    const struct lantern_enr_key_value *udp = lantern_enr_record_find(&client->local_enr, "udp");
+    if (!udp || udp->value_len != 2 || udp->value[0] != 0x23 || udp->value[1] != 0x8c) {
+        fprintf(stderr, "Local ENR UDP mismatch\n");
+        return 1;
+    }
     if (client->bootnodes.len != options->bootnodes.len) {
         fprintf(
             stderr,
@@ -90,6 +103,7 @@ int main(void) {
     options.validator_config_path = validator_config_path;
     options.node_id = "lantern_0";
     options.listen_address = "/ip4/127.0.0.1/udp/9100/quic-v1";
+    options.node_key_hex = "0xb71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291";
 
     if (lantern_client_options_add_bootnode(&options, "enr:-ManualEnr") != 0) {
         fprintf(stderr, "Failed to add bootnode\n");

@@ -1,4 +1,4 @@
-#include "lantern/enr.h"
+#include "lantern/networking/enr.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -90,11 +90,40 @@ cleanup:
     return result;
 }
 
+static int test_build_enr_example(void) {
+    static const uint8_t kExamplePrivateKey[32] = {
+        0xb7, 0x1c, 0x71, 0xa6, 0x7e, 0x11, 0x77, 0xad,
+        0x4e, 0x90, 0x16, 0x95, 0xe1, 0xb4, 0xb9, 0xee,
+        0x17, 0xae, 0x16, 0xc6, 0x66, 0x8d, 0x31, 0x3e,
+        0xac, 0x2f, 0x96, 0xdb, 0xcd, 0xa3, 0xf2, 0x91,
+    };
+
+    struct lantern_enr_record record;
+    lantern_enr_record_init(&record);
+
+    if (lantern_enr_record_build_v4(&record, kExamplePrivateKey, "127.0.0.1", 30303, 1) != 0) {
+        fprintf(stderr, "build failed\n");
+        lantern_enr_record_reset(&record);
+        return 1;
+    }
+    if (!record.encoded || strcmp(record.encoded, kExampleEnr) != 0) {
+        fprintf(stderr, "encoded ENR mismatch\n");
+        lantern_enr_record_reset(&record);
+        return 1;
+    }
+
+    lantern_enr_record_reset(&record);
+    return 0;
+}
+
 int main(void) {
     if (test_decode_single() != 0) {
         return 1;
     }
     if (test_record_list() != 0) {
+        return 1;
+    }
+    if (test_build_enr_example() != 0) {
         return 1;
     }
     return 0;

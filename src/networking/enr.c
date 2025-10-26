@@ -1,13 +1,23 @@
-#include "lantern/enr.h"
+#include "lantern/networking/enr.h"
 
-#include "internal/strings.h"
-#include "lantern/rlp.h"
+#include "lantern/encoding/rlp.h"
+#include "lantern/support/strings.h"
+#include "libp2p/crypto/ltc_compat.h"
 #include "multiformats/multibase/encoding/base64_url.h"
 
 #include <ctype.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#endif
+
+#include "secp256k1.h"
 
 static void lantern_enr_key_value_reset(struct lantern_enr_key_value *pair) {
     if (!pair) {
@@ -100,7 +110,7 @@ static int lantern_enr_record_list_reserve(struct lantern_enr_record_list *list,
     return 0;
 }
 
-static int base64url_decode(const char *input, uint8_t **out_bytes, size_t *out_len) {
+static int lantern_base64url_decode(const char *input, uint8_t **out_bytes, size_t *out_len) {
     if (!input || !out_bytes || !out_len) {
         return -1;
     }
@@ -222,7 +232,7 @@ int lantern_enr_record_decode(const char *enr_text, struct lantern_enr_record *r
 
     uint8_t *encoded_bytes = NULL;
     size_t encoded_len = 0;
-    if (base64url_decode(payload, &encoded_bytes, &encoded_len) != 0) {
+    if (lantern_base64url_decode(payload, &encoded_bytes, &encoded_len) != 0) {
         goto error;
     }
 
@@ -294,4 +304,201 @@ int lantern_enr_record_list_append(struct lantern_enr_record_list *list, const c
     }
     list->count++;
     return 0;
+}
+
+static void reset_rlp_buffers(struct lantern_rlp_buffer *buffers, size_t count) {
+    if (!buffers) {
+        return;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        lantern_rlp_buffer_reset(&buffers[i]);
+    }
+}
+
+static int parse_ipv4_address(const char *ip_string, uint8_t out[4]) {
+    if (!ip_string || !out) {
+        return -1;
+    }
+
+#if defined(_WIN32)
+    struct in_addr addr;
+    if (InetPtonA(AF_INET, ip_string, &addr) != 1) {
+        return -1;
+    }
+#else
+    struct in_addr addr;
+    if (inet_pton(AF_INET, ip_string, &addr) != 1) {
+        return -1;
+    }
+#endif
+
+    memcpy(out, &addr, sizeof(addr));
+    return 0;
+}
+
+int lantern_enr_record_build_v4(
+    struct lantern_enr_record *record,
+    const uint8_t private_key[32],
+    const char *ip_string,
+    uint16_t udp_port,
+    uint64_t sequence) {
+    if (!record || !private_key || !ip_string) {
+        return -1;
+    }
+
+    struct lantern_rlp_buffer items[9];
+    memset(items, 0, sizeof(items));
+    struct lantern_rlp_buffer signed_record = {0};
+    struct lantern_rlp_buffer content = {0};
+    struct lantern_rlp_buffer signature_buf = {0};
+
+    uint8_t ip_bytes[4];
+    if (parse_ipv4_address(ip_string, ip_bytes) != 0) {
+        goto error;
+    }
+
+    secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
+    if (!ctx) {
+        goto error;
+    }
+
+    secp256k1_pubkey pubkey;
+    if (!secp256k1_ec_pubkey_create(ctx, &pubkey, private_key)) {
+        secp256k1_context_destroy(ctx);
+        goto error;
+    }
+
+    unsigned char pubkey_compressed[33];
+    size_t pubkey_len = sizeof(pubkey_compressed);
+    if (!secp256k1_ec_pubkey_serialize(
+            ctx,
+            pubkey_compressed,
+            &pubkey_len,
+            &pubkey,
+            SECP256K1_EC_COMPRESSED)) {
+        secp256k1_context_destroy(ctx);
+        goto error;
+    }
+    secp256k1_context_destroy(ctx);
+
+    size_t idx = 0;
+    if (lantern_rlp_encode_uint64(&items[idx++], sequence) != 0) {
+        goto error;
+    }
+    if (lantern_rlp_encode_bytes(&items[idx++], (const uint8_t *)"id", 2) != 0) {
+        goto error;
+    }
+    if (lantern_rlp_encode_bytes(&items[idx++], (const uint8_t *)"v4", 2) != 0) {
+        goto error;
+    }
+    if (lantern_rlp_encode_bytes(&items[idx++], (const uint8_t *)"ip", 2) != 0) {
+        goto error;
+    }
+    if (lantern_rlp_encode_bytes(&items[idx++], ip_bytes, sizeof(ip_bytes)) != 0) {
+        goto error;
+    }
+    if (lantern_rlp_encode_bytes(&items[idx++], (const uint8_t *)"secp256k1", 9) != 0) {
+        goto error;
+    }
+    if (lantern_rlp_encode_bytes(&items[idx++], pubkey_compressed, pubkey_len) != 0) {
+        goto error;
+    }
+    if (lantern_rlp_encode_bytes(&items[idx++], (const uint8_t *)"udp", 3) != 0) {
+        goto error;
+    }
+    uint8_t udp_bytes[2] = {(uint8_t)(udp_port >> 8), (uint8_t)(udp_port & 0xFF)};
+    if (lantern_rlp_encode_bytes(&items[idx++], udp_bytes, sizeof(udp_bytes)) != 0) {
+        goto error;
+    }
+
+    if (lantern_rlp_encode_list(&content, items, idx) != 0) {
+        goto error;
+    }
+
+    uint8_t message_hash[32];
+    hash_state keccak_state;
+    if (keccak_256_init(&keccak_state) != CRYPT_OK) {
+        goto error;
+    }
+    if (content.length > 0
+        && sha3_process(&keccak_state, content.data, (unsigned long)content.length) != CRYPT_OK) {
+        goto error;
+    }
+    if (keccak_done(&keccak_state, message_hash) != CRYPT_OK) {
+        goto error;
+    }
+
+    secp256k1_context *sign_ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
+    if (!sign_ctx) {
+        goto error;
+    }
+    secp256k1_ecdsa_signature signature;
+    if (!secp256k1_ecdsa_sign(sign_ctx, &signature, message_hash, private_key, NULL, NULL)) {
+        secp256k1_context_destroy(sign_ctx);
+        goto error;
+    }
+    unsigned char sig_bytes[64];
+    if (!secp256k1_ecdsa_signature_serialize_compact(sign_ctx, sig_bytes, &signature)) {
+        secp256k1_context_destroy(sign_ctx);
+        goto error;
+    }
+    secp256k1_context_destroy(sign_ctx);
+
+    if (lantern_rlp_encode_bytes(&signature_buf, sig_bytes, sizeof(sig_bytes)) != 0) {
+        goto error;
+    }
+
+    struct lantern_rlp_buffer record_items[10];
+    record_items[0] = signature_buf;
+    for (size_t i = 0; i < idx; ++i) {
+        record_items[i + 1] = items[i];
+    }
+    if (lantern_rlp_encode_list(&signed_record, record_items, idx + 1) != 0) {
+        goto error;
+    }
+
+    size_t encoded_capacity = ((signed_record.length * 4) + 2) / 3 + 1;
+    char *payload = malloc(encoded_capacity);
+    if (!payload) {
+        goto error;
+    }
+    int written = multibase_base64_url_encode(
+        signed_record.data,
+        signed_record.length,
+        payload,
+        encoded_capacity);
+    if (written < 0) {
+        free(payload);
+        goto error;
+    }
+    payload[written] = '\0';
+
+    size_t enr_len = (size_t)written + 5;
+    char *enr_text = malloc(enr_len);
+    if (!enr_text) {
+        free(payload);
+        goto error;
+    }
+    memcpy(enr_text, "enr:", 4);
+    memcpy(enr_text + 4, payload, (size_t)written + 1);
+    free(payload);
+
+    if (lantern_enr_record_decode(enr_text, record) != 0) {
+        free(enr_text);
+        goto error;
+    }
+    free(enr_text);
+
+    reset_rlp_buffers(items, idx);
+    lantern_rlp_buffer_reset(&signature_buf);
+    lantern_rlp_buffer_reset(&content);
+    lantern_rlp_buffer_reset(&signed_record);
+    return 0;
+
+error:
+    reset_rlp_buffers(items, idx);
+    lantern_rlp_buffer_reset(&signature_buf);
+    lantern_rlp_buffer_reset(&content);
+    lantern_rlp_buffer_reset(&signed_record);
+    return -1;
 }

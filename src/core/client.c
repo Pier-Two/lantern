@@ -1,7 +1,8 @@
-#include "lantern/client.h"
+#include "lantern/core/client.h"
 
-#include "internal/strings.h"
+#include "lantern/support/strings.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,8 @@
 static int set_owned_string(char **dest, const char *value);
 static int copy_genesis_paths(struct lantern_genesis_paths *paths, const struct lantern_client_options *options);
 static void reset_genesis_paths(struct lantern_genesis_paths *paths);
+static int read_trimmed_file(const char *path, char **out_text);
+static int load_node_key_bytes(const struct lantern_client_options *options, uint8_t out_key[32]);
 
 void lantern_client_options_init(struct lantern_client_options *options) {
     if (!options) {
@@ -22,6 +25,8 @@ void lantern_client_options_init(struct lantern_client_options *options) {
     options->genesis_state_path = LANTERN_DEFAULT_GENESIS_STATE;
     options->validator_config_path = LANTERN_DEFAULT_VALIDATOR_CONFIG;
     options->node_id = LANTERN_DEFAULT_NODE_ID;
+    options->node_key_hex = NULL;
+    options->node_key_path = NULL;
     options->listen_address = LANTERN_DEFAULT_LISTEN_ADDR;
     options->http_port = LANTERN_DEFAULT_HTTP_PORT;
     options->metrics_port = LANTERN_DEFAULT_METRICS_PORT;
@@ -50,6 +55,7 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     memset(client, 0, sizeof(*client));
     lantern_string_list_init(&client->bootnodes);
     lantern_genesis_artifacts_init(&client->genesis);
+    lantern_enr_record_init(&client->local_enr);
 
     if (set_owned_string(&client->data_dir, options->data_dir) != 0) {
         goto error;
@@ -81,7 +87,32 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
 
     if (!client->assigned_validators) {
         fprintf(stderr, "lantern: node-id '%s' not found in validator-config\n", client->node_id);
+        goto error;
     }
+    if (!client->assigned_validators->enr.ip || client->assigned_validators->enr.quic_port == 0) {
+        fprintf(stderr, "lantern: validator '%s' missing ENR fields\n", client->node_id);
+        goto error;
+    }
+
+    uint8_t node_key[32];
+    if (load_node_key_bytes(options, node_key) != 0) {
+        goto error;
+    }
+    memcpy(client->node_private_key, node_key, sizeof(node_key));
+    client->has_node_private_key = true;
+
+    if (lantern_enr_record_build_v4(
+            &client->local_enr,
+            node_key,
+            client->assigned_validators->enr.ip,
+            client->assigned_validators->enr.quic_port,
+            client->assigned_validators->enr.sequence)
+        != 0) {
+        fprintf(stderr, "lantern: failed to build local ENR\n");
+        memset(node_key, 0, sizeof(node_key));
+        goto error;
+    }
+    memset(node_key, 0, sizeof(node_key));
 
     return 0;
 
@@ -105,6 +136,9 @@ void lantern_shutdown(struct lantern_client *client) {
 
     reset_genesis_paths(&client->genesis_paths);
     lantern_genesis_artifacts_reset(&client->genesis);
+    lantern_enr_record_reset(&client->local_enr);
+    memset(client->node_private_key, 0, sizeof(client->node_private_key));
+    client->has_node_private_key = false;
 
     client->http_port = 0;
     client->metrics_port = 0;
@@ -160,4 +194,87 @@ static void reset_genesis_paths(struct lantern_genesis_paths *paths) {
     free(paths->state_path);
     free(paths->validator_config_path);
     memset(paths, 0, sizeof(*paths));
+}
+
+static int read_trimmed_file(const char *path, char **out_text) {
+    if (!path || !out_text) {
+        return -1;
+    }
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
+        fprintf(stderr, "lantern: unable to open %s for reading\n", path);
+        return -1;
+    }
+
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        return -1;
+    }
+    long file_size = ftell(fp);
+    if (file_size < 0) {
+        fclose(fp);
+        return -1;
+    }
+    if (fseek(fp, 0, SEEK_SET) != 0) {
+        fclose(fp);
+        return -1;
+    }
+
+    char *buffer = malloc((size_t)file_size + 1);
+    if (!buffer) {
+        fclose(fp);
+        return -1;
+    }
+
+    size_t read_len = fread(buffer, 1, (size_t)file_size, fp);
+    fclose(fp);
+    buffer[read_len] = '\0';
+
+    char *trimmed = lantern_trim_whitespace(buffer);
+    size_t trimmed_len = strlen(trimmed);
+    memmove(buffer, trimmed, trimmed_len + 1);
+    *out_text = buffer;
+    return 0;
+}
+
+static int load_node_key_bytes(const struct lantern_client_options *options, uint8_t out_key[32]) {
+    if (!options || !out_key) {
+        return -1;
+    }
+
+    char *owned = NULL;
+    int rc = -1;
+
+    if (options->node_key_hex) {
+        owned = lantern_string_duplicate(options->node_key_hex);
+        if (!owned) {
+            return -1;
+        }
+    } else if (options->node_key_path) {
+        if (read_trimmed_file(options->node_key_path, &owned) != 0) {
+            return -1;
+        }
+    } else {
+        fprintf(stderr, "lantern: --node-key or --node-key-path is required\n");
+        return -1;
+    }
+
+    char *trimmed = lantern_trim_whitespace(owned);
+    if (!trimmed) {
+        free(owned);
+        return -1;
+    }
+
+    rc = lantern_hex_decode(trimmed, out_key, 32);
+    if (rc != 0) {
+        fprintf(stderr, "lantern: invalid node key (expected 32-byte hex string)\n");
+    }
+
+    if (owned) {
+        memset(owned, 0, strlen(owned));
+        free(owned);
+    }
+
+    return rc;
 }

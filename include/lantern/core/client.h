@@ -1,9 +1,10 @@
 #ifndef LANTERN_CLIENT_H
 #define LANTERN_CLIENT_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
-#include "lantern/genesis.h"
+#include "lantern/genesis/genesis.h"
 #include "lantern/string_list.h"
 
 #ifdef __cplusplus
@@ -29,6 +30,8 @@ struct lantern_client_options {
     const char *genesis_state_path;
     const char *validator_config_path;
     const char *node_id;
+    const char *node_key_hex;
+    const char *node_key_path;
     const char *listen_address;
     uint16_t http_port;
     uint16_t metrics_port;
@@ -44,6 +47,9 @@ struct lantern_client {
     struct lantern_string_list bootnodes;
     struct lantern_genesis_paths genesis_paths;
     struct lantern_genesis_artifacts genesis;
+    struct lantern_enr_record local_enr;
+    uint8_t node_private_key[32];
+    bool has_node_private_key;
     const struct lantern_validator_config_entry *assigned_validators;
 };
 

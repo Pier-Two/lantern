@@ -1,4 +1,4 @@
-#include "lantern/rlp.h"
+#include "lantern/encoding/rlp.h"
 
 #include <limits.h>
 #include <stdbool.h>

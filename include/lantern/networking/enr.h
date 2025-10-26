@@ -37,6 +37,12 @@ const struct lantern_enr_key_value *lantern_enr_record_find(const struct lantern
 void lantern_enr_record_list_init(struct lantern_enr_record_list *list);
 void lantern_enr_record_list_reset(struct lantern_enr_record_list *list);
 int lantern_enr_record_list_append(struct lantern_enr_record_list *list, const char *enr_text);
+int lantern_enr_record_build_v4(
+    struct lantern_enr_record *record,
+    const uint8_t private_key[32],
+    const char *ip_string,
+    uint16_t udp_port,
+    uint64_t sequence);
 
 #ifdef __cplusplus
 }

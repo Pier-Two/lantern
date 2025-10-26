@@ -1,6 +1,6 @@
 #include "lantern/string_list.h"
 
-#include "internal/strings.h"
+#include "lantern/support/strings.h"
 
 #include <stdlib.h>
 #include <string.h>
