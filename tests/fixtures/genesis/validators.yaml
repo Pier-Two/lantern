@@ -1,0 +1,5 @@
+validators:
+  - pubkey: "0x010203"
+    withdrawal_credentials: "0xaabb"
+  - pubkey: "0x040506"
+    withdrawal_credentials: "0xccdd"

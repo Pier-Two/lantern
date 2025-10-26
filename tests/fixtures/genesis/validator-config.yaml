@@ -1,0 +1,16 @@
+shuffle: roundrobin
+validators:
+  - name: "lantern_0"
+    privkey: "0xabc123"
+    enrFields:
+      ip: "127.0.0.1"
+      quic: 9100
+      seq: 1
+    count: 1
+  - name: "lantern_1"
+    privkey: "0xdef456"
+    enrFields:
+      ip: "127.0.0.1"
+      quic: 9101
+      seq: 2
+    count: 2
