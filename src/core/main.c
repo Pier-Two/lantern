@@ -22,12 +22,14 @@ enum {
     OPT_HTTP_PORT,
     OPT_METRICS_PORT,
     OPT_BOOTNODE,
+    OPT_BOOTNODES,
     OPT_BOOTNODE_FILE,
 };
 
 static void print_usage(const char *prog);
 static int parse_u16(const char *text, uint16_t *out_value);
 static int add_bootnodes_from_file(struct lantern_client_options *options, const char *path);
+static int add_bootnodes_argument(struct lantern_client_options *options, const char *value);
 static char *trim_line(char *line);
 
 int main(int argc, char **argv) {
@@ -54,6 +56,7 @@ int main(int argc, char **argv) {
         {"http-port", required_argument, NULL, OPT_HTTP_PORT},
         {"metrics-port", required_argument, NULL, OPT_METRICS_PORT},
         {"bootnode", required_argument, NULL, OPT_BOOTNODE},
+        {"bootnodes", required_argument, NULL, OPT_BOOTNODES},
         {"bootnodes-file", required_argument, NULL, OPT_BOOTNODE_FILE},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'v'},
@@ -115,6 +118,12 @@ int main(int argc, char **argv) {
         case OPT_BOOTNODE:
             if (lantern_client_options_add_bootnode(&options, optarg) != 0) {
                 fprintf(stderr, "lantern: failed to add bootnode\n");
+                goto error;
+            }
+            break;
+        case OPT_BOOTNODES:
+            if (add_bootnodes_argument(&options, optarg) != 0) {
+                fprintf(stderr, "lantern: failed to consume bootnodes from %s\n", optarg);
                 goto error;
             }
             break;
@@ -191,6 +200,7 @@ static void print_usage(const char *prog) {
         "  --http-port PORT             HTTP API port\n"
         "  --metrics-port PORT          Metrics port\n"
         "  --bootnode ENR               Add a bootnode enr\n"
+        "  --bootnodes VALUE            ENR or path to YAML/List file of ENRs\n"
         "  --bootnodes-file PATH        File with newline-delimited ENRs\n"
         "  --help                       Show this message\n"
         "  --version                    Print version information\n",
@@ -213,6 +223,10 @@ static int parse_u16(const char *text, uint16_t *out_value) {
 }
 
 static int add_bootnodes_from_file(struct lantern_client_options *options, const char *path) {
+    if (!options || !path) {
+        return -1;
+    }
+
     FILE *fp = fopen(path, "r");
     if (!fp) {
         perror("lantern: fopen bootnodes");
@@ -220,19 +234,80 @@ static int add_bootnodes_from_file(struct lantern_client_options *options, const
     }
 
     char line[2048];
+    size_t added = 0;
     while (fgets(line, sizeof(line), fp)) {
         char *trimmed = trim_line(line);
-        if (*trimmed == '\0' || *trimmed == '#') {
+        if (!trimmed || *trimmed == '\0' || *trimmed == '#') {
             continue;
         }
-        if (lantern_client_options_add_bootnode(options, trimmed) != 0) {
+
+        char *hash = strchr(trimmed, '#');
+        if (hash) {
+            *hash = '\0';
+            trimmed = trim_line(trimmed);
+            if (!trimmed || *trimmed == '\0') {
+                continue;
+            }
+        }
+
+        if (*trimmed == '-') {
+            ++trimmed;
+            while (*trimmed && isspace((unsigned char)*trimmed)) {
+                ++trimmed;
+            }
+        }
+
+        char *value_start = strstr(trimmed, "enr:");
+        if (!value_start) {
+            if (strncmp(trimmed, "enr:", 4) != 0) {
+                continue;
+            }
+            value_start = trimmed;
+        }
+
+        char *end = value_start + strlen(value_start);
+        while (end > value_start && isspace((unsigned char)*(end - 1))) {
+            --end;
+        }
+        *end = '\0';
+
+        if (*value_start == '"' || *value_start == '\'') {
+            ++value_start;
+            size_t len = strlen(value_start);
+            if (len > 0 && (value_start[len - 1] == '"' || value_start[len - 1] == '\'')) {
+                value_start[len - 1] = '\0';
+            }
+        }
+
+        if (strncmp(value_start, "enr:", 4) != 0) {
+            continue;
+        }
+
+        if (lantern_client_options_add_bootnode(options, value_start) != 0) {
             fclose(fp);
             return -1;
         }
+        added++;
     }
 
     fclose(fp);
+
+    if (added == 0) {
+        fprintf(stderr, "lantern: no ENRs found in %s\n", path);
+        return -1;
+    }
+
     return 0;
+}
+
+static int add_bootnodes_argument(struct lantern_client_options *options, const char *value) {
+    if (!options || !value) {
+        return -1;
+    }
+    if (strncmp(value, "enr:", 4) == 0) {
+        return lantern_client_options_add_bootnode(options, value);
+    }
+    return add_bootnodes_from_file(options, value);
 }
 
 static char *trim_line(char *line) {

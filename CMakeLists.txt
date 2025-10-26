@@ -23,6 +23,8 @@ set(WITH_GMP OFF CACHE BOOL "" FORCE)
 add_subdirectory(${PROJECT_SOURCE_DIR}/external/c-libp2p/external/libtomcrypt ${CMAKE_BINARY_DIR}/libtomcrypt EXCLUDE_FROM_ALL)
 
 add_library(lantern STATIC
+    src/consensus/containers.c
+    src/consensus/ssz.c
     src/core/client.c
     src/genesis/genesis.c
     src/networking/enr.c
@@ -62,4 +64,8 @@ if(LANTERN_BUILD_TESTS)
     add_executable(lantern_enr_test tests/unit/test_enr.c)
     target_link_libraries(lantern_enr_test PRIVATE lantern)
     add_test(NAME lantern_enr COMMAND lantern_enr_test)
+
+    add_executable(lantern_ssz_test tests/unit/test_ssz.c)
+    target_link_libraries(lantern_ssz_test PRIVATE lantern)
+    add_test(NAME lantern_ssz COMMAND lantern_ssz_test)
 endif()
