@@ -8,6 +8,17 @@
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
 
+struct lantern_vote_record {
+    LanternVote vote;
+    bool has_vote;
+};
+
+struct lantern_checkpoint_tally {
+    LanternCheckpoint checkpoint;
+    struct lantern_bitlist voters;
+    uint32_t count;
+};
+
 static size_t bitlist_required_bytes(size_t bit_length) {
     if (bit_length == 0) {
         return 0;
@@ -266,6 +277,103 @@ static int lantern_bitlist_ensure_length(struct lantern_bitlist *list, size_t bi
     return 0;
 }
 
+static void lantern_vote_record_reset(struct lantern_vote_record *record) {
+    if (!record) {
+        return;
+    }
+    memset(record, 0, sizeof(*record));
+}
+
+static bool lantern_checkpoint_equal(const LanternCheckpoint *a, const LanternCheckpoint *b) {
+    if (!a || !b) {
+        return false;
+    }
+    if (a->slot != b->slot) {
+        return false;
+    }
+    return memcmp(a->root.bytes, b->root.bytes, LANTERN_ROOT_SIZE) == 0;
+}
+
+static bool lantern_votes_equal(const LanternVote *a, const LanternVote *b) {
+    if (!a || !b) {
+        return false;
+    }
+    if (a->validator_id != b->validator_id || a->slot != b->slot) {
+        return false;
+    }
+    if (!lantern_checkpoint_equal(&a->head, &b->head)) {
+        return false;
+    }
+    if (!lantern_checkpoint_equal(&a->target, &b->target)) {
+        return false;
+    }
+    if (!lantern_checkpoint_equal(&a->source, &b->source)) {
+        return false;
+    }
+    return true;
+}
+
+static size_t lantern_quorum_threshold(uint64_t validator_count) {
+    if (validator_count == 0) {
+        return 0;
+    }
+    uint64_t numerator = validator_count * 2u;
+    uint64_t threshold = (numerator + 2u) / 3u;
+    if (threshold > SIZE_MAX) {
+        return SIZE_MAX;
+    }
+    return (size_t)threshold;
+}
+
+static void lantern_checkpoint_tally_init(struct lantern_checkpoint_tally *tally) {
+    if (!tally) {
+        return;
+    }
+    memset(&tally->checkpoint, 0, sizeof(tally->checkpoint));
+    lantern_bitlist_init(&tally->voters);
+    tally->count = 0;
+}
+
+static void lantern_checkpoint_tally_reset(struct lantern_checkpoint_tally *tally) {
+    if (!tally) {
+        return;
+    }
+    lantern_bitlist_reset(&tally->voters);
+    memset(&tally->checkpoint, 0, sizeof(tally->checkpoint));
+    tally->count = 0;
+}
+
+static int lantern_checkpoint_tally_prepare(struct lantern_checkpoint_tally *tally, uint64_t validator_count) {
+    if (!tally) {
+        return -1;
+    }
+    if (validator_count > SIZE_MAX) {
+        return -1;
+    }
+    size_t required = (size_t)validator_count;
+    if (lantern_bitlist_resize(&tally->voters, required) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int lantern_state_allocate_validator_votes(LanternState *state, uint64_t validator_count) {
+    if (!state || validator_count == 0) {
+        return -1;
+    }
+    if (validator_count > SIZE_MAX) {
+        return -1;
+    }
+    size_t count = (size_t)validator_count;
+    struct lantern_vote_record *records = calloc(count, sizeof(*records));
+    if (!records) {
+        return -1;
+    }
+    state->validator_votes = records;
+    state->validator_votes_len = count;
+    return 0;
+}
+
 static void lantern_root_zero(LanternRoot *root) {
     if (root) {
         memset(root->bytes, 0, LANTERN_ROOT_SIZE);
@@ -291,6 +399,20 @@ void lantern_state_reset(LanternState *state) {
     lantern_bitlist_reset(&state->justified_slots);
     lantern_root_list_reset(&state->justification_roots);
     lantern_bitlist_reset(&state->justification_validators);
+    if (state->validator_votes) {
+        free(state->validator_votes);
+        state->validator_votes = NULL;
+        state->validator_votes_len = 0;
+    }
+    if (state->justification_tallies) {
+        for (size_t i = 0; i < state->justification_tally_len; ++i) {
+            lantern_checkpoint_tally_reset(&state->justification_tallies[i]);
+        }
+        free(state->justification_tallies);
+        state->justification_tallies = NULL;
+        state->justification_tally_len = 0;
+        state->justification_tally_capacity = 0;
+    }
     memset(state, 0, sizeof(*state));
     lantern_root_list_init(&state->historical_block_hashes);
     lantern_bitlist_init(&state->justified_slots);
@@ -303,6 +425,10 @@ int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, u
         return -1;
     }
     lantern_state_reset(state);
+    if (lantern_state_allocate_validator_votes(state, num_validators) != 0) {
+        lantern_state_reset(state);
+        return -1;
+    }
     state->config.num_validators = num_validators;
     state->config.genesis_time = genesis_time;
     state->slot = 0;
@@ -323,10 +449,24 @@ int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, u
     state->latest_block_header.body_root = body_root;
     lantern_block_body_reset(&empty_body);
 
-    lantern_root_zero(&state->latest_justified.root);
+    LanternRoot genesis_header_root;
+    if (lantern_hash_tree_root_block_header(&state->latest_block_header, &genesis_header_root) != 0) {
+        lantern_state_reset(state);
+        return -1;
+    }
+    state->latest_justified.root = genesis_header_root;
     state->latest_justified.slot = 0;
-    lantern_root_zero(&state->latest_finalized.root);
+    state->latest_finalized.root = genesis_header_root;
     state->latest_finalized.slot = 0;
+
+    if (lantern_bitlist_resize(&state->justified_slots, 1) != 0) {
+        lantern_state_reset(state);
+        return -1;
+    }
+    if (lantern_bitlist_set_bit(&state->justified_slots, 0, true) != 0) {
+        lantern_state_reset(state);
+        return -1;
+    }
 
     return 0;
 }
@@ -362,6 +502,84 @@ int lantern_state_process_slots(LanternState *state, uint64_t target_slot) {
         state->slot += 1;
     }
     return 0;
+}
+
+static struct lantern_checkpoint_tally *lantern_state_find_or_create_tally(
+    LanternState *state,
+    const LanternCheckpoint *checkpoint) {
+    if (!state || !checkpoint) {
+        return NULL;
+    }
+    for (size_t i = 0; i < state->justification_tally_len; ++i) {
+        struct lantern_checkpoint_tally *candidate = &state->justification_tallies[i];
+        if (lantern_checkpoint_equal(&candidate->checkpoint, checkpoint)) {
+            return candidate;
+        }
+    }
+    if (state->justification_tally_len == state->justification_tally_capacity) {
+        size_t new_capacity = state->justification_tally_capacity == 0 ? 4u : state->justification_tally_capacity * 2u;
+        size_t element_size = sizeof(struct lantern_checkpoint_tally);
+        if (new_capacity == 0 || new_capacity > SIZE_MAX / element_size) {
+            return NULL;
+        }
+        struct lantern_checkpoint_tally *expanded = realloc(
+            state->justification_tallies,
+            new_capacity * element_size);
+        if (!expanded) {
+            return NULL;
+        }
+        state->justification_tallies = expanded;
+        state->justification_tally_capacity = new_capacity;
+    }
+    struct lantern_checkpoint_tally *tally = &state->justification_tallies[state->justification_tally_len++];
+    lantern_checkpoint_tally_init(tally);
+    if (lantern_checkpoint_tally_prepare(tally, state->config.num_validators) != 0) {
+        lantern_checkpoint_tally_reset(tally);
+        state->justification_tally_len -= 1;
+        return NULL;
+    }
+    tally->checkpoint = *checkpoint;
+    return tally;
+}
+
+static void lantern_state_prune_tallies(LanternState *state, uint64_t finalized_slot) {
+    if (!state || !state->justification_tallies) {
+        return;
+    }
+    size_t write = 0;
+    size_t original_len = state->justification_tally_len;
+    for (size_t i = 0; i < original_len; ++i) {
+        struct lantern_checkpoint_tally *current = &state->justification_tallies[i];
+        if (current->checkpoint.slot <= finalized_slot) {
+            lantern_checkpoint_tally_reset(current);
+            continue;
+        }
+        if (write != i) {
+            state->justification_tallies[write] = *current;
+            memset(current, 0, sizeof(*current));
+        }
+        ++write;
+    }
+    if (write < original_len) {
+        for (size_t j = write; j < original_len; ++j) {
+            lantern_checkpoint_tally_reset(&state->justification_tallies[j]);
+        }
+    }
+    state->justification_tally_len = write;
+}
+
+static int lantern_state_mark_justified_slot(LanternState *state, uint64_t slot) {
+    if (!state) {
+        return -1;
+    }
+    if (slot > SIZE_MAX) {
+        return -1;
+    }
+    size_t index = (size_t)slot;
+    if (lantern_bitlist_ensure_length(&state->justified_slots, index + 1) != 0) {
+        return -1;
+    }
+    return lantern_bitlist_set_bit(&state->justified_slots, index, true);
 }
 
 static bool lantern_signature_is_zeroed(const LanternSignature *signature) {
@@ -441,9 +659,17 @@ int lantern_state_process_attestations(LanternState *state, const LanternAttesta
     if (!state || !attestations) {
         return -1;
     }
+    uint64_t validator_count = state->config.num_validators;
+    if (validator_count == 0 || validator_count > SIZE_MAX) {
+        return -1;
+    }
+    if (!state->validator_votes || state->validator_votes_len != (size_t)validator_count) {
+        return -1;
+    }
 
     LanternCheckpoint latest_justified = state->latest_justified;
     LanternCheckpoint latest_finalized = state->latest_finalized;
+    size_t quorum = lantern_quorum_threshold(validator_count);
 
     for (size_t i = 0; i < attestations->length; ++i) {
         const LanternSignedVote *signed_vote = &attestations->data[i];
@@ -451,47 +677,85 @@ int lantern_state_process_attestations(LanternState *state, const LanternAttesta
             continue;
         }
         const LanternVote *vote = &signed_vote->data;
+        if (vote->validator_id >= validator_count) {
+            return -1;
+        }
         if (vote->target.slot <= vote->source.slot) {
             continue;
         }
-        if (vote->source.slot > SIZE_MAX || vote->target.slot > SIZE_MAX) {
-            continue;
-        }
-        size_t source_index = (size_t)vote->source.slot;
-        size_t target_index = (size_t)vote->target.slot;
-        bool source_is_justified = false;
-        if (lantern_bitlist_get_bit(&state->justified_slots, source_index, &source_is_justified) != 0 || !source_is_justified) {
+        if (!lantern_checkpoint_equal(&vote->source, &latest_justified)) {
             continue;
         }
 
-        bool target_already_justified = false;
-        if (target_index < state->justified_slots.bit_length) {
-            if (lantern_bitlist_get_bit(&state->justified_slots, target_index, &target_already_justified) != 0) {
-                target_already_justified = false;
+        struct lantern_vote_record *record = &state->validator_votes[vote->validator_id];
+        if (record->has_vote) {
+            if (vote->slot < record->vote.slot) {
+                continue;
+            }
+            if (vote->slot == record->vote.slot) {
+                if (lantern_votes_equal(&record->vote, vote)) {
+                    continue;
+                }
+                return -1;
             }
         }
 
-        if (target_already_justified) {
-            if (vote->target.slot == vote->source.slot + 1 && latest_justified.slot < vote->target.slot) {
-                latest_finalized = vote->source;
+        bool target_is_justified = false;
+        if (vote->target.slot < state->justified_slots.bit_length) {
+            if (lantern_bitlist_get_bit(&state->justified_slots, (size_t)vote->target.slot, &target_is_justified) != 0) {
+                return -1;
+            }
+        }
+        if (target_is_justified) {
+            record->vote = *vote;
+            record->has_vote = true;
+            continue;
+        }
+
+        struct lantern_checkpoint_tally *tally = lantern_state_find_or_create_tally(state, &vote->target);
+        if (!tally) {
+            return -1;
+        }
+        size_t validator_index = (size_t)vote->validator_id;
+        bool already_voted = false;
+        if (lantern_bitlist_get_bit(&tally->voters, validator_index, &already_voted) != 0) {
+            return -1;
+        }
+        if (already_voted) {
+            record->vote = *vote;
+            record->has_vote = true;
+            continue;
+        }
+        if (lantern_bitlist_set_bit(&tally->voters, validator_index, true) != 0) {
+            return -1;
+        }
+        if (tally->count < UINT32_MAX) {
+            tally->count += 1;
+        }
+        record->vote = *vote;
+        record->has_vote = true;
+
+        if (tally->count >= quorum) {
+            bool is_new = !lantern_checkpoint_equal(&latest_justified, &vote->target);
+            if (is_new || vote->target.slot > latest_justified.slot) {
                 latest_justified = vote->target;
+                if (vote->target.slot == vote->source.slot + 1 && vote->source.slot >= latest_finalized.slot) {
+                    latest_finalized = vote->source;
+                }
             }
-            continue;
         }
+    }
 
-        if (lantern_bitlist_ensure_length(&state->justified_slots, target_index + 1) != 0) {
-            return -1;
-        }
-        if (lantern_bitlist_set_bit(&state->justified_slots, target_index, true) != 0) {
-            return -1;
-        }
-        if (vote->target.slot > latest_justified.slot) {
-            latest_justified = vote->target;
-        }
+    if (lantern_state_mark_justified_slot(state, latest_justified.slot) != 0) {
+        return -1;
+    }
+    if (lantern_state_mark_justified_slot(state, latest_finalized.slot) != 0) {
+        return -1;
     }
 
     state->latest_justified = latest_justified;
     state->latest_finalized = latest_finalized;
+    lantern_state_prune_tallies(state, latest_finalized.slot);
     return 0;
 }
 

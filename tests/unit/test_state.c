@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "lantern/consensus/duties.h"
 #include "lantern/consensus/hash.h"
@@ -27,6 +28,13 @@ static void expect_nonzero_root(const LanternRoot *root, const char *label) {
         fprintf(stderr, "%s still zero\n", label);
         exit(EXIT_FAILURE);
     }
+}
+
+static void fill_root(LanternRoot *root, uint8_t value) {
+    if (!root) {
+        return;
+    }
+    memset(root->bytes, value, LANTERN_ROOT_SIZE);
 }
 
 static int test_genesis_state(void) {
@@ -112,6 +120,84 @@ static int test_state_transition_applies_block(void) {
     return 0;
 }
 
+static void build_vote(
+    LanternSignedVote *out,
+    uint64_t validator_id,
+    uint64_t slot,
+    const LanternCheckpoint *source,
+    const LanternCheckpoint *target_template,
+    uint8_t head_marker) {
+    memset(out, 0, sizeof(*out));
+    out->data.validator_id = validator_id;
+    out->data.slot = slot;
+    out->data.source = *source;
+    out->data.target = *target_template;
+    out->data.head = out->data.target;
+    if (head_marker != 0) {
+        fill_root(&out->data.head.root, head_marker);
+    }
+}
+
+static int test_attestations_require_quorum(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, 500, 4), "genesis for quorum test");
+
+    LanternAttestations attestations;
+    lantern_attestations_init(&attestations);
+
+    LanternCheckpoint target_checkpoint = state.latest_justified;
+    target_checkpoint.slot = 1;
+    fill_root(&target_checkpoint.root, 0xAB);
+
+    expect_zero(lantern_attestations_resize(&attestations, 2), "resize partial quorum");
+    build_vote(&attestations.data[0], 0, 1, &state.latest_justified, &target_checkpoint, 0);
+    build_vote(&attestations.data[1], 1, 1, &state.latest_justified, &target_checkpoint, 0);
+
+    expect_zero(lantern_state_process_attestations(&state, &attestations), "process below quorum");
+    assert(state.latest_justified.slot == 0);
+    assert(state.latest_finalized.slot == 0);
+
+    expect_zero(lantern_attestations_resize(&attestations, 1), "resize for quorum vote");
+    build_vote(&attestations.data[0], 2, 1, &state.latest_justified, &target_checkpoint, 0);
+
+    expect_zero(lantern_state_process_attestations(&state, &attestations), "process reaching quorum");
+    assert(state.latest_justified.slot == 1);
+    assert(state.latest_finalized.slot == 0);
+
+    lantern_attestations_reset(&attestations);
+    lantern_state_reset(&state);
+    return 0;
+}
+
+static int test_attestations_reject_double_vote(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, 700, 3), "genesis for double vote test");
+
+    LanternAttestations attestations;
+    lantern_attestations_init(&attestations);
+    expect_zero(lantern_attestations_resize(&attestations, 2), "double vote resize");
+
+    LanternCheckpoint target_checkpoint = state.latest_justified;
+    target_checkpoint.slot = 1;
+    fill_root(&target_checkpoint.root, 0xCD);
+
+    build_vote(&attestations.data[0], 0, 1, &state.latest_justified, &target_checkpoint, 0x11);
+    build_vote(&attestations.data[1], 0, 1, &state.latest_justified, &target_checkpoint, 0x22);
+
+    if (lantern_state_process_attestations(&state, &attestations) == 0) {
+        fprintf(stderr, "Expected double vote rejection\n");
+        lantern_attestations_reset(&attestations);
+        lantern_state_reset(&state);
+        return 1;
+    }
+
+    lantern_attestations_reset(&attestations);
+    lantern_state_reset(&state);
+    return 0;
+}
+
 int main(void) {
     if (test_genesis_state() != 0) {
         return 1;
@@ -120,6 +206,12 @@ int main(void) {
         return 1;
     }
     if (test_state_transition_applies_block() != 0) {
+        return 1;
+    }
+    if (test_attestations_require_quorum() != 0) {
+        return 1;
+    }
+    if (test_attestations_reject_double_vote() != 0) {
         return 1;
     }
     puts("lantern_state_test OK");

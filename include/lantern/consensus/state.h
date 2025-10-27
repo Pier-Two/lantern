@@ -6,6 +6,9 @@
 
 #include "lantern/consensus/containers.h"
 
+struct lantern_vote_record;
+struct lantern_checkpoint_tally;
+
 struct lantern_root_list {
     LanternRoot *items;
     size_t length;
@@ -28,6 +31,11 @@ typedef struct {
     struct lantern_bitlist justified_slots;
     struct lantern_root_list justification_roots;
     struct lantern_bitlist justification_validators;
+    struct lantern_vote_record *validator_votes;
+    size_t validator_votes_len;
+    struct lantern_checkpoint_tally *justification_tallies;
+    size_t justification_tally_len;
+    size_t justification_tally_capacity;
 } LanternState;
 
 void lantern_root_list_init(struct lantern_root_list *list);
