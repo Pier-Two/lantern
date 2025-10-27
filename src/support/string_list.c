@@ -1,4 +1,4 @@
-#include "lantern/string_list.h"
+#include "lantern/support/string_list.h"
 
 #include "lantern/support/strings.h"
 

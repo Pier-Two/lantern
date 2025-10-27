@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "lantern/networking/enr.h"
-#include "lantern/string_list.h"
+#include "lantern/support/string_list.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -6,7 +6,7 @@
 
 #include "lantern/genesis/genesis.h"
 #include "lantern/networking/libp2p.h"
-#include "lantern/string_list.h"
+#include "lantern/support/string_list.h"
 
 #ifdef __cplusplus
 extern "C" {

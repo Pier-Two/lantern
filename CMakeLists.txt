@@ -35,7 +35,7 @@ add_library(lantern STATIC
     src/networking/libp2p.c
     src/networking/messages.c
     src/encoding/rlp.c
-    src/string_list.c
+    src/support/string_list.c
     src/support/strings.c
     src/internal/yaml_parser.c
     external/c-libp2p/src/multiformats/multibase/encoding/base64_url.c
