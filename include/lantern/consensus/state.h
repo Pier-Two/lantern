@@ -8,6 +8,7 @@
 
 struct lantern_vote_record;
 struct lantern_checkpoint_tally;
+struct lantern_fork_choice;
 
 struct lantern_root_list {
     LanternRoot *items;
@@ -36,6 +37,7 @@ typedef struct {
     struct lantern_checkpoint_tally *justification_tallies;
     size_t justification_tally_len;
     size_t justification_tally_capacity;
+    struct lantern_fork_choice *fork_choice;
 } LanternState;
 
 void lantern_root_list_init(struct lantern_root_list *list);
@@ -48,6 +50,7 @@ int lantern_bitlist_resize(struct lantern_bitlist *list, size_t new_bit_length);
 
 void lantern_state_init(LanternState *state);
 void lantern_state_reset(LanternState *state);
+void lantern_state_attach_fork_choice(LanternState *state, struct lantern_fork_choice *fork_choice);
 int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, uint64_t num_validators);
 int lantern_state_process_slot(LanternState *state);
 int lantern_state_process_slots(LanternState *state, uint64_t target_slot);

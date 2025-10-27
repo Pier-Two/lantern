@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "lantern/consensus/duties.h"
+#include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
 
@@ -395,6 +396,7 @@ void lantern_state_reset(LanternState *state) {
     if (!state) {
         return;
     }
+    struct lantern_fork_choice *attached = state->fork_choice;
     lantern_root_list_reset(&state->historical_block_hashes);
     lantern_bitlist_reset(&state->justified_slots);
     lantern_root_list_reset(&state->justification_roots);
@@ -418,6 +420,14 @@ void lantern_state_reset(LanternState *state) {
     lantern_bitlist_init(&state->justified_slots);
     lantern_root_list_init(&state->justification_roots);
     lantern_bitlist_init(&state->justification_validators);
+    state->fork_choice = attached;
+}
+
+void lantern_state_attach_fork_choice(LanternState *state, struct lantern_fork_choice *fork_choice) {
+    if (!state) {
+        return;
+    }
+    state->fork_choice = fork_choice;
 }
 
 int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, uint64_t num_validators) {
@@ -756,6 +766,15 @@ int lantern_state_process_attestations(LanternState *state, const LanternAttesta
     state->latest_justified = latest_justified;
     state->latest_finalized = latest_finalized;
     lantern_state_prune_tallies(state, latest_finalized.slot);
+    if (state->fork_choice) {
+        if (lantern_fork_choice_update_checkpoints(
+                state->fork_choice,
+                &state->latest_justified,
+                &state->latest_finalized)
+            != 0) {
+            return -1;
+        }
+    }
     return 0;
 }
 
@@ -768,6 +787,17 @@ int lantern_state_process_block(LanternState *state, const LanternBlock *block) 
     }
     if (lantern_state_process_attestations(state, &block->body.attestations) != 0) {
         return -1;
+    }
+    if (state->fork_choice) {
+        if (lantern_fork_choice_add_block(
+                state->fork_choice,
+                block,
+                &state->latest_justified,
+                &state->latest_finalized,
+                NULL)
+            != 0) {
+            return -1;
+        }
     }
     return 0;
 }

@@ -26,6 +26,7 @@ set(SECP256K1_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_library(lantern STATIC
     src/consensus/containers.c
     src/consensus/duties.c
+    src/consensus/fork_choice.c
     src/consensus/hash.c
     src/consensus/runtime.c
     src/consensus/slot_clock.c
@@ -106,4 +107,9 @@ if(LANTERN_BUILD_TESTS)
     add_executable(lantern_networking_messages_test tests/unit/test_networking_messages.c)
     target_link_libraries(lantern_networking_messages_test PRIVATE lantern)
     add_test(NAME lantern_networking_messages COMMAND lantern_networking_messages_test)
+
+    add_executable(lantern_fork_choice_test tests/unit/test_fork_choice.c)
+    target_link_libraries(lantern_fork_choice_test PRIVATE lantern)
+    add_test(NAME lantern_fork_choice COMMAND lantern_fork_choice_test)
+
 endif()
