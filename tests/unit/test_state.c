@@ -4,9 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <inttypes.h>
 
 #include "lantern/consensus/duties.h"
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/state.h"
 
 static void expect_zero(int rc, const char *label) {
@@ -35,6 +37,16 @@ static void fill_root(LanternRoot *root, uint8_t value) {
         return;
     }
     memset(root->bytes, value, LANTERN_ROOT_SIZE);
+}
+
+static bool checkpoints_equal(const LanternCheckpoint *a, const LanternCheckpoint *b) {
+    if (!a || !b) {
+        return false;
+    }
+    if (a->slot != b->slot) {
+        return false;
+    }
+    return memcmp(a->root.bytes, b->root.bytes, LANTERN_ROOT_SIZE) == 0;
 }
 
 static int test_genesis_state(void) {
@@ -198,6 +210,178 @@ static int test_attestations_reject_double_vote(void) {
     return 0;
 }
 
+static int test_collect_attestations_for_block(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, 900, 4), "genesis for collection test");
+
+    LanternAttestations input;
+    lantern_attestations_init(&input);
+    expect_zero(lantern_attestations_resize(&input, 3), "resize attestation input");
+
+    LanternCheckpoint justified = state.latest_justified;
+    LanternCheckpoint target = justified;
+    target.slot = justified.slot + 1;
+    fill_root(&target.root, 0x90);
+
+    build_vote(&input.data[0], 0, target.slot, &justified, &target, 0x01);
+    build_vote(&input.data[1], 1, target.slot, &justified, &target, 0x02);
+
+    LanternCheckpoint other_source = justified;
+    other_source.slot = justified.slot + 2;
+    fill_root(&other_source.root, 0xA0);
+    LanternCheckpoint other_target = other_source;
+    other_target.slot = other_source.slot + 1;
+    fill_root(&other_target.root, 0xB0);
+    build_vote(&input.data[2], 2, other_target.slot, &other_source, &other_target, 0x03);
+
+    expect_zero(lantern_state_process_attestations(&state, &input), "process mixed attestations");
+
+    LanternAttestations collected;
+    lantern_attestations_init(&collected);
+    expect_zero(lantern_state_collect_attestations_for_block(&state, &collected), "collect attestations");
+
+    if (collected.length != 2) {
+        fprintf(stderr, "Expected two votes collected, got %zu\n", collected.length);
+        lantern_attestations_reset(&collected);
+        lantern_attestations_reset(&input);
+        lantern_state_reset(&state);
+        return 1;
+    }
+
+    bool seen_validator[2] = {false, false};
+    for (size_t i = 0; i < collected.length; ++i) {
+        const LanternSignedVote *vote = &collected.data[i];
+        for (size_t b = 0; b < LANTERN_SIGNATURE_SIZE; ++b) {
+            if (vote->signature.bytes[b] != 0) {
+                fprintf(stderr, "Collected vote %zu has non-zero signature byte\n", i);
+                lantern_attestations_reset(&collected);
+                lantern_attestations_reset(&input);
+                lantern_state_reset(&state);
+                return 1;
+            }
+        }
+        if (!checkpoints_equal(&vote->data.source, &state.latest_justified)) {
+            fprintf(stderr, "Collected vote %zu has mismatched source checkpoint\n", i);
+            lantern_attestations_reset(&collected);
+            lantern_attestations_reset(&input);
+            lantern_state_reset(&state);
+            return 1;
+        }
+        if (vote->data.validator_id == 0) {
+            seen_validator[0] = true;
+        } else if (vote->data.validator_id == 1) {
+            seen_validator[1] = true;
+        } else {
+            fprintf(stderr, "Unexpected validator id %" PRIu64 " in collected vote\n", vote->data.validator_id);
+            lantern_attestations_reset(&collected);
+            lantern_attestations_reset(&input);
+            lantern_state_reset(&state);
+            return 1;
+        }
+    }
+
+    if (!seen_validator[0] || !seen_validator[1]) {
+        fprintf(stderr, "Missing expected validators in collected votes\n");
+        lantern_attestations_reset(&collected);
+        lantern_attestations_reset(&input);
+        lantern_state_reset(&state);
+        return 1;
+    }
+
+    lantern_attestations_reset(&collected);
+    lantern_attestations_reset(&input);
+    lantern_state_reset(&state);
+    return 0;
+}
+
+static int test_select_block_parent_uses_fork_choice(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, 1200, 4), "genesis for parent selection");
+
+    LanternForkChoice fork_choice;
+    lantern_fork_choice_init(&fork_choice);
+    expect_zero(lantern_fork_choice_configure(&fork_choice, &state.config), "configure fork choice");
+
+    LanternBlock genesis_block;
+    memset(&genesis_block, 0, sizeof(genesis_block));
+    genesis_block.slot = 0;
+    genesis_block.proposer_index = 0;
+    lantern_block_body_init(&genesis_block.body);
+    genesis_block.parent_root = state.latest_block_header.parent_root;
+    genesis_block.state_root = state.latest_block_header.state_root;
+
+    LanternRoot genesis_root;
+    expect_zero(lantern_hash_tree_root_block(&genesis_block, &genesis_root), "genesis block root");
+    LanternCheckpoint genesis_cp = {.root = genesis_root, .slot = genesis_block.slot};
+    expect_zero(
+        lantern_fork_choice_set_anchor(&fork_choice, &genesis_block, &genesis_cp, &genesis_cp, &genesis_root),
+        "set anchor");
+
+    lantern_state_attach_fork_choice(&state, &fork_choice);
+
+    LanternRoot parent_root;
+    expect_zero(lantern_state_select_block_parent(&state, &parent_root), "select parent at genesis");
+    assert(memcmp(parent_root.bytes, genesis_root.bytes, LANTERN_ROOT_SIZE) == 0);
+
+    LanternBlock block_one;
+    memset(&block_one, 0, sizeof(block_one));
+    block_one.slot = 1;
+    expect_zero(
+        lantern_proposer_for_slot(block_one.slot, state.config.num_validators, &block_one.proposer_index),
+        "proposer slot1");
+    lantern_block_body_init(&block_one.body);
+    block_one.parent_root = genesis_root;
+
+    LanternRoot body_root_one;
+    expect_zero(lantern_hash_tree_root_block_body(&block_one.body, &body_root_one), "block one body root");
+    state.slot = block_one.slot;
+    state.latest_block_header.slot = block_one.slot;
+    state.latest_block_header.proposer_index = block_one.proposer_index;
+    state.latest_block_header.parent_root = block_one.parent_root;
+    state.latest_block_header.body_root = body_root_one;
+    memset(state.latest_block_header.state_root.bytes, 0, LANTERN_ROOT_SIZE);
+    LanternRoot block_one_root;
+    expect_zero(lantern_hash_tree_root_block(&block_one, &block_one_root), "block one root");
+    expect_zero(
+        lantern_fork_choice_add_block(&fork_choice, &block_one, &state.latest_justified, &state.latest_finalized, &block_one_root),
+        "add block one to fork choice");
+
+    expect_zero(lantern_state_select_block_parent(&state, &parent_root), "select parent after block one");
+    assert(memcmp(parent_root.bytes, block_one_root.bytes, LANTERN_ROOT_SIZE) == 0);
+
+    LanternBlock block_two;
+    memset(&block_two, 0, sizeof(block_two));
+    block_two.slot = 2;
+    expect_zero(
+        lantern_proposer_for_slot(block_two.slot, state.config.num_validators, &block_two.proposer_index),
+        "proposer slot2");
+    block_two.parent_root = block_one_root;
+    lantern_block_body_init(&block_two.body);
+    memset(block_two.state_root.bytes, 0x7Au, sizeof(block_two.state_root.bytes));
+    LanternRoot block_two_root;
+    expect_zero(lantern_hash_tree_root_block(&block_two, &block_two_root), "block two root");
+    expect_zero(lantern_fork_choice_add_block(&fork_choice, &block_two, NULL, NULL, &block_two_root), "add block two");
+
+    if (lantern_state_select_block_parent(&state, &parent_root) == 0) {
+        fprintf(stderr, "Expected parent mismatch detection to fail\n");
+        lantern_block_body_reset(&block_two.body);
+        lantern_block_body_reset(&block_one.body);
+        lantern_block_body_reset(&genesis_block.body);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+
+    lantern_block_body_reset(&block_two.body);
+    lantern_block_body_reset(&block_one.body);
+    lantern_block_body_reset(&genesis_block.body);
+    lantern_state_reset(&state);
+    lantern_fork_choice_reset(&fork_choice);
+    return 0;
+}
+
 int main(void) {
     if (test_genesis_state() != 0) {
         return 1;
@@ -212,6 +396,12 @@ int main(void) {
         return 1;
     }
     if (test_attestations_reject_double_vote() != 0) {
+        return 1;
+    }
+    if (test_collect_attestations_for_block() != 0) {
+        return 1;
+    }
+    if (test_select_block_parent_uses_fork_choice() != 0) {
         return 1;
     }
     puts("lantern_state_test OK");

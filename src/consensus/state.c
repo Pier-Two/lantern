@@ -828,3 +828,67 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
     }
     return 0;
 }
+
+int lantern_state_select_block_parent(const LanternState *state, LanternRoot *out_parent_root) {
+    if (!state || !out_parent_root) {
+        return -1;
+    }
+    if (state->config.num_validators == 0) {
+        return -1;
+    }
+
+    LanternRoot header_root;
+    if (lantern_hash_tree_root_block_header(&state->latest_block_header, &header_root) != 0) {
+        return -1;
+    }
+
+    if (state->fork_choice) {
+        LanternRoot head_root;
+        if (lantern_fork_choice_current_head(state->fork_choice, &head_root) != 0) {
+            return -1;
+        }
+        if (memcmp(head_root.bytes, header_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+            return -1;
+        }
+        *out_parent_root = head_root;
+    } else {
+        *out_parent_root = header_root;
+    }
+    return 0;
+}
+
+int lantern_state_collect_attestations_for_block(
+    const LanternState *state,
+    LanternAttestations *out_attestations) {
+    if (!state || !out_attestations) {
+        return -1;
+    }
+    if (!state->validator_votes || state->validator_votes_len == 0) {
+        return -1;
+    }
+    if (lantern_attestations_resize(out_attestations, 0) != 0) {
+        return -1;
+    }
+
+    for (size_t i = 0; i < state->validator_votes_len; ++i) {
+        const struct lantern_vote_record *record = &state->validator_votes[i];
+        if (!record->has_vote) {
+            continue;
+        }
+        if (!lantern_checkpoint_equal(&record->vote.source, &state->latest_justified)) {
+            continue;
+        }
+        if (out_attestations->length >= LANTERN_MAX_ATTESTATIONS) {
+            (void)lantern_attestations_resize(out_attestations, 0);
+            return -1;
+        }
+        LanternSignedVote signed_vote;
+        memset(&signed_vote, 0, sizeof(signed_vote));
+        signed_vote.data = record->vote;
+        if (lantern_attestations_append(out_attestations, &signed_vote) != 0) {
+            (void)lantern_attestations_resize(out_attestations, 0);
+            return -1;
+        }
+    }
+    return 0;
+}

@@ -260,12 +260,8 @@ int lantern_hash_tree_root_block(const LanternBlock *block, LanternRoot *out_roo
         return -1;
     }
     LanternRoot body_root;
-    if (block->body.attestations.length == 0) {
-        memset(body_root.bytes, 0, sizeof(body_root.bytes));
-    } else {
-        if (lantern_hash_tree_root_block_body(&block->body, &body_root) != 0) {
-            return -1;
-        }
+    if (lantern_hash_tree_root_block_body(&block->body, &body_root) != 0) {
+        return -1;
     }
     uint8_t chunks[5][SSZ_BYTES_PER_CHUNK];
     chunk_from_uint64(block->slot, chunks[0]);

@@ -58,5 +58,9 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
 int lantern_state_process_attestations(LanternState *state, const LanternAttestations *attestations);
 int lantern_state_process_block(LanternState *state, const LanternBlock *block);
 int lantern_state_transition(LanternState *state, const LanternSignedBlock *signed_block);
+int lantern_state_select_block_parent(const LanternState *state, LanternRoot *out_parent_root);
+int lantern_state_collect_attestations_for_block(
+    const LanternState *state,
+    LanternAttestations *out_attestations);
 
 #endif /* LANTERN_CONSENSUS_STATE_H */
