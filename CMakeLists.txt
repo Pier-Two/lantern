@@ -46,6 +46,7 @@ target_include_directories(lantern
     PRIVATE
         ${PROJECT_SOURCE_DIR}/src
         ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/secp256k1/include
+        ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/libtomcrypt/src/headers
         ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/wjcryptlib/lib
 )
 

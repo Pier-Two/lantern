@@ -2,8 +2,8 @@
 
 #include "lantern/encoding/rlp.h"
 #include "lantern/support/strings.h"
-#include "libp2p/crypto/ltc_compat.h"
 #include "multiformats/multibase/encoding/base64_url.h"
+#include "tomcrypt.h"
 
 #include <ctype.h>
 #include <stdint.h>
