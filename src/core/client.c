@@ -12,6 +12,9 @@ static int copy_genesis_paths(struct lantern_genesis_paths *paths, const struct 
 static void reset_genesis_paths(struct lantern_genesis_paths *paths);
 static int read_trimmed_file(const char *path, char **out_text);
 static int load_node_key_bytes(const struct lantern_client_options *options, uint8_t out_key[32]);
+static bool string_list_contains(const struct lantern_string_list *list, const char *value);
+static int append_unique_bootnode(struct lantern_string_list *list, const char *value);
+static int append_genesis_bootnodes(struct lantern_client *client);
 
 void lantern_client_options_init(struct lantern_client_options *options) {
     if (!options) {
@@ -56,6 +59,7 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     lantern_string_list_init(&client->bootnodes);
     lantern_genesis_artifacts_init(&client->genesis);
     lantern_enr_record_init(&client->local_enr);
+    lantern_libp2p_host_init(&client->network);
 
     if (set_owned_string(&client->data_dir, options->data_dir) != 0) {
         goto error;
@@ -101,6 +105,23 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     memcpy(client->node_private_key, node_key, sizeof(node_key));
     client->has_node_private_key = true;
 
+    struct lantern_libp2p_config net_cfg = {
+        .listen_multiaddr = client->listen_address,
+        .secp256k1_secret = node_key,
+        .secret_len = sizeof(node_key),
+    };
+    if (lantern_libp2p_host_start(&client->network, &net_cfg) != 0) {
+        fprintf(stderr, "lantern: failed to initialize libp2p host\n");
+        memset(node_key, 0, sizeof(node_key));
+        goto error;
+    }
+
+    if (append_genesis_bootnodes(client) != 0) {
+        fprintf(stderr, "lantern: failed to append bootnodes from genesis\n");
+        memset(node_key, 0, sizeof(node_key));
+        goto error;
+    }
+
     if (lantern_enr_record_build_v4(
             &client->local_enr,
             node_key,
@@ -137,12 +158,61 @@ void lantern_shutdown(struct lantern_client *client) {
     reset_genesis_paths(&client->genesis_paths);
     lantern_genesis_artifacts_reset(&client->genesis);
     lantern_enr_record_reset(&client->local_enr);
+    lantern_libp2p_host_reset(&client->network);
     memset(client->node_private_key, 0, sizeof(client->node_private_key));
     client->has_node_private_key = false;
 
     client->http_port = 0;
     client->metrics_port = 0;
     client->assigned_validators = NULL;
+}
+
+static bool string_list_contains(const struct lantern_string_list *list, const char *value) {
+    if (!list || !value) {
+        return false;
+    }
+    for (size_t i = 0; i < list->len; ++i) {
+        if (list->items && list->items[i] && strcmp(list->items[i], value) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int append_unique_bootnode(struct lantern_string_list *list, const char *value) {
+    if (!list || !value) {
+        return -1;
+    }
+    if (*value == '\0') {
+        return 0;
+    }
+    if (string_list_contains(list, value)) {
+        return 0;
+    }
+    return lantern_string_list_append(list, value);
+}
+
+static int append_genesis_bootnodes(struct lantern_client *client) {
+    if (!client) {
+        return -1;
+    }
+    const struct lantern_enr_record_list *enrs = &client->genesis.enrs;
+    for (size_t i = 0; i < enrs->count; ++i) {
+        const struct lantern_enr_record *record = &enrs->records[i];
+        if (!record->encoded) {
+            continue;
+        }
+        if (append_unique_bootnode(&client->bootnodes, record->encoded) != 0) {
+            return -1;
+        }
+        if (client->network.host) {
+            if (lantern_libp2p_host_add_enr_peer(&client->network, record, LANTERN_LIBP2P_DEFAULT_PEER_TTL_MS) != 0) {
+                fprintf(stderr, "lantern: failed to add ENR peer from genesis\n");
+                return -1;
+            }
+        }
+    }
+    return 0;
 }
 
 static int set_owned_string(char **dest, const char *value) {

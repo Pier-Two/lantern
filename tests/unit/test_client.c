@@ -15,6 +15,18 @@ static void build_fixture_path(char *buffer, size_t length, const char *relative
     }
 }
 
+static bool string_list_contains(const struct lantern_string_list *list, const char *value) {
+    if (!list || !value) {
+        return false;
+    }
+    for (size_t i = 0; i < list->len; ++i) {
+        if (list->items && list->items[i] && strcmp(list->items[i], value) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static int verify_client_state(const struct lantern_client *client, const struct lantern_client_options *options) {
     if (client->genesis.chain_config.genesis_time != 1700000000ULL) {
         fprintf(stderr, "Unexpected genesis_time: %llu\n",
@@ -68,11 +80,36 @@ static int verify_client_state(const struct lantern_client *client, const struct
         fprintf(stderr, "Local ENR UDP mismatch\n");
         return 1;
     }
-    if (client->bootnodes.len != options->bootnodes.len) {
+    if (!client->network.host || !client->network.started) {
+        fprintf(stderr, "libp2p host missing or not started\n");
+        return 1;
+    }
+
+    size_t expected_bootnodes = options->bootnodes.len;
+    for (size_t i = 0; i < options->bootnodes.len; ++i) {
+        if (!string_list_contains(&client->bootnodes, options->bootnodes.items[i])) {
+            fprintf(stderr, "Missing manual bootnode: %s\n", options->bootnodes.items[i]);
+            return 1;
+        }
+    }
+    for (size_t i = 0; i < client->genesis.enrs.count; ++i) {
+        const struct lantern_enr_record *record = &client->genesis.enrs.records[i];
+        if (!record->encoded) {
+            continue;
+        }
+        if (!string_list_contains(&client->bootnodes, record->encoded)) {
+            fprintf(stderr, "Missing genesis bootnode: %s\n", record->encoded);
+            return 1;
+        }
+        if (!string_list_contains(&options->bootnodes, record->encoded)) {
+            ++expected_bootnodes;
+        }
+    }
+    if (client->bootnodes.len != expected_bootnodes) {
         fprintf(
             stderr,
             "Bootnode count mismatch: expected %zu got %zu\n",
-            options->bootnodes.len,
+            expected_bootnodes,
             client->bootnodes.len);
         return 1;
     }
@@ -102,7 +139,7 @@ int main(void) {
     options.genesis_state_path = state_path;
     options.validator_config_path = validator_config_path;
     options.node_id = "lantern_0";
-    options.listen_address = "/ip4/127.0.0.1/udp/9100/quic-v1";
+    options.listen_address = "/ip4/127.0.0.1/udp/9100/quic_v1";
     options.node_key_hex = "0xb71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291";
 
     if (lantern_client_options_add_bootnode(&options, "enr:-ManualEnr") != 0) {

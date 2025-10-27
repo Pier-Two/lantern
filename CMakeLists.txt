@@ -2,6 +2,12 @@ cmake_minimum_required(VERSION 3.20)
 
 project(lantern VERSION 0.1.0 LANGUAGES C)
 
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
+if(APPLE)
+    set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "Target architecture for macOS builds" FORCE)
+endif()
+
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
@@ -15,12 +21,7 @@ set(SECP256K1_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(SECP256K1_BUILD_EXHAUSTIVE_TESTS OFF CACHE BOOL "" FORCE)
 set(SECP256K1_BUILD_CTIME_TESTS OFF CACHE BOOL "" FORCE)
 set(SECP256K1_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-add_subdirectory(${PROJECT_SOURCE_DIR}/external/c-libp2p/external/secp256k1 ${CMAKE_BINARY_DIR}/secp256k1 EXCLUDE_FROM_ALL)
 
-set(WITH_LTM OFF CACHE BOOL "" FORCE)
-set(WITH_TFM OFF CACHE BOOL "" FORCE)
-set(WITH_GMP OFF CACHE BOOL "" FORCE)
-add_subdirectory(${PROJECT_SOURCE_DIR}/external/c-libp2p/external/libtomcrypt ${CMAKE_BINARY_DIR}/libtomcrypt EXCLUDE_FROM_ALL)
 
 add_library(lantern STATIC
     src/consensus/containers.c
@@ -31,6 +32,7 @@ add_library(lantern STATIC
     src/encoding/snappy.c
     src/networking/enr.c
     src/networking/gossip.c
+    src/networking/libp2p.c
     src/networking/messages.c
     src/encoding/rlp.c
     src/string_list.c

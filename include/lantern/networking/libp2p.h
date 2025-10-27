@@ -1,0 +1,40 @@
+#ifndef LANTERN_NETWORKING_LIBP2P_H
+#define LANTERN_NETWORKING_LIBP2P_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+struct libp2p_host;
+struct lantern_enr_record;
+
+#define LANTERN_LIBP2P_DEFAULT_PEER_TTL_MS (300000)
+
+struct lantern_libp2p_config {
+    const char *listen_multiaddr;
+    const uint8_t *secp256k1_secret;
+    size_t secret_len;
+};
+
+struct lantern_libp2p_host {
+    struct libp2p_host *host;
+    int started;
+};
+
+void lantern_libp2p_host_init(struct lantern_libp2p_host *state);
+void lantern_libp2p_host_reset(struct lantern_libp2p_host *state);
+int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct lantern_libp2p_config *config);
+void lantern_libp2p_host_stop(struct lantern_libp2p_host *state);
+int lantern_libp2p_host_add_enr_peer(
+    struct lantern_libp2p_host *state,
+    const struct lantern_enr_record *record,
+    int ttl_ms);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* LANTERN_NETWORKING_LIBP2P_H */

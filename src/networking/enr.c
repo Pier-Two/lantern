@@ -7,6 +7,7 @@
 
 #include <ctype.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -343,8 +344,11 @@ int lantern_enr_record_build_v4(
     uint16_t udp_port,
     uint64_t sequence) {
     if (!record || !private_key || !ip_string) {
+        fprintf(stderr, "lantern: ENR build missing inputs\n");
         return -1;
     }
+
+    const char *error_reason = NULL;
 
     struct lantern_rlp_buffer items[9];
     memset(items, 0, sizeof(items));
@@ -354,17 +358,20 @@ int lantern_enr_record_build_v4(
 
     uint8_t ip_bytes[4];
     if (parse_ipv4_address(ip_string, ip_bytes) != 0) {
+        error_reason = "invalid IPv4 address";
         goto error;
     }
 
     secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
     if (!ctx) {
+        error_reason = "secp256k1 context create failed";
         goto error;
     }
 
     secp256k1_pubkey pubkey;
     if (!secp256k1_ec_pubkey_create(ctx, &pubkey, private_key)) {
         secp256k1_context_destroy(ctx);
+        error_reason = "secp256k1 pubkey create failed";
         goto error;
     }
 
@@ -377,74 +384,95 @@ int lantern_enr_record_build_v4(
             &pubkey,
             SECP256K1_EC_COMPRESSED)) {
         secp256k1_context_destroy(ctx);
+        error_reason = "secp256k1 pubkey serialize failed";
         goto error;
     }
     secp256k1_context_destroy(ctx);
 
     size_t idx = 0;
     if (lantern_rlp_encode_uint64(&items[idx++], sequence) != 0) {
+        error_reason = "rlp encode sequence failed";
         goto error;
     }
     if (lantern_rlp_encode_bytes(&items[idx++], (const uint8_t *)"id", 2) != 0) {
+        error_reason = "rlp encode id key failed";
         goto error;
     }
     if (lantern_rlp_encode_bytes(&items[idx++], (const uint8_t *)"v4", 2) != 0) {
+        error_reason = "rlp encode id value failed";
         goto error;
     }
     if (lantern_rlp_encode_bytes(&items[idx++], (const uint8_t *)"ip", 2) != 0) {
+        error_reason = "rlp encode ip key failed";
         goto error;
     }
     if (lantern_rlp_encode_bytes(&items[idx++], ip_bytes, sizeof(ip_bytes)) != 0) {
+        error_reason = "rlp encode ip value failed";
         goto error;
     }
     if (lantern_rlp_encode_bytes(&items[idx++], (const uint8_t *)"secp256k1", 9) != 0) {
+        error_reason = "rlp encode key type failed";
         goto error;
     }
     if (lantern_rlp_encode_bytes(&items[idx++], pubkey_compressed, pubkey_len) != 0) {
+        error_reason = "rlp encode pubkey failed";
         goto error;
     }
     if (lantern_rlp_encode_bytes(&items[idx++], (const uint8_t *)"udp", 3) != 0) {
+        error_reason = "rlp encode udp key failed";
         goto error;
     }
     uint8_t udp_bytes[2] = {(uint8_t)(udp_port >> 8), (uint8_t)(udp_port & 0xFF)};
     if (lantern_rlp_encode_bytes(&items[idx++], udp_bytes, sizeof(udp_bytes)) != 0) {
+        error_reason = "rlp encode udp value failed";
         goto error;
     }
 
     if (lantern_rlp_encode_list(&content, items, idx) != 0) {
+        error_reason = "rlp encode content failed";
         goto error;
     }
 
     uint8_t message_hash[32];
+    const struct ltc_hash_descriptor *keccak_desc = &keccak_256_desc;
     hash_state keccak_state;
-    if (keccak_256_init(&keccak_state) != CRYPT_OK) {
+    int hash_rc = keccak_desc->init(&keccak_state);
+    if (hash_rc != CRYPT_OK) {
+        fprintf(stderr, "lantern: keccak init rc=%d\n", hash_rc);
+        error_reason = "keccak init failed";
         goto error;
     }
     if (content.length > 0
-        && sha3_process(&keccak_state, content.data, (unsigned long)content.length) != CRYPT_OK) {
+        && keccak_desc->process(&keccak_state, content.data, (unsigned long)content.length) != CRYPT_OK) {
+        error_reason = "keccak absorb failed";
         goto error;
     }
-    if (keccak_done(&keccak_state, message_hash) != CRYPT_OK) {
+    if (keccak_desc->done(&keccak_state, message_hash) != CRYPT_OK) {
+        error_reason = "keccak finalize failed";
         goto error;
     }
 
     secp256k1_context *sign_ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
     if (!sign_ctx) {
+        error_reason = "secp256k1 sign context failed";
         goto error;
     }
     secp256k1_ecdsa_signature signature;
     if (!secp256k1_ecdsa_sign(sign_ctx, &signature, message_hash, private_key, NULL, NULL)) {
         secp256k1_context_destroy(sign_ctx);
+        error_reason = "secp256k1 sign failed";
         goto error;
     }
     unsigned char sig_bytes[64];
     if (!secp256k1_ecdsa_signature_serialize_compact(sign_ctx, sig_bytes, &signature)) {
         secp256k1_context_destroy(sign_ctx);
+        error_reason = "secp256k1 signature serialize failed";
         goto error;
     }
     secp256k1_context_destroy(sign_ctx);
 
     if (lantern_rlp_encode_bytes(&signature_buf, sig_bytes, sizeof(sig_bytes)) != 0) {
+        error_reason = "rlp encode signature failed";
         goto error;
     }
 
@@ -454,12 +482,14 @@ int lantern_enr_record_build_v4(
         record_items[i + 1] = items[i];
     }
     if (lantern_rlp_encode_list(&signed_record, record_items, idx + 1) != 0) {
+        error_reason = "rlp encode signed record failed";
         goto error;
     }
 
     size_t encoded_capacity = ((signed_record.length * 4) + 2) / 3 + 1;
     char *payload = malloc(encoded_capacity);
     if (!payload) {
+        error_reason = "payload alloc failed";
         goto error;
     }
     int written = multibase_base64_url_encode(
@@ -469,6 +499,7 @@ int lantern_enr_record_build_v4(
         encoded_capacity);
     if (written < 0) {
         free(payload);
+        error_reason = "base64url encode failed";
         goto error;
     }
     payload[written] = '\0';
@@ -477,6 +508,7 @@ int lantern_enr_record_build_v4(
     char *enr_text = malloc(enr_len);
     if (!enr_text) {
         free(payload);
+        error_reason = "enr text alloc failed";
         goto error;
     }
     memcpy(enr_text, "enr:", 4);
@@ -485,6 +517,7 @@ int lantern_enr_record_build_v4(
 
     if (lantern_enr_record_decode(enr_text, record) != 0) {
         free(enr_text);
+        error_reason = "decode sanity check failed";
         goto error;
     }
     free(enr_text);
@@ -500,5 +533,8 @@ error:
     lantern_rlp_buffer_reset(&signature_buf);
     lantern_rlp_buffer_reset(&content);
     lantern_rlp_buffer_reset(&signed_record);
+    if (error_reason) {
+        fprintf(stderr, "lantern: ENR build error: %s\n", error_reason);
+    }
     return -1;
 }
