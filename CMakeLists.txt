@@ -25,6 +25,9 @@ set(SECP256K1_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 add_library(lantern STATIC
     src/consensus/containers.c
+    src/consensus/duties.c
+    src/consensus/runtime.c
+    src/consensus/slot_clock.c
     src/consensus/signature.c
     src/consensus/state.c
     src/consensus/ssz.c
@@ -78,6 +81,18 @@ if(LANTERN_BUILD_TESTS)
     add_executable(lantern_ssz_test tests/unit/test_ssz.c)
     target_link_libraries(lantern_ssz_test PRIVATE lantern)
     add_test(NAME lantern_ssz COMMAND lantern_ssz_test)
+
+    add_executable(lantern_duties_test tests/unit/test_duties.c)
+    target_link_libraries(lantern_duties_test PRIVATE lantern)
+    add_test(NAME lantern_duties COMMAND lantern_duties_test)
+
+    add_executable(lantern_consensus_runtime_test tests/unit/test_consensus_runtime.c)
+    target_link_libraries(lantern_consensus_runtime_test PRIVATE lantern)
+    add_test(NAME lantern_consensus_runtime COMMAND lantern_consensus_runtime_test)
+
+    add_executable(lantern_slot_clock_test tests/unit/test_slot_clock.c)
+    target_link_libraries(lantern_slot_clock_test PRIVATE lantern)
+    add_test(NAME lantern_slot_clock COMMAND lantern_slot_clock_test)
 
     add_executable(lantern_snappy_test tests/unit/test_snappy.c)
     target_link_libraries(lantern_snappy_test PRIVATE lantern)

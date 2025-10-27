@@ -1,0 +1,262 @@
+#include "lantern/consensus/slot_clock.h"
+
+#include <limits.h>
+#include <stddef.h>
+
+#define LANTERN_SLOT_CLOCK_DEFAULT_SECONDS_PER_SLOT 4u
+#define LANTERN_SLOT_CLOCK_DEFAULT_INTERVALS_PER_SLOT 4u
+
+static enum lantern_duty_phase interval_to_phase(uint32_t interval_index) {
+    switch (interval_index) {
+    case 0:
+        return LANTERN_DUTY_PHASE_PROPOSAL;
+    case 1:
+        return LANTERN_DUTY_PHASE_VOTE;
+    case 2:
+        return LANTERN_DUTY_PHASE_SAFE_TARGET;
+    case 3:
+        return LANTERN_DUTY_PHASE_VOTE_ACCEPT;
+    default:
+        return LANTERN_DUTY_PHASE_UNKNOWN;
+    }
+}
+
+static int phase_to_index(enum lantern_duty_phase phase, uint32_t *out_index) {
+    if (!out_index) {
+        return -1;
+    }
+    switch (phase) {
+    case LANTERN_DUTY_PHASE_PROPOSAL:
+        *out_index = 0;
+        return 0;
+    case LANTERN_DUTY_PHASE_VOTE:
+        *out_index = 1;
+        return 0;
+    case LANTERN_DUTY_PHASE_SAFE_TARGET:
+        *out_index = 2;
+        return 0;
+    case LANTERN_DUTY_PHASE_VOTE_ACCEPT:
+        *out_index = 3;
+        return 0;
+    default:
+        return -1;
+    }
+}
+
+static int multiply_u64_u32(uint64_t lhs, uint32_t rhs, uint64_t *out) {
+    if (!out) {
+        return -1;
+    }
+    if (rhs == 0 || lhs == 0) {
+        *out = 0;
+        return 0;
+    }
+    if (lhs > UINT64_MAX / rhs) {
+        return -1;
+    }
+    *out = lhs * (uint64_t)rhs;
+    return 0;
+}
+
+static int add_u64(uint64_t a, uint64_t b, uint64_t *out) {
+    if (!out) {
+        return -1;
+    }
+    if (a > UINT64_MAX - b) {
+        return -1;
+    }
+    *out = a + b;
+    return 0;
+}
+
+static int validate_config(const struct lantern_slot_clock_config *config) {
+    if (!config) {
+        return -1;
+    }
+    if (config->seconds_per_slot == 0 || config->intervals_per_slot == 0) {
+        return -1;
+    }
+    if (config->intervals_per_slot != LANTERN_DUTY_PHASE_COUNT) {
+        return -1;
+    }
+    if ((config->seconds_per_slot % config->intervals_per_slot) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+void lantern_slot_clock_config_init(struct lantern_slot_clock_config *config) {
+    if (!config) {
+        return;
+    }
+    config->genesis_time = 0;
+    config->seconds_per_slot = LANTERN_SLOT_CLOCK_DEFAULT_SECONDS_PER_SLOT;
+    config->intervals_per_slot = LANTERN_SLOT_CLOCK_DEFAULT_INTERVALS_PER_SLOT;
+}
+
+int lantern_slot_clock_init(struct lantern_slot_clock *clock, const struct lantern_slot_clock_config *config) {
+    if (!clock) {
+        return -1;
+    }
+
+    struct lantern_slot_clock_config local;
+    if (config) {
+        local = *config;
+    } else {
+        lantern_slot_clock_config_init(&local);
+    }
+
+    if (validate_config(&local) != 0) {
+        return -1;
+    }
+
+    clock->genesis_time = local.genesis_time;
+    clock->seconds_per_slot = local.seconds_per_slot;
+    clock->intervals_per_slot = local.intervals_per_slot;
+    clock->seconds_per_interval = local.seconds_per_slot / local.intervals_per_slot;
+    return 0;
+}
+
+int lantern_slot_clock_slot_start_time(
+    const struct lantern_slot_clock *clock,
+    uint64_t slot,
+    uint64_t *out_start_time) {
+    if (!clock || !out_start_time) {
+        return -1;
+    }
+    uint64_t slot_offset = 0;
+    if (multiply_u64_u32(slot, clock->seconds_per_slot, &slot_offset) != 0) {
+        return -1;
+    }
+    if (add_u64(clock->genesis_time, slot_offset, out_start_time) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int interval_start_time(
+    const struct lantern_slot_clock *clock,
+    uint64_t slot,
+    uint32_t interval_index,
+    uint64_t *out_start_time) {
+    if (!clock || !out_start_time) {
+        return -1;
+    }
+    uint64_t slot_start = 0;
+    if (lantern_slot_clock_slot_start_time(clock, slot, &slot_start) != 0) {
+        return -1;
+    }
+    uint64_t interval_offset = 0;
+    if (multiply_u64_u32(interval_index, clock->seconds_per_interval, &interval_offset) != 0) {
+        return -1;
+    }
+    if (add_u64(slot_start, interval_offset, out_start_time) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int lantern_slot_clock_phase_start_time(
+    const struct lantern_slot_clock *clock,
+    uint64_t slot,
+    enum lantern_duty_phase phase,
+    uint64_t *out_start_time) {
+    uint32_t interval_index = 0;
+    if (phase_to_index(phase, &interval_index) != 0) {
+        return -1;
+    }
+    return interval_start_time(clock, slot, interval_index, out_start_time);
+}
+
+int lantern_slot_clock_phase_end_time(
+    const struct lantern_slot_clock *clock,
+    uint64_t slot,
+    enum lantern_duty_phase phase,
+    uint64_t *out_end_time) {
+    uint64_t start_time = 0;
+    if (lantern_slot_clock_phase_start_time(clock, slot, phase, &start_time) != 0) {
+        return -1;
+    }
+    if (add_u64(start_time, clock->seconds_per_interval, out_end_time) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int lantern_slot_clock_schedule_slot(
+    const struct lantern_slot_clock *clock,
+    uint64_t slot,
+    struct lantern_duty_schedule *schedule) {
+    if (!clock || !schedule) {
+        return -1;
+    }
+    schedule->slot = slot;
+    for (uint32_t i = 0; i < LANTERN_DUTY_PHASE_COUNT; ++i) {
+        enum lantern_duty_phase phase = interval_to_phase(i);
+        if (phase == LANTERN_DUTY_PHASE_UNKNOWN) {
+            return -1;
+        }
+        if (lantern_slot_clock_phase_start_time(clock, slot, phase, &schedule->phase_start_times[i]) != 0) {
+            return -1;
+        }
+        if (lantern_slot_clock_phase_end_time(clock, slot, phase, &schedule->phase_end_times[i]) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int lantern_slot_clock_compute(
+    const struct lantern_slot_clock *clock,
+    uint64_t now,
+    struct lantern_slot_timepoint *out_timepoint) {
+    if (!clock || !out_timepoint) {
+        return -1;
+    }
+    if (now < clock->genesis_time) {
+        return -1;
+    }
+    uint64_t elapsed = now - clock->genesis_time;
+    if (clock->seconds_per_interval == 0) {
+        return -1;
+    }
+    uint64_t intervals_since_genesis = elapsed / clock->seconds_per_interval;
+    uint64_t slot = intervals_since_genesis / clock->intervals_per_slot;
+    uint32_t interval_index = (uint32_t)(intervals_since_genesis % clock->intervals_per_slot);
+
+    uint64_t slot_start = 0;
+    if (lantern_slot_clock_slot_start_time(clock, slot, &slot_start) != 0) {
+        return -1;
+    }
+    uint64_t interval_start = 0;
+    if (interval_start_time(clock, slot, interval_index, &interval_start) != 0) {
+        return -1;
+    }
+    uint64_t interval_end = 0;
+    if (add_u64(interval_start, clock->seconds_per_interval, &interval_end) != 0) {
+        return -1;
+    }
+
+    out_timepoint->slot = slot;
+    out_timepoint->interval_index = interval_index;
+    out_timepoint->slot_start_time = slot_start;
+    out_timepoint->interval_start_time = interval_start;
+    out_timepoint->interval_end_time = interval_end;
+    out_timepoint->phase = interval_to_phase(interval_index);
+    return 0;
+}
+
+const char *lantern_duty_phase_name(enum lantern_duty_phase phase) {
+    switch (phase) {
+    case LANTERN_DUTY_PHASE_PROPOSAL:
+        return "proposal";
+    case LANTERN_DUTY_PHASE_VOTE:
+        return "vote";
+    case LANTERN_DUTY_PHASE_SAFE_TARGET:
+        return "safe-target";
+    case LANTERN_DUTY_PHASE_VOTE_ACCEPT:
+        return "vote-accept";
+    default:
+        return "unknown";
+    }
+}

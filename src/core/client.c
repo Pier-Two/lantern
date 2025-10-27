@@ -1,5 +1,7 @@
 #include "lantern/core/client.h"
 
+#include "lantern/consensus/duties.h"
+#include "lantern/consensus/runtime.h"
 #include "lantern/support/strings.h"
 
 #include <stdbool.h>
@@ -15,6 +17,8 @@ static int load_node_key_bytes(const struct lantern_client_options *options, uin
 static bool string_list_contains(const struct lantern_string_list *list, const char *value);
 static int append_unique_bootnode(struct lantern_string_list *list, const char *value);
 static int append_genesis_bootnodes(struct lantern_client *client);
+static int compute_local_validator_assignment(struct lantern_client *client);
+static int init_consensus_runtime(struct lantern_client *client);
 
 void lantern_client_options_init(struct lantern_client_options *options) {
     if (!options) {
@@ -60,6 +64,10 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     lantern_genesis_artifacts_init(&client->genesis);
     lantern_enr_record_init(&client->local_enr);
     lantern_libp2p_host_init(&client->network);
+    lantern_validator_assignment_init(&client->validator_assignment);
+    client->has_validator_assignment = false;
+    lantern_consensus_runtime_reset(&client->runtime);
+    client->has_runtime = false;
 
     if (set_owned_string(&client->data_dir, options->data_dir) != 0) {
         goto error;
@@ -95,6 +103,14 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     }
     if (!client->assigned_validators->enr.ip || client->assigned_validators->enr.quic_port == 0) {
         fprintf(stderr, "lantern: validator '%s' missing ENR fields\n", client->node_id);
+        goto error;
+    }
+    if (compute_local_validator_assignment(client) != 0) {
+        fprintf(stderr, "lantern: failed to compute validator assignment for '%s'\n", client->node_id);
+        goto error;
+    }
+    if (init_consensus_runtime(client) != 0) {
+        fprintf(stderr, "lantern: failed to initialize consensus runtime\n");
         goto error;
     }
 
@@ -161,6 +177,10 @@ void lantern_shutdown(struct lantern_client *client) {
     lantern_libp2p_host_reset(&client->network);
     memset(client->node_private_key, 0, sizeof(client->node_private_key));
     client->has_node_private_key = false;
+    lantern_validator_assignment_init(&client->validator_assignment);
+    client->has_validator_assignment = false;
+    lantern_consensus_runtime_reset(&client->runtime);
+    client->has_runtime = false;
 
     client->http_port = 0;
     client->metrics_port = 0;
@@ -212,6 +232,48 @@ static int append_genesis_bootnodes(struct lantern_client *client) {
             }
         }
     }
+    return 0;
+}
+
+static int compute_local_validator_assignment(struct lantern_client *client) {
+    if (!client || !client->assigned_validators) {
+        return -1;
+    }
+    lantern_validator_assignment_init(&client->validator_assignment);
+    client->has_validator_assignment = false;
+    if (lantern_validator_assignment_from_config(
+            &client->genesis.validator_config,
+            client->assigned_validators,
+            &client->validator_assignment)
+        != 0) {
+        return -1;
+    }
+    if (!lantern_validator_assignment_is_valid(&client->validator_assignment)) {
+        return -1;
+    }
+    client->has_validator_assignment = true;
+    return 0;
+}
+
+static int init_consensus_runtime(struct lantern_client *client) {
+    if (!client || !client->has_validator_assignment) {
+        return -1;
+    }
+    struct lantern_consensus_runtime_config runtime_config;
+    lantern_consensus_runtime_config_init(&runtime_config);
+    runtime_config.genesis_time = client->genesis.chain_config.genesis_time;
+    runtime_config.validator_count = client->genesis.chain_config.validator_count;
+    if (runtime_config.validator_count == 0) {
+        return -1;
+    }
+    if (lantern_consensus_runtime_init(
+            &client->runtime,
+            &runtime_config,
+            &client->validator_assignment)
+        != 0) {
+        return -1;
+    }
+    client->has_runtime = true;
     return 0;
 }
 

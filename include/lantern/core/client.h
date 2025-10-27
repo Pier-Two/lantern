@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "lantern/consensus/duties.h"
+#include "lantern/consensus/runtime.h"
 #include "lantern/genesis/genesis.h"
 #include "lantern/networking/libp2p.h"
 #include "lantern/support/string_list.h"
@@ -53,6 +55,10 @@ struct lantern_client {
     uint8_t node_private_key[32];
     bool has_node_private_key;
     const struct lantern_validator_config_entry *assigned_validators;
+    struct lantern_validator_assignment validator_assignment;
+    bool has_validator_assignment;
+    struct lantern_consensus_runtime runtime;
+    bool has_runtime;
 };
 
 void lantern_client_options_init(struct lantern_client_options *options);
