@@ -7,6 +7,8 @@
 #include "ssz_deserialize.h"
 #include "ssz_serialize.h"
 
+#include "lantern/consensus/state.h"
+
 static int write_u32(uint8_t *out, size_t remaining, uint32_t value) {
     if (!out || remaining < SSZ_BYTE_SIZE_OF_UINT32) {
         return -1;
@@ -118,6 +120,106 @@ static int decode_attestations(LanternAttestations *attestations, const uint8_t 
         if (lantern_ssz_decode_signed_vote(&attestations->data[i], data + (i * LANTERN_SIGNED_VOTE_SSZ_SIZE), LANTERN_SIGNED_VOTE_SSZ_SIZE) != 0) {
             return -1;
         }
+    }
+    return 0;
+}
+
+static int encode_root_list(const struct lantern_root_list *list, uint8_t *out, size_t remaining, size_t *written) {
+    if (!list || !out) {
+        return -1;
+    }
+    size_t root_bytes = list->length * LANTERN_ROOT_SIZE;
+    if (list->length > UINT32_MAX) {
+        return -1;
+    }
+    if (root_bytes > SIZE_MAX - SSZ_BYTE_SIZE_OF_UINT32) {
+        return -1;
+    }
+    size_t total = SSZ_BYTE_SIZE_OF_UINT32 + root_bytes;
+    if (remaining < total) {
+        return -1;
+    }
+
+    if (write_u32(out, remaining, (uint32_t)list->length) != 0) {
+        return -1;
+    }
+
+    if (root_bytes > 0 && list->items) {
+        memcpy(out + SSZ_BYTE_SIZE_OF_UINT32, list->items, root_bytes);
+    }
+
+    set_written(written, total);
+    return 0;
+}
+
+static int decode_root_list(struct lantern_root_list *list, const uint8_t *data, size_t data_len) {
+    if (!list || !data || data_len < SSZ_BYTE_SIZE_OF_UINT32) {
+        return -1;
+    }
+    uint32_t count = 0;
+    if (read_u32(data, data_len, &count) != 0) {
+        return -1;
+    }
+    size_t root_bytes = (size_t)count * LANTERN_ROOT_SIZE;
+    if (data_len - SSZ_BYTE_SIZE_OF_UINT32 != root_bytes) {
+        return -1;
+    }
+    if (lantern_root_list_resize(list, count) != 0) {
+        return -1;
+    }
+    if (root_bytes > 0) {
+        memcpy(list->items, data + SSZ_BYTE_SIZE_OF_UINT32, root_bytes);
+    }
+    return 0;
+}
+
+static int encode_bitlist(const struct lantern_bitlist *list, uint8_t *out, size_t remaining, size_t *written) {
+    if (!list || !out) {
+        return -1;
+    }
+    if (list->bit_length > UINT32_MAX) {
+        return -1;
+    }
+    size_t byte_len = (list->bit_length + 7) / 8;
+    if (byte_len > SIZE_MAX - SSZ_BYTE_SIZE_OF_UINT32) {
+        return -1;
+    }
+    size_t total = SSZ_BYTE_SIZE_OF_UINT32 + byte_len;
+    if (remaining < total) {
+        return -1;
+    }
+
+    if (write_u32(out, remaining, (uint32_t)list->bit_length) != 0) {
+        return -1;
+    }
+    if (byte_len > 0) {
+        if (!list->bytes) {
+            return -1;
+        }
+        memcpy(out + SSZ_BYTE_SIZE_OF_UINT32, list->bytes, byte_len);
+    }
+
+    set_written(written, total);
+    return 0;
+}
+
+static int decode_bitlist(struct lantern_bitlist *list, const uint8_t *data, size_t data_len) {
+    if (!list || !data || data_len < SSZ_BYTE_SIZE_OF_UINT32) {
+        return -1;
+    }
+    uint32_t bit_length = 0;
+    if (read_u32(data, data_len, &bit_length) != 0) {
+        return -1;
+    }
+    size_t byte_len = (bit_length + 7u) / 8u;
+    if (data_len - SSZ_BYTE_SIZE_OF_UINT32 != byte_len) {
+        return -1;
+    }
+    if (lantern_bitlist_resize(list, bit_length) != 0) {
+        return -1;
+    }
+    if (byte_len > 0) {
+        memcpy(list->bytes, data + SSZ_BYTE_SIZE_OF_UINT32, byte_len);
     }
     return 0;
 }
@@ -533,5 +635,188 @@ int lantern_ssz_decode_signed_block(LanternSignedBlock *block, const uint8_t *da
     if (lantern_ssz_decode_block(&block->message, data + message_offset, data_len - message_offset) != 0) {
         return -1;
     }
+    return 0;
+}
+
+int lantern_ssz_encode_state(const LanternState *state, uint8_t *out, size_t out_len, size_t *written) {
+    if (!state || !out) {
+        return -1;
+    }
+
+    const size_t var_field_count = 4;
+    size_t offset = 0;
+    size_t tmp = 0;
+
+    if (lantern_ssz_encode_config(&state->config, out + offset, out_len - offset, &tmp) != 0) {
+        return -1;
+    }
+    offset += tmp;
+
+    if (write_u64(out + offset, out_len - offset, state->slot) != 0) {
+        return -1;
+    }
+    offset += SSZ_BYTE_SIZE_OF_UINT64;
+
+    if (lantern_ssz_encode_block_header(&state->latest_block_header, out + offset, out_len - offset, &tmp) != 0) {
+        return -1;
+    }
+    offset += tmp;
+
+    if (lantern_ssz_encode_checkpoint(&state->latest_justified, out + offset, out_len - offset, &tmp) != 0) {
+        return -1;
+    }
+    offset += tmp;
+
+    if (lantern_ssz_encode_checkpoint(&state->latest_finalized, out + offset, out_len - offset, &tmp) != 0) {
+        return -1;
+    }
+    offset += tmp;
+
+    if (out_len < offset + (var_field_count * SSZ_BYTE_SIZE_OF_UINT32)) {
+        return -1;
+    }
+
+    size_t variable_offset = offset + (var_field_count * SSZ_BYTE_SIZE_OF_UINT32);
+    if (variable_offset > UINT32_MAX) {
+        return -1;
+    }
+
+    // Historical block hashes
+    if (write_u32(out + offset, out_len - offset, (uint32_t)variable_offset) != 0) {
+        return -1;
+    }
+    offset += SSZ_BYTE_SIZE_OF_UINT32;
+    if (encode_root_list(&state->historical_block_hashes, out + variable_offset, out_len - variable_offset, &tmp) != 0) {
+        return -1;
+    }
+    variable_offset += tmp;
+    if (variable_offset > UINT32_MAX) {
+        return -1;
+    }
+
+    // Justified slots bitlist
+    if (write_u32(out + offset, out_len - offset, (uint32_t)variable_offset) != 0) {
+        return -1;
+    }
+    offset += SSZ_BYTE_SIZE_OF_UINT32;
+    if (encode_bitlist(&state->justified_slots, out + variable_offset, out_len - variable_offset, &tmp) != 0) {
+        return -1;
+    }
+    variable_offset += tmp;
+    if (variable_offset > UINT32_MAX) {
+        return -1;
+    }
+
+    // Justification roots
+    if (write_u32(out + offset, out_len - offset, (uint32_t)variable_offset) != 0) {
+        return -1;
+    }
+    offset += SSZ_BYTE_SIZE_OF_UINT32;
+    if (encode_root_list(&state->justification_roots, out + variable_offset, out_len - variable_offset, &tmp) != 0) {
+        return -1;
+    }
+    variable_offset += tmp;
+    if (variable_offset > UINT32_MAX) {
+        return -1;
+    }
+
+    // Justification validators bitlist
+    if (write_u32(out + offset, out_len - offset, (uint32_t)variable_offset) != 0) {
+        return -1;
+    }
+    offset += SSZ_BYTE_SIZE_OF_UINT32;
+    if (encode_bitlist(&state->justification_validators, out + variable_offset, out_len - variable_offset, &tmp) != 0) {
+        return -1;
+    }
+    variable_offset += tmp;
+
+    set_written(written, variable_offset);
+    return 0;
+}
+
+int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t data_len) {
+    if (!state || !data) {
+        return -1;
+    }
+
+    const size_t var_field_count = 4;
+    size_t offset = 0;
+
+    if (data_len < LANTERN_CONFIG_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT64 + LANTERN_BLOCK_HEADER_SSZ_SIZE + (2 * LANTERN_CHECKPOINT_SSZ_SIZE)
+        + (var_field_count * SSZ_BYTE_SIZE_OF_UINT32)) {
+        return -1;
+    }
+
+    if (lantern_ssz_decode_config(&state->config, data + offset, LANTERN_CONFIG_SSZ_SIZE) != 0) {
+        return -1;
+    }
+    offset += LANTERN_CONFIG_SSZ_SIZE;
+
+    if (read_u64(data + offset, data_len - offset, &state->slot) != 0) {
+        return -1;
+    }
+    offset += SSZ_BYTE_SIZE_OF_UINT64;
+
+    if (lantern_ssz_decode_block_header(&state->latest_block_header, data + offset, LANTERN_BLOCK_HEADER_SSZ_SIZE) != 0) {
+        return -1;
+    }
+    offset += LANTERN_BLOCK_HEADER_SSZ_SIZE;
+
+    if (lantern_ssz_decode_checkpoint(&state->latest_justified, data + offset, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
+        return -1;
+    }
+    offset += LANTERN_CHECKPOINT_SSZ_SIZE;
+
+    if (lantern_ssz_decode_checkpoint(&state->latest_finalized, data + offset, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
+        return -1;
+    }
+    offset += LANTERN_CHECKPOINT_SSZ_SIZE;
+
+    size_t offsets[var_field_count];
+    for (size_t i = 0; i < var_field_count; ++i) {
+        uint32_t value = 0;
+        if (read_u32(data + offset, data_len - offset, &value) != 0) {
+            return -1;
+        }
+        offsets[i] = value;
+        offset += SSZ_BYTE_SIZE_OF_UINT32;
+    }
+
+    size_t payload_start = offsets[0];
+    if (payload_start < offset || payload_start > data_len) {
+        return -1;
+    }
+
+    for (size_t i = 0; i < var_field_count; ++i) {
+        if (offsets[i] < offset || offsets[i] > data_len) {
+            return -1;
+        }
+        if (i > 0 && offsets[i] < offsets[i - 1]) {
+            return -1;
+        }
+    }
+
+    size_t chunk_sizes[var_field_count];
+    for (size_t i = 0; i < var_field_count; ++i) {
+        size_t chunk_end = (i + 1 < var_field_count) ? offsets[i + 1] : data_len;
+        if (chunk_end < offsets[i] || chunk_end > data_len) {
+            return -1;
+        }
+        chunk_sizes[i] = chunk_end - offsets[i];
+    }
+
+    if (decode_root_list(&state->historical_block_hashes, data + offsets[0], chunk_sizes[0]) != 0) {
+        return -1;
+    }
+    if (decode_bitlist(&state->justified_slots, data + offsets[1], chunk_sizes[1]) != 0) {
+        return -1;
+    }
+    if (decode_root_list(&state->justification_roots, data + offsets[2], chunk_sizes[2]) != 0) {
+        return -1;
+    }
+    if (decode_bitlist(&state->justification_validators, data + offsets[3], chunk_sizes[3]) != 0) {
+        return -1;
+    }
+
     return 0;
 }

@@ -1,8 +1,10 @@
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "lantern/consensus/containers.h"
+#include "lantern/consensus/state.h"
 #include "lantern/consensus/ssz.h"
 
 static void fill_bytes(uint8_t *dst, size_t len, uint8_t seed) {
@@ -52,6 +54,27 @@ static LanternSignedVote build_signed_vote(uint64_t validator_id, uint64_t slot,
     signed_vote.data.source = build_checkpoint(sig_seed + 2, slot > 0 ? slot - 1 : slot);
     fill_bytes(signed_vote.signature.bytes, sizeof(signed_vote.signature.bytes), sig_seed);
     return signed_vote;
+}
+
+static void bitlist_set(struct lantern_bitlist *bitlist, size_t index, bool value) {
+    size_t byte_index = index / 8;
+    size_t bit_index = index % 8;
+    if (!bitlist->bytes || byte_index >= bitlist->capacity) {
+        fprintf(stderr, "bitlist_set: invalid access\n");
+        abort();
+    }
+    if (value) {
+        bitlist->bytes[byte_index] |= (uint8_t)(1u << bit_index);
+    } else {
+        bitlist->bytes[byte_index] &= (uint8_t)~(1u << bit_index);
+    }
+}
+
+static void expect_ok(int rc, const char *context) {
+    if (rc != 0) {
+        fprintf(stderr, "%s failed (rc=%d)\n", context, rc);
+        abort();
+    }
 }
 
 static void test_vote_roundtrip(void) {
@@ -213,6 +236,66 @@ static void test_signed_block_roundtrip(void) {
     reset_block(&decoded.message);
 }
 
+static void test_state_roundtrip(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    state.config.num_validators = 64;
+    state.config.genesis_time = 123456789;
+    state.slot = 42;
+    state.latest_block_header.slot = 41;
+    state.latest_block_header.proposer_index = 3;
+    fill_bytes(state.latest_block_header.parent_root.bytes, sizeof(state.latest_block_header.parent_root.bytes), 0xA1);
+    fill_bytes(state.latest_block_header.state_root.bytes, sizeof(state.latest_block_header.state_root.bytes), 0xA2);
+    fill_bytes(state.latest_block_header.body_root.bytes, sizeof(state.latest_block_header.body_root.bytes), 0xA3);
+    state.latest_justified = build_checkpoint(0xB1, 30);
+    state.latest_finalized = build_checkpoint(0xC1, 28);
+
+    expect_ok(lantern_root_list_resize(&state.historical_block_hashes, 2), "historical hashes resize");
+    fill_bytes(state.historical_block_hashes.items[0].bytes, LANTERN_ROOT_SIZE, 0xD1);
+    fill_bytes(state.historical_block_hashes.items[1].bytes, LANTERN_ROOT_SIZE, 0xD2);
+
+    expect_ok(lantern_bitlist_resize(&state.justified_slots, 6), "justified slots resize");
+    bitlist_set(&state.justified_slots, 1, true);
+    bitlist_set(&state.justified_slots, 4, true);
+
+    expect_ok(lantern_root_list_resize(&state.justification_roots, 1), "justification roots resize");
+    fill_bytes(state.justification_roots.items[0].bytes, LANTERN_ROOT_SIZE, 0xE1);
+
+    expect_ok(lantern_bitlist_resize(&state.justification_validators, 10), "justification validators resize");
+    bitlist_set(&state.justification_validators, 0, true);
+    bitlist_set(&state.justification_validators, 9, true);
+
+    uint8_t buffer[8192];
+    size_t written = 0;
+    assert(lantern_ssz_encode_state(&state, buffer, sizeof(buffer), &written) == 0);
+
+    LanternState decoded;
+    lantern_state_init(&decoded);
+    assert(lantern_ssz_decode_state(&decoded, buffer, written) == 0);
+
+    assert(decoded.config.num_validators == state.config.num_validators);
+    assert(decoded.config.genesis_time == state.config.genesis_time);
+    assert(decoded.slot == state.slot);
+    assert(decoded.latest_block_header.proposer_index == state.latest_block_header.proposer_index);
+    assert(memcmp(decoded.latest_block_header.parent_root.bytes,
+                  state.latest_block_header.parent_root.bytes,
+                  LANTERN_ROOT_SIZE)
+           == 0);
+    assert(decoded.latest_justified.slot == state.latest_justified.slot);
+    assert(decoded.latest_finalized.slot == state.latest_finalized.slot);
+    assert(decoded.historical_block_hashes.length == state.historical_block_hashes.length);
+    assert(memcmp(decoded.historical_block_hashes.items[1].bytes,
+                  state.historical_block_hashes.items[1].bytes,
+                  LANTERN_ROOT_SIZE)
+           == 0);
+    assert(decoded.justified_slots.bit_length == state.justified_slots.bit_length);
+    assert(decoded.justification_roots.length == state.justification_roots.length);
+    assert(decoded.justification_validators.bit_length == state.justification_validators.bit_length);
+
+    lantern_state_reset(&state);
+    lantern_state_reset(&decoded);
+}
+
 int main(void) {
     test_checkpoint_roundtrip();
     test_vote_roundtrip();
@@ -221,6 +304,7 @@ int main(void) {
     test_block_body_roundtrip();
     test_block_roundtrip();
     test_signed_block_roundtrip();
+    test_state_roundtrip();
     puts("lantern_ssz_test OK");
     return 0;
 }

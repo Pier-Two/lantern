@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "lantern/consensus/containers.h"
+#include "lantern/consensus/state.h"
 
 #define LANTERN_CONFIG_SSZ_SIZE 16
 #define LANTERN_CHECKPOINT_SSZ_SIZE (LANTERN_ROOT_SIZE + sizeof(uint64_t))
@@ -35,5 +36,8 @@ int lantern_ssz_decode_block(LanternBlock *block, const uint8_t *data, size_t da
 
 int lantern_ssz_encode_signed_block(const LanternSignedBlock *block, uint8_t *out, size_t out_len, size_t *written);
 int lantern_ssz_decode_signed_block(LanternSignedBlock *block, const uint8_t *data, size_t data_len);
+
+int lantern_ssz_encode_state(const LanternState *state, uint8_t *out, size_t out_len, size_t *written);
+int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t data_len);
 
 #endif /* LANTERN_CONSENSUS_SSZ_H */

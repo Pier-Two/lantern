@@ -5,3 +5,6 @@
 [submodule "external/c-ssz"]
 	path = external/c-ssz
 	url = https://github.com/Pier-Two/c-ssz.git
+[submodule "external/snappy-c"]
+	path = external/snappy-c
+	url = https://github.com/andikleen/snappy-c

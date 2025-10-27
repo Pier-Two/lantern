@@ -24,15 +24,20 @@ add_subdirectory(${PROJECT_SOURCE_DIR}/external/c-libp2p/external/libtomcrypt ${
 
 add_library(lantern STATIC
     src/consensus/containers.c
+    src/consensus/state.c
     src/consensus/ssz.c
     src/core/client.c
     src/genesis/genesis.c
+    src/encoding/snappy.c
     src/networking/enr.c
+    src/networking/gossip.c
+    src/networking/messages.c
     src/encoding/rlp.c
     src/string_list.c
     src/support/strings.c
     src/internal/yaml_parser.c
     external/c-libp2p/src/multiformats/multibase/encoding/base64_url.c
+    external/c-libp2p/external/wjcryptlib/lib/WjCryptLib_Sha256.c
 )
 
 target_include_directories(lantern
@@ -41,6 +46,7 @@ target_include_directories(lantern
     PRIVATE
         ${PROJECT_SOURCE_DIR}/src
         ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/secp256k1/include
+        ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/wjcryptlib/lib
 )
 
 lantern_configure_dependencies(lantern)
@@ -68,4 +74,12 @@ if(LANTERN_BUILD_TESTS)
     add_executable(lantern_ssz_test tests/unit/test_ssz.c)
     target_link_libraries(lantern_ssz_test PRIVATE lantern)
     add_test(NAME lantern_ssz COMMAND lantern_ssz_test)
+
+    add_executable(lantern_snappy_test tests/unit/test_snappy.c)
+    target_link_libraries(lantern_snappy_test PRIVATE lantern)
+    add_test(NAME lantern_snappy COMMAND lantern_snappy_test)
+
+    add_executable(lantern_networking_messages_test tests/unit/test_networking_messages.c)
+    target_link_libraries(lantern_networking_messages_test PRIVATE lantern)
+    add_test(NAME lantern_networking_messages COMMAND lantern_networking_messages_test)
 endif()
