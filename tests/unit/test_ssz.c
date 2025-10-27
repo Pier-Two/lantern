@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "lantern/consensus/containers.h"
+#include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/ssz.h"
 
@@ -44,15 +45,15 @@ static LanternVote build_vote(void) {
     return vote;
 }
 
-static LanternSignedVote build_signed_vote(uint64_t validator_id, uint64_t slot, uint8_t sig_seed) {
+static LanternSignedVote build_signed_vote(uint64_t validator_id, uint64_t slot, uint8_t seed) {
     LanternSignedVote signed_vote;
+    memset(&signed_vote, 0, sizeof(signed_vote));
     signed_vote.data = build_vote();
     signed_vote.data.validator_id = validator_id;
     signed_vote.data.slot = slot;
-    signed_vote.data.head = build_checkpoint(sig_seed, slot);
-    signed_vote.data.target = build_checkpoint(sig_seed + 1, slot + 1);
-    signed_vote.data.source = build_checkpoint(sig_seed + 2, slot > 0 ? slot - 1 : slot);
-    fill_bytes(signed_vote.signature.bytes, sizeof(signed_vote.signature.bytes), sig_seed);
+    signed_vote.data.head = build_checkpoint(seed, slot);
+    signed_vote.data.target = build_checkpoint(seed + 1, slot + 1);
+    signed_vote.data.source = build_checkpoint(seed + 2, slot > 0 ? slot - 1 : slot);
     return signed_vote;
 }
 
@@ -96,8 +97,8 @@ static void test_vote_roundtrip(void) {
 
 static void test_signed_vote_roundtrip(void) {
     LanternSignedVote signed_vote;
+    memset(&signed_vote, 0, sizeof(signed_vote));
     signed_vote.data = build_vote();
-    fill_bytes(signed_vote.signature.bytes, sizeof(signed_vote.signature.bytes), 0x44);
 
     uint8_t buffer[LANTERN_SIGNED_VOTE_SSZ_SIZE];
     size_t written = 0;
@@ -110,6 +111,22 @@ static void test_signed_vote_roundtrip(void) {
     assert(decoded.data.validator_id == signed_vote.data.validator_id);
     assert(decoded.data.slot == signed_vote.data.slot);
     assert(memcmp(decoded.signature.bytes, signed_vote.signature.bytes, LANTERN_SIGNATURE_SIZE) == 0);
+}
+
+static void test_signed_vote_signature_validation(void) {
+    LanternSignedVote signed_vote = build_signed_vote(3, 5, 0x33);
+    uint8_t buffer[LANTERN_SIGNED_VOTE_SSZ_SIZE];
+    size_t written = 0;
+    assert(lantern_ssz_encode_signed_vote(&signed_vote, buffer, sizeof(buffer), &written) == 0);
+
+    buffer[LANTERN_VOTE_SSZ_SIZE] = 0xAA;
+    LanternSignedVote decoded;
+    memset(&decoded, 0, sizeof(decoded));
+    assert(lantern_ssz_decode_signed_vote(&decoded, buffer, sizeof(buffer)) != 0);
+
+    LanternSignedVote invalid = signed_vote;
+    invalid.signature.bytes[0] = 0x01;
+    assert(lantern_ssz_encode_signed_vote(&invalid, buffer, sizeof(buffer), &written) != 0);
 }
 
 static void test_block_header_roundtrip(void) {
@@ -217,7 +234,6 @@ static void test_signed_block_roundtrip(void) {
     LanternSignedBlock signed_block;
     memset(&signed_block, 0, sizeof(signed_block));
     populate_block(&signed_block.message);
-    fill_bytes(signed_block.signature.bytes, sizeof(signed_block.signature.bytes), 0x90);
 
     uint8_t buffer[4096];
     size_t written = 0;
@@ -234,6 +250,28 @@ static void test_signed_block_roundtrip(void) {
 
     reset_block(&signed_block.message);
     reset_block(&decoded.message);
+}
+
+static void test_signed_block_signature_validation(void) {
+    LanternSignedBlock signed_block;
+    memset(&signed_block, 0, sizeof(signed_block));
+    populate_block(&signed_block.message);
+
+    uint8_t buffer[4096];
+    size_t written = 0;
+    assert(lantern_ssz_encode_signed_block(&signed_block, buffer, sizeof(buffer), &written) == 0);
+
+    LanternSignedBlock decoded;
+    memset(&decoded, 0, sizeof(decoded));
+    lantern_block_body_init(&decoded.message.body);
+    buffer[sizeof(uint32_t)] = 0x5A;
+    assert(lantern_ssz_decode_signed_block(&decoded, buffer, written) != 0);
+    reset_block(&decoded.message);
+
+    signed_block.signature.bytes[0] = 0x01;
+    assert(lantern_ssz_encode_signed_block(&signed_block, buffer, sizeof(buffer), &written) != 0);
+
+    reset_block(&signed_block.message);
 }
 
 static void test_state_roundtrip(void) {
@@ -300,10 +338,12 @@ int main(void) {
     test_checkpoint_roundtrip();
     test_vote_roundtrip();
     test_signed_vote_roundtrip();
+    test_signed_vote_signature_validation();
     test_block_header_roundtrip();
     test_block_body_roundtrip();
     test_block_roundtrip();
     test_signed_block_roundtrip();
+    test_signed_block_signature_validation();
     test_state_roundtrip();
     puts("lantern_ssz_test OK");
     return 0;

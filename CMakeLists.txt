@@ -25,6 +25,7 @@ set(SECP256K1_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 add_library(lantern STATIC
     src/consensus/containers.c
+    src/consensus/signature.c
     src/consensus/state.c
     src/consensus/ssz.c
     src/core/client.c

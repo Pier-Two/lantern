@@ -47,12 +47,15 @@ static LanternVote build_vote(void) {
     return vote;
 }
 
-static LanternSignedVote build_signed_vote(uint64_t validator_id, uint64_t slot, uint8_t sig_seed) {
+static LanternSignedVote build_signed_vote(uint64_t validator_id, uint64_t slot, uint8_t seed) {
     LanternSignedVote signed_vote;
+    memset(&signed_vote, 0, sizeof(signed_vote));
     signed_vote.data = build_vote();
     signed_vote.data.validator_id = validator_id;
     signed_vote.data.slot = slot;
-    fill_bytes(signed_vote.signature.bytes, sizeof(signed_vote.signature.bytes), sig_seed);
+    signed_vote.data.head = build_checkpoint(seed, slot);
+    signed_vote.data.target = build_checkpoint(seed + 1, slot + 1);
+    signed_vote.data.source = build_checkpoint(seed + 2, slot > 0 ? slot - 1 : slot);
     return signed_vote;
 }
 
@@ -63,7 +66,7 @@ static void populate_block(LanternSignedBlock *signed_block, uint8_t seed) {
     fill_bytes(signed_block->message.state_root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(0x20 + seed));
     LanternSignedVote vote = build_signed_vote(1 + seed, 50 + seed, (uint8_t)(0x30 + seed));
     check_zero(lantern_attestations_append(&signed_block->message.body.attestations, &vote), "attestation append");
-    memset(signed_block->signature.bytes, (int)(0x40 + seed), sizeof(signed_block->signature.bytes));
+    memset(signed_block->signature.bytes, 0, sizeof(signed_block->signature.bytes));
 }
 
 static void test_status_snappy(void) {
