@@ -40,5 +40,12 @@ int lantern_bitlist_resize(struct lantern_bitlist *list, size_t new_bit_length);
 
 void lantern_state_init(LanternState *state);
 void lantern_state_reset(LanternState *state);
+int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, uint64_t num_validators);
+int lantern_state_process_slot(LanternState *state);
+int lantern_state_process_slots(LanternState *state, uint64_t target_slot);
+int lantern_state_process_block_header(LanternState *state, const LanternBlock *block);
+int lantern_state_process_attestations(LanternState *state, const LanternAttestations *attestations);
+int lantern_state_process_block(LanternState *state, const LanternBlock *block);
+int lantern_state_transition(LanternState *state, const LanternSignedBlock *signed_block);
 
 #endif /* LANTERN_CONSENSUS_STATE_H */

@@ -17,12 +17,15 @@ function(_lantern_define_static target_name source_dir)
         add_library(${target_name} STATIC
             ${source_dir}/src/ssz_constants.c
             ${source_dir}/src/ssz_deserialize.c
+            ${source_dir}/src/ssz_merkle.c
             ${source_dir}/src/ssz_serialize.c
             ${source_dir}/src/ssz_utils.c
+            ${source_dir}/lib/mincrypt/sha256.c
         )
         target_include_directories(${target_name}
             PUBLIC
                 ${source_dir}/include
+                ${source_dir}/lib
         )
     endif()
 endfunction()
