@@ -1,0 +1,17 @@
+# Git metadata and build outputs
+.git
+.gitmodules
+build
+cmake-build*
+
+# Editor/project artifacts
+.vscode
+.idea
+*.swp
+
+# Python cache
+__pycache__/
+*.pyc
+
+# macOS metadata
+.DS_Store

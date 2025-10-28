@@ -34,6 +34,14 @@ static size_t http_validator_count_cb(void *context);
 static int http_validator_info_cb(void *context, size_t index, struct lantern_http_validator_info *out_info);
 static int http_set_validator_status_cb(void *context, uint64_t global_index, bool enabled);
 static int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snapshot);
+static void format_root_hex(const LanternRoot *root, char *out, size_t out_len);
+static int reqresp_build_status(void *context, LanternStatusMessage *out_status);
+static int reqresp_handle_status(void *context, const LanternStatusMessage *peer_status, const char *peer_id);
+static int reqresp_collect_blocks(
+    void *context,
+    const LanternRoot *roots,
+    size_t root_count,
+    LanternBlocksByRootResponse *out_blocks);
 
 void lantern_client_options_init(struct lantern_client_options *options) {
     if (!options) {
@@ -81,6 +89,8 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     lantern_enr_record_init(&client->local_enr);
     lantern_libp2p_host_init(&client->network);
     lantern_gossipsub_service_init(&client->gossip);
+    lantern_reqresp_service_init(&client->reqresp);
+    client->reqresp_running = false;
     lantern_validator_assignment_init(&client->validator_assignment);
     client->has_validator_assignment = false;
     lantern_consensus_runtime_reset(&client->runtime);
@@ -223,6 +233,27 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     }
     client->gossip_running = true;
 
+    struct lantern_reqresp_service_callbacks req_callbacks;
+    memset(&req_callbacks, 0, sizeof(req_callbacks));
+    req_callbacks.context = client;
+    req_callbacks.build_status = reqresp_build_status;
+    req_callbacks.handle_status = reqresp_handle_status;
+    req_callbacks.collect_blocks = reqresp_collect_blocks;
+
+    struct lantern_reqresp_service_config req_config;
+    memset(&req_config, 0, sizeof(req_config));
+    req_config.host = client->network.host;
+    req_config.callbacks = &req_callbacks;
+    if (lantern_reqresp_service_start(&client->reqresp, &req_config) != 0) {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to start request/response service");
+        memset(node_key, 0, sizeof(node_key));
+        goto error;
+    }
+    client->reqresp_running = true;
+
     if (append_genesis_bootnodes(client) != 0) {
         lantern_log_error(
             "client",
@@ -335,6 +366,17 @@ void lantern_shutdown(struct lantern_client *client) {
 
     reset_genesis_paths(&client->genesis_paths);
     lantern_genesis_artifacts_reset(&client->genesis);
+    lantern_log_info(
+        "client",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "shutdown: stopping request/response service");
+    lantern_reqresp_service_reset(&client->reqresp);
+    lantern_reqresp_service_init(&client->reqresp);
+    client->reqresp_running = false;
+    lantern_log_info(
+        "client",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "shutdown: request/response service stopped");
     lantern_log_info(
         "client",
         &(const struct lantern_log_metadata){.validator = client->node_id},
@@ -692,6 +734,72 @@ static int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *o
     }
     out_snapshot->validators_active = active;
     return 0;
+}
+
+static void format_root_hex(const LanternRoot *root, char *out, size_t out_len) {
+    if (!out || out_len == 0) {
+        return;
+    }
+    if (!root) {
+        out[0] = '\0';
+        return;
+    }
+    if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, out, out_len, 1) != 0) {
+        out[0] = '\0';
+    }
+}
+
+static int reqresp_build_status(void *context, LanternStatusMessage *out_status) {
+    if (!context || !out_status) {
+        return -1;
+    }
+    struct lantern_client *client = context;
+    memset(out_status, 0, sizeof(*out_status));
+    if (!client->has_state) {
+        return 0;
+    }
+
+    out_status->finalized = client->state.latest_finalized;
+    out_status->head.slot = client->state.latest_block_header.slot;
+    if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &out_status->head.root) != 0) {
+        memset(&out_status->head.root, 0, sizeof(out_status->head.root));
+    }
+    return 0;
+}
+
+static int reqresp_handle_status(void *context, const LanternStatusMessage *peer_status, const char *peer_id) {
+    (void)context;
+    if (!peer_status) {
+        return -1;
+    }
+    char head_hex[2 * LANTERN_ROOT_SIZE + 3];
+    char finalized_hex[2 * LANTERN_ROOT_SIZE + 3];
+    format_root_hex(&peer_status->head.root, head_hex, sizeof(head_hex));
+    format_root_hex(&peer_status->finalized.root, finalized_hex, sizeof(finalized_hex));
+
+    lantern_log_info(
+        "network",
+        &(const struct lantern_log_metadata){.peer = peer_id},
+        "peer status head_slot=%" PRIu64 " head_root=%s finalized_slot=%" PRIu64 " finalized_root=%s",
+        peer_status->head.slot,
+        head_hex[0] ? head_hex : "0x0",
+        peer_status->finalized.slot,
+        finalized_hex[0] ? finalized_hex : "0x0");
+    return 0;
+}
+
+static int reqresp_collect_blocks(
+    void *context,
+    const LanternRoot *roots,
+    size_t root_count,
+    LanternBlocksByRootResponse *out_blocks) {
+    (void)context;
+    (void)roots;
+    (void)root_count;
+    if (!out_blocks) {
+        return -1;
+    }
+    return lantern_blocks_by_root_response_resize(out_blocks, 0);
 }
 
 static int init_consensus_runtime(struct lantern_client *client) {

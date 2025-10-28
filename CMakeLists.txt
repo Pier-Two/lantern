@@ -43,6 +43,7 @@ add_library(lantern STATIC
     src/networking/gossipsub_service.c
     src/networking/gossip_payloads.c
     src/networking/libp2p.c
+    src/networking/reqresp_service.c
     src/networking/messages.c
     src/encoding/rlp.c
     src/http/common.c

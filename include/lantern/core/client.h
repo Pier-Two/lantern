@@ -13,6 +13,7 @@
 #include "lantern/http/server.h"
 #include "lantern/networking/libp2p.h"
 #include "lantern/networking/gossipsub_service.h"
+#include "lantern/networking/reqresp_service.h"
 #include "lantern/support/string_list.h"
 
 #ifdef __cplusplus
@@ -67,6 +68,8 @@ struct lantern_client {
     struct lantern_libp2p_host network;
     struct lantern_gossipsub_service gossip;
     bool gossip_running;
+    struct lantern_reqresp_service reqresp;
+    bool reqresp_running;
     uint8_t node_private_key[32];
     bool has_node_private_key;
     const struct lantern_validator_config_entry *assigned_validators;
