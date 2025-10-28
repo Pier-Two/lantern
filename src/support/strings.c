@@ -84,3 +84,29 @@ int lantern_hex_decode(const char *hex, uint8_t *out, size_t out_len) {
     }
     return 0;
 }
+
+int lantern_bytes_to_hex(const uint8_t *bytes, size_t len, char *out, size_t out_len, int include_prefix) {
+    static const char hex_digits[] = "0123456789abcdef";
+    if (!bytes || !out) {
+        return -1;
+    }
+    size_t required = (len * 2) + (include_prefix ? 2 : 0) + 1;
+    if (out_len < required) {
+        if (out_len > 0) {
+            out[0] = '\0';
+        }
+        return -1;
+    }
+    size_t offset = 0;
+    if (include_prefix) {
+        out[offset++] = '0';
+        out[offset++] = 'x';
+    }
+    for (size_t i = 0; i < len; ++i) {
+        uint8_t byte = bytes[i];
+        out[offset++] = hex_digits[(byte >> 4) & 0x0F];
+        out[offset++] = hex_digits[byte & 0x0F];
+    }
+    out[offset] = '\0';
+    return 0;
+}

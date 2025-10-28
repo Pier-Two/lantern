@@ -153,5 +153,6 @@ ${_lantern_ignore_block})
             lantern_c_ssz
             lantern_snappy_c
             libp2p_unified
+            protocol_gossipsub
     )
 endfunction()

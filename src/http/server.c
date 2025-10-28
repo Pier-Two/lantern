@@ -1,6 +1,8 @@
 #include "lantern/http/server.h"
 
+#include "lantern/http/common.h"
 #include "lantern/support/log.h"
+#include "lantern/support/strings.h"
 
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -16,84 +18,22 @@
 #define LANTERN_HTTP_BUFFER_SIZE 4096
 
 static void root_to_hex(const LanternRoot *root, char *out, size_t out_len) {
-    static const char hex_digits[] = "0123456789abcdef";
     if (!root || !out || out_len < (2 * LANTERN_ROOT_SIZE) + 3) {
         if (out && out_len > 0) {
             out[0] = '\0';
         }
         return;
     }
-    out[0] = '0';
-    out[1] = 'x';
-    for (size_t i = 0; i < LANTERN_ROOT_SIZE; ++i) {
-        uint8_t byte = root->bytes[i];
-        out[2 + (2 * i)] = hex_digits[(byte >> 4) & 0x0Fu];
-        out[3 + (2 * i)] = hex_digits[byte & 0x0Fu];
-    }
-    out[2 + (2 * LANTERN_ROOT_SIZE)] = '\0';
-}
-
-static int send_all(int fd, const char *data, size_t length) {
-    if (!data) {
-        return -1;
-    }
-    while (length > 0) {
-        ssize_t written = send(fd, data, length, 0);
-        if (written <= 0) {
-            if (written < 0 && errno == EINTR) {
-                continue;
-            }
-            return -1;
-        }
-        data += written;
-        length -= (size_t)written;
-    }
-    return 0;
-}
-
-static int send_response(
-    int fd,
-    int status_code,
-    const char *status_text,
-    const char *content_type,
-    const char *body,
-    size_t body_len) {
-    char header[256];
-    if (!status_text) {
-        status_text = "OK";
-    }
-    if (!content_type) {
-        content_type = "application/json";
-    }
-    int header_len = snprintf(
-        header,
-        sizeof(header),
-        "HTTP/1.1 %d %s\r\n"
-        "Content-Type: %s\r\n"
-        "Content-Length: %zu\r\n"
-        "Connection: close\r\n"
-        "\r\n",
-        status_code,
-        status_text,
-        content_type,
-        body ? body_len : 0u);
-    if (header_len <= 0 || (size_t)header_len >= sizeof(header)) {
-        return -1;
-    }
-    if (send_all(fd, header, (size_t)header_len) != 0) {
-        return -1;
-    }
-    if (body && body_len > 0) {
-        if (send_all(fd, body, body_len) != 0) {
-            return -1;
+    if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, out, out_len, 1) != 0) {
+        if (out_len > 0) {
+            out[0] = '\0';
         }
     }
-    return 0;
 }
 
 static int send_simple_json(int fd, int status_code, const char *status_text, const char *json_body) {
     size_t len = json_body ? strlen(json_body) : 0;
-    if (send_response(fd, status_code, status_text, "application/json", json_body, len) != 0) {
+    if (lantern_http_send_response(fd, status_code, status_text, "application/json", json_body, len) != 0) {
         return -1;
     }
     return status_code;
@@ -145,7 +85,7 @@ static int handle_get_head(struct lantern_http_server *server, int client_fd) {
             "Internal Server Error",
             "{\"error\":\"head response too large\"}");
     }
-    if (send_response(client_fd, 200, "OK", "application/json", body, (size_t)len) != 0) {
+    if (lantern_http_send_response(client_fd, 200, "OK", "application/json", body, (size_t)len) != 0) {
         return -1;
     }
     return 200;
@@ -244,7 +184,7 @@ static int handle_get_validators(struct lantern_http_server *server, int client_
     }
     dynamic_body[offset++] = ']';
     dynamic_body[offset++] = '}';
-    int rc = send_response(client_fd, 200, "OK", "application/json", dynamic_body, offset);
+    int rc = lantern_http_send_response(client_fd, 200, "OK", "application/json", dynamic_body, offset);
     free(dynamic_body);
     if (rc != 0) {
         return -1;
@@ -318,7 +258,7 @@ static int handle_post_validator_action(
             "Not Found",
             "{\"error\":\"validator not found\"}");
     }
-    if (send_response(client_fd, 204, "No Content", "application/json", NULL, 0) != 0) {
+    if (lantern_http_send_response(client_fd, 204, "No Content", "application/json", NULL, 0) != 0) {
         return -1;
     }
     return 204;
@@ -505,18 +445,18 @@ void lantern_http_server_stop(struct lantern_http_server *server) {
     if (!server) {
         return;
     }
+    int listen_fd = server->listen_fd;
     if (server->running) {
         server->running = 0;
-        if (server->listen_fd >= 0) {
-            shutdown(server->listen_fd, SHUT_RDWR);
-        }
+    }
+    if (listen_fd >= 0) {
+        shutdown(listen_fd, SHUT_RDWR);
+        close(listen_fd);
+        server->listen_fd = -1;
     }
     if (server->thread_started) {
         pthread_join(server->thread, NULL);
         server->thread_started = 0;
     }
-    if (server->listen_fd >= 0) {
-        close(server->listen_fd);
-        server->listen_fd = -1;
-    }
+    server->listen_fd = -1;
 }

@@ -9,8 +9,10 @@
 #include "lantern/consensus/duties.h"
 #include "lantern/consensus/runtime.h"
 #include "lantern/genesis/genesis.h"
+#include "lantern/http/metrics.h"
 #include "lantern/http/server.h"
 #include "lantern/networking/libp2p.h"
+#include "lantern/networking/gossipsub_service.h"
 #include "lantern/support/string_list.h"
 
 #ifdef __cplusplus
@@ -27,6 +29,7 @@ extern "C" {
 #define LANTERN_DEFAULT_LISTEN_ADDR "/ip4/0.0.0.0/udp/9000/quic_v1"
 #define LANTERN_DEFAULT_HTTP_PORT 5052
 #define LANTERN_DEFAULT_METRICS_PORT 8080
+#define LANTERN_DEFAULT_DEVNET "devnet0"
 
 struct lantern_client_options {
     const char *data_dir;
@@ -41,6 +44,7 @@ struct lantern_client_options {
     const char *listen_address;
     uint16_t http_port;
     uint16_t metrics_port;
+    const char *devnet;
     struct lantern_string_list bootnodes;
 };
 
@@ -55,11 +59,14 @@ struct lantern_client {
     char *listen_address;
     uint16_t http_port;
     uint16_t metrics_port;
+    char *devnet;
     struct lantern_string_list bootnodes;
     struct lantern_genesis_paths genesis_paths;
     struct lantern_genesis_artifacts genesis;
     struct lantern_enr_record local_enr;
     struct lantern_libp2p_host network;
+    struct lantern_gossipsub_service gossip;
+    bool gossip_running;
     uint8_t node_private_key[32];
     bool has_node_private_key;
     const struct lantern_validator_config_entry *assigned_validators;
@@ -74,6 +81,8 @@ struct lantern_client {
     bool *validator_enabled;
     pthread_mutex_t validator_lock;
     bool validator_lock_initialized;
+    struct lantern_metrics_server metrics_server;
+    bool metrics_running;
     struct lantern_http_server http_server;
     bool http_running;
 };

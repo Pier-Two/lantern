@@ -107,6 +107,10 @@ static int verify_client_state(
         fprintf(stderr, "libp2p host missing or not started\n");
         return 1;
     }
+    if (!client->gossip_running || !client->gossip.gossipsub) {
+        fprintf(stderr, "gossipsub service not running\n");
+        return 1;
+    }
 
     if (lantern_client_local_validator_count(client) != expected_count) {
         fprintf(stderr, "Local validator count mismatch\n");
@@ -187,6 +191,7 @@ int main(void) {
     options.node_id = "lantern_0";
     options.listen_address = "/ip4/127.0.0.1/udp/9100/quic_v1";
     options.node_key_hex = "0xb71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291";
+    options.metrics_port = 0;
 
     if (lantern_client_options_add_bootnode(&options, "enr:-ManualEnr") != 0) {
         fprintf(stderr, "Failed to add bootnode\n");

@@ -27,6 +27,7 @@ enum {
     OPT_BOOTNODE,
     OPT_BOOTNODES,
     OPT_BOOTNODE_FILE,
+    OPT_DEVNET,
 };
 
 static void print_usage(const char *prog);
@@ -71,6 +72,7 @@ int main(int argc, char **argv) {
         {"bootnode", required_argument, NULL, OPT_BOOTNODE},
         {"bootnodes", required_argument, NULL, OPT_BOOTNODES},
         {"bootnodes-file", required_argument, NULL, OPT_BOOTNODE_FILE},
+        {"devnet", required_argument, NULL, OPT_DEVNET},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'v'},
         {0, 0, 0, 0},
@@ -145,6 +147,9 @@ int main(int argc, char **argv) {
                     optarg);
                 goto error;
             }
+            break;
+        case OPT_DEVNET:
+            options.devnet = optarg;
             break;
         case OPT_BOOTNODES:
             if (add_bootnodes_argument(&options, optarg) != 0) {
@@ -258,6 +263,7 @@ static void print_usage(const char *prog) {
         "  --bootnode ENR               Add a bootnode enr\n"
         "  --bootnodes VALUE            ENR or path to YAML/List file of ENRs\n"
         "  --bootnodes-file PATH        File with newline-delimited ENRs\n"
+        "  --devnet NAME                Devnet identifier for gossip topics\n"
         "  --help                       Show this message\n"
         "  --version                    Print version information\n",
         prog,

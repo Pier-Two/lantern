@@ -33,6 +33,7 @@ static int http_snapshot_head(void *context, struct lantern_http_head_snapshot *
 static size_t http_validator_count_cb(void *context);
 static int http_validator_info_cb(void *context, size_t index, struct lantern_http_validator_info *out_info);
 static int http_set_validator_status_cb(void *context, uint64_t global_index, bool enabled);
+static int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snapshot);
 
 void lantern_client_options_init(struct lantern_client_options *options) {
     if (!options) {
@@ -51,6 +52,7 @@ void lantern_client_options_init(struct lantern_client_options *options) {
     options->listen_address = LANTERN_DEFAULT_LISTEN_ADDR;
     options->http_port = LANTERN_DEFAULT_HTTP_PORT;
     options->metrics_port = LANTERN_DEFAULT_METRICS_PORT;
+    options->devnet = LANTERN_DEFAULT_DEVNET;
     lantern_string_list_init(&options->bootnodes);
 }
 
@@ -78,11 +80,15 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     lantern_genesis_artifacts_init(&client->genesis);
     lantern_enr_record_init(&client->local_enr);
     lantern_libp2p_host_init(&client->network);
+    lantern_gossipsub_service_init(&client->gossip);
     lantern_validator_assignment_init(&client->validator_assignment);
     client->has_validator_assignment = false;
     lantern_consensus_runtime_reset(&client->runtime);
     client->has_runtime = false;
+    lantern_metrics_server_init(&client->metrics_server);
+    client->metrics_running = false;
     lantern_http_server_init(&client->http_server);
+    client->http_running = false;
     lantern_state_init(&client->state);
 
     if (set_owned_string(&client->data_dir, options->data_dir) != 0) {
@@ -93,6 +99,9 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     }
     lantern_log_set_node_id(client->node_id);
     if (set_owned_string(&client->listen_address, options->listen_address) != 0) {
+        goto error;
+    }
+    if (set_owned_string(&client->devnet, options->devnet) != 0) {
         goto error;
     }
     client->http_port = options->http_port;
@@ -200,6 +209,19 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
         memset(node_key, 0, sizeof(node_key));
         goto error;
     }
+    struct lantern_gossipsub_config gossip_cfg = {
+        .host = client->network.host,
+        .devnet = client->devnet,
+    };
+    if (lantern_gossipsub_service_start(&client->gossip, &gossip_cfg) != 0) {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to start gossipsub service");
+        memset(node_key, 0, sizeof(node_key));
+        goto error;
+    }
+    client->gossip_running = true;
 
     if (append_genesis_bootnodes(client) != 0) {
         lantern_log_error(
@@ -249,6 +271,22 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     }
     client->http_running = true;
 
+    struct lantern_metrics_callbacks metrics_callbacks;
+    memset(&metrics_callbacks, 0, sizeof(metrics_callbacks));
+    metrics_callbacks.context = client;
+    metrics_callbacks.snapshot = metrics_snapshot_cb;
+    if (client->metrics_port != 0) {
+        if (lantern_metrics_server_start(&client->metrics_server, client->metrics_port, &metrics_callbacks) != 0) {
+            lantern_log_error(
+                "client",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "failed to start metrics server on port %" PRIu16,
+                client->metrics_port);
+            goto error;
+        }
+        client->metrics_running = true;
+    }
+
     return 0;
 
 error:
@@ -260,6 +298,10 @@ void lantern_shutdown(struct lantern_client *client) {
     if (!client) {
         return;
     }
+
+    lantern_metrics_server_stop(&client->metrics_server);
+    lantern_metrics_server_init(&client->metrics_server);
+    client->metrics_running = false;
 
     lantern_http_server_stop(&client->http_server);
     lantern_http_server_init(&client->http_server);
@@ -288,11 +330,31 @@ void lantern_shutdown(struct lantern_client *client) {
     client->node_id = NULL;
     free(client->listen_address);
     client->listen_address = NULL;
+    free(client->devnet);
+    client->devnet = NULL;
 
     reset_genesis_paths(&client->genesis_paths);
     lantern_genesis_artifacts_reset(&client->genesis);
-    lantern_enr_record_reset(&client->local_enr);
+    lantern_log_info(
+        "client",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "shutdown: stopping gossipsub");
+    lantern_gossipsub_service_reset(&client->gossip);
+    client->gossip_running = false;
+    lantern_log_info(
+        "client",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "shutdown: gossipsub stopped");
+    lantern_log_info(
+        "client",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "shutdown: resetting libp2p host");
     lantern_libp2p_host_reset(&client->network);
+    lantern_log_info(
+        "client",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "shutdown: libp2p host reset");
+    lantern_enr_record_reset(&client->local_enr);
     memset(client->node_private_key, 0, sizeof(client->node_private_key));
     client->has_node_private_key = false;
     if (client->has_state) {
@@ -570,6 +632,65 @@ static int http_set_validator_status_cb(void *context, uint64_t global_index, bo
         "validator %" PRIu64 " %s",
         global_index,
         enabled ? "activated" : "deactivated");
+    return 0;
+}
+
+static int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snapshot) {
+    if (!context || !out_snapshot) {
+        return -1;
+    }
+    struct lantern_client *client = context;
+    memset(out_snapshot, 0, sizeof(*out_snapshot));
+
+    if (client->node_id) {
+        snprintf(out_snapshot->node_id, sizeof(out_snapshot->node_id), "%s", client->node_id);
+    }
+
+    if (client->has_state) {
+        out_snapshot->head_slot = client->state.slot;
+        if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &out_snapshot->head_root) != 0) {
+            memset(&out_snapshot->head_root, 0, sizeof(out_snapshot->head_root));
+        }
+        out_snapshot->justified = client->state.latest_justified;
+        out_snapshot->finalized = client->state.latest_finalized;
+    } else {
+        memset(&out_snapshot->head_root, 0, sizeof(out_snapshot->head_root));
+        memset(&out_snapshot->justified, 0, sizeof(out_snapshot->justified));
+        memset(&out_snapshot->finalized, 0, sizeof(out_snapshot->finalized));
+        out_snapshot->head_slot = 0;
+    }
+
+    out_snapshot->known_peers = client->bootnodes.len;
+    out_snapshot->connected_peers = 0;
+    out_snapshot->gossip_topics = 2;
+    out_snapshot->gossip_validation_failures = 0;
+    out_snapshot->validators_total = client->local_validator_count;
+
+    size_t active = 0;
+    if (client->validator_enabled && client->local_validator_count > 0) {
+        bool counted = false;
+        if (client->validator_lock_initialized) {
+            if (pthread_mutex_lock(&client->validator_lock) == 0) {
+                for (size_t i = 0; i < client->local_validator_count; ++i) {
+                    if (client->validator_enabled[i]) {
+                        active++;
+                    }
+                }
+                pthread_mutex_unlock(&client->validator_lock);
+                counted = true;
+            }
+        }
+        if (!counted) {
+            for (size_t i = 0; i < client->local_validator_count; ++i) {
+                if (client->validator_enabled[i]) {
+                    active++;
+                }
+            }
+        }
+    } else {
+        active = client->local_validator_count;
+    }
+    out_snapshot->validators_active = active;
     return 0;
 }
 

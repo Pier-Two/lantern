@@ -40,10 +40,13 @@ add_library(lantern STATIC
     src/encoding/snappy.c
     src/networking/enr.c
     src/networking/gossip.c
+    src/networking/gossipsub_service.c
     src/networking/gossip_payloads.c
     src/networking/libp2p.c
     src/networking/messages.c
     src/encoding/rlp.c
+    src/http/common.c
+    src/http/metrics.c
     src/http/server.c
     src/support/log.c
     src/support/string_list.c
@@ -116,5 +119,20 @@ if(LANTERN_BUILD_TESTS)
     add_executable(lantern_fork_choice_test tests/unit/test_fork_choice.c)
     target_link_libraries(lantern_fork_choice_test PRIVATE lantern)
     add_test(NAME lantern_fork_choice COMMAND lantern_fork_choice_test)
+
+    set(_lantern_ctest_targets
+        lantern_client
+        lantern_rlp
+        lantern_enr
+        lantern_ssz
+        lantern_duties
+        lantern_consensus_runtime
+        lantern_state
+        lantern_slot_clock
+        lantern_snappy
+        lantern_networking_messages
+        lantern_fork_choice
+    )
+    set_property(TEST ${_lantern_ctest_targets} PROPERTY TIMEOUT 30)
 
 endif()
