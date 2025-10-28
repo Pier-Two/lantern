@@ -14,3 +14,10 @@ validators:
       quic: 9101
       seq: 2
     count: 2
+  - name: "lantern_2"
+    privkey: "0x13579b"
+    enrFields:
+      ip: "127.0.0.1"
+      quic: 9102
+      seq: 3
+    count: 1

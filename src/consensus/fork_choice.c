@@ -753,6 +753,36 @@ int lantern_fork_choice_current_head(const LanternForkChoice *store, LanternRoot
     return 0;
 }
 
+int lantern_fork_choice_block_info(
+    const LanternForkChoice *store,
+    const LanternRoot *root,
+    uint64_t *out_slot,
+    LanternRoot *out_parent_root,
+    bool *out_has_parent) {
+    if (!store || !store->initialized || !root) {
+        return -1;
+    }
+    size_t index = 0;
+    if (!map_lookup(store, root, &index)) {
+        return -1;
+    }
+    if (!store->blocks || index >= store->block_len) {
+        return -1;
+    }
+    const struct lantern_fork_choice_block_entry *entry = &store->blocks[index];
+    if (out_slot) {
+        *out_slot = entry->slot;
+    }
+    if (out_parent_root) {
+        *out_parent_root = entry->parent_root;
+    }
+    if (out_has_parent) {
+        bool has_parent = entry->parent_index != SIZE_MAX && !root_is_zero(&entry->parent_root);
+        *out_has_parent = has_parent;
+    }
+    return 0;
+}
+
 const LanternCheckpoint *lantern_fork_choice_latest_justified(const LanternForkChoice *store) {
     if (!store) {
         return NULL;

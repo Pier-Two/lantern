@@ -1,6 +1,7 @@
 #include "lantern/core/client.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -27,7 +28,12 @@ static bool string_list_contains(const struct lantern_string_list *list, const c
     return false;
 }
 
-static int verify_client_state(const struct lantern_client *client, const struct lantern_client_options *options) {
+static int verify_client_state(
+    const struct lantern_client *client,
+    const struct lantern_client_options *options,
+    const uint64_t *expected_indices,
+    size_t expected_count,
+    uint16_t expected_udp_port) {
     if (client->genesis.chain_config.genesis_time != 1700000000ULL) {
         fprintf(stderr, "Unexpected genesis_time: %llu\n",
             (unsigned long long)client->genesis.chain_config.genesis_time);
@@ -55,16 +61,28 @@ static int verify_client_state(const struct lantern_client *client, const struct
             return 1;
         }
     }
-    if (client->genesis.validator_registry.count != 2) {
+    if (client->genesis.validator_registry.count != 4) {
         fprintf(stderr, "Unexpected validator registry count: %zu\n", client->genesis.validator_registry.count);
         return 1;
     }
-    if (client->genesis.validator_config.count != 2) {
+    if (client->genesis.validator_config.count != 3) {
         fprintf(stderr, "Unexpected validator config count: %zu\n", client->genesis.validator_config.count);
         return 1;
     }
-    if (!client->assigned_validators || client->assigned_validators->count != 1) {
+    if (!client->assigned_validators || client->assigned_validators->count != expected_count) {
         fprintf(stderr, "Validator assignment missing or incorrect\n");
+        return 1;
+    }
+    if (client->validator_assignment.count != expected_count) {
+        fprintf(stderr, "Validator assignment count mismatch\n");
+        return 1;
+    }
+    if (!expected_indices || expected_count == 0) {
+        fprintf(stderr, "Expected indices missing\n");
+        return 1;
+    }
+    if (client->validator_assignment.start_index != expected_indices[0]) {
+        fprintf(stderr, "Validator assignment start index mismatch\n");
         return 1;
     }
     if (!client->local_enr.encoded) {
@@ -76,13 +94,41 @@ static int verify_client_state(const struct lantern_client *client, const struct
         return 1;
     }
     const struct lantern_enr_key_value *udp = lantern_enr_record_find(&client->local_enr, "udp");
-    if (!udp || udp->value_len != 2 || udp->value[0] != 0x23 || udp->value[1] != 0x8c) {
+    if (!udp || udp->value_len != 2) {
+        fprintf(stderr, "Local ENR UDP missing\n");
+        return 1;
+    }
+    uint16_t udp_port = (uint16_t)(((uint16_t)udp->value[0] << 8) | (uint16_t)udp->value[1]);
+    if (udp_port != expected_udp_port) {
         fprintf(stderr, "Local ENR UDP mismatch\n");
         return 1;
     }
     if (!client->network.host || !client->network.started) {
         fprintf(stderr, "libp2p host missing or not started\n");
         return 1;
+    }
+
+    if (lantern_client_local_validator_count(client) != expected_count) {
+        fprintf(stderr, "Local validator count mismatch\n");
+        return 1;
+    }
+    for (size_t i = 0; i < expected_count; ++i) {
+        const struct lantern_local_validator *validator = lantern_client_local_validator(client, i);
+        if (!validator) {
+            fprintf(stderr, "Missing local validator %zu\n", i);
+            return 1;
+        }
+        if (validator->global_index != expected_indices[i]) {
+            fprintf(stderr, "Unexpected global index at %zu: expected %llu got %llu\n",
+                i,
+                (unsigned long long)expected_indices[i],
+                (unsigned long long)validator->global_index);
+            return 1;
+        }
+        if (!validator->registry || validator->registry->index != expected_indices[i]) {
+            fprintf(stderr, "Validator registry pointer mismatch at %zu\n", i);
+            return 1;
+        }
     }
 
     size_t expected_bootnodes = options->bootnodes.len;
@@ -148,17 +194,37 @@ int main(void) {
         return 1;
     }
 
+    const uint64_t node0_indices[] = {0};
+    const uint64_t node1_indices[] = {1, 2};
+
     struct lantern_client client;
     bool client_ready = false;
     int exit_code = 1;
 
     if (lantern_init(&client, &options) != 0) {
-        fprintf(stderr, "lantern_init failed\n");
+        fprintf(stderr, "lantern_init failed for lantern_0\n");
         goto cleanup;
     }
     client_ready = true;
 
-    if (verify_client_state(&client, &options) != 0) {
+    if (verify_client_state(&client, &options, node0_indices, 1, 9100) != 0) {
+        goto cleanup;
+    }
+
+    lantern_shutdown(&client);
+    client_ready = false;
+    memset(&client, 0, sizeof(client));
+
+    options.node_id = "lantern_1";
+    options.listen_address = "/ip4/127.0.0.1/udp/9200/quic_v1";
+
+    if (lantern_init(&client, &options) != 0) {
+        fprintf(stderr, "lantern_init failed for lantern_1\n");
+        goto cleanup;
+    }
+    client_ready = true;
+
+    if (verify_client_state(&client, &options, node1_indices, 2, 9101) != 0) {
         goto cleanup;
     }
 

@@ -1,12 +1,15 @@
 #ifndef LANTERN_CLIENT_H
 #define LANTERN_CLIENT_H
 
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "lantern/consensus/state.h"
 #include "lantern/consensus/duties.h"
 #include "lantern/consensus/runtime.h"
 #include "lantern/genesis/genesis.h"
+#include "lantern/http/server.h"
 #include "lantern/networking/libp2p.h"
 #include "lantern/support/string_list.h"
 
@@ -41,6 +44,11 @@ struct lantern_client_options {
     struct lantern_string_list bootnodes;
 };
 
+struct lantern_local_validator {
+    uint64_t global_index;
+    const struct lantern_validator_record *registry;
+};
+
 struct lantern_client {
     char *data_dir;
     char *node_id;
@@ -55,10 +63,19 @@ struct lantern_client {
     uint8_t node_private_key[32];
     bool has_node_private_key;
     const struct lantern_validator_config_entry *assigned_validators;
+    struct lantern_local_validator *local_validators;
+    size_t local_validator_count;
     struct lantern_validator_assignment validator_assignment;
     bool has_validator_assignment;
     struct lantern_consensus_runtime runtime;
     bool has_runtime;
+    LanternState state;
+    bool has_state;
+    bool *validator_enabled;
+    pthread_mutex_t validator_lock;
+    bool validator_lock_initialized;
+    struct lantern_http_server http_server;
+    bool http_running;
 };
 
 void lantern_client_options_init(struct lantern_client_options *options);
@@ -67,6 +84,11 @@ int lantern_client_options_add_bootnode(struct lantern_client_options *options, 
 
 int lantern_init(struct lantern_client *client, const struct lantern_client_options *options);
 void lantern_shutdown(struct lantern_client *client);
+
+size_t lantern_client_local_validator_count(const struct lantern_client *client);
+const struct lantern_local_validator *lantern_client_local_validator(
+    const struct lantern_client *client,
+    size_t index);
 
 #ifdef __cplusplus
 }

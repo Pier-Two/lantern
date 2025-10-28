@@ -1,13 +1,16 @@
 #include "lantern/core/client.h"
+#include "lantern/support/log.h"
 
 #include <ctype.h>
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
 #include <stdbool.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 enum {
     OPT_GENESIS_CONFIG = 1000,
@@ -32,12 +35,22 @@ static int add_bootnodes_from_file(struct lantern_client_options *options, const
 static int add_bootnodes_argument(struct lantern_client_options *options, const char *value);
 static char *trim_line(char *line);
 
+static volatile sig_atomic_t g_keep_running = 1;
+
+static void lantern_handle_signal(int signo) {
+    (void)signo;
+    g_keep_running = 0;
+}
+
 int main(int argc, char **argv) {
     struct lantern_client_options options;
     lantern_client_options_init(&options);
 
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
+
+    signal(SIGINT, lantern_handle_signal);
+    signal(SIGTERM, lantern_handle_signal);
 
     bool show_version = false;
     bool show_help = false;
@@ -105,31 +118,51 @@ int main(int argc, char **argv) {
             break;
         case OPT_HTTP_PORT:
             if (parse_u16(optarg, &options.http_port) != 0) {
-                fprintf(stderr, "lantern: invalid http-port '%s'\n", optarg);
+                lantern_log_error(
+                    "cli",
+                    &(const struct lantern_log_metadata){.validator = options.node_id},
+                    "invalid http-port '%s'",
+                    optarg);
                 goto error;
             }
             break;
         case OPT_METRICS_PORT:
             if (parse_u16(optarg, &options.metrics_port) != 0) {
-                fprintf(stderr, "lantern: invalid metrics-port '%s'\n", optarg);
+                lantern_log_error(
+                    "cli",
+                    &(const struct lantern_log_metadata){.validator = options.node_id},
+                    "invalid metrics-port '%s'",
+                    optarg);
                 goto error;
             }
             break;
         case OPT_BOOTNODE:
             if (lantern_client_options_add_bootnode(&options, optarg) != 0) {
-                fprintf(stderr, "lantern: failed to add bootnode\n");
+                lantern_log_error(
+                    "cli",
+                    &(const struct lantern_log_metadata){.validator = options.node_id},
+                    "failed to add bootnode '%s'",
+                    optarg);
                 goto error;
             }
             break;
         case OPT_BOOTNODES:
             if (add_bootnodes_argument(&options, optarg) != 0) {
-                fprintf(stderr, "lantern: failed to consume bootnodes from %s\n", optarg);
+                lantern_log_error(
+                    "cli",
+                    &(const struct lantern_log_metadata){.validator = options.node_id},
+                    "failed to consume bootnodes from %s",
+                    optarg);
                 goto error;
             }
             break;
         case OPT_BOOTNODE_FILE:
             if (add_bootnodes_from_file(&options, optarg) != 0) {
-                fprintf(stderr, "lantern: failed to read bootnodes file %s\n", optarg);
+                lantern_log_error(
+                    "cli",
+                    &(const struct lantern_log_metadata){.validator = options.node_id},
+                    "failed to read bootnodes file %s",
+                    optarg);
                 goto error;
             }
             break;
@@ -139,7 +172,10 @@ int main(int argc, char **argv) {
     }
 
     if (options.node_key_hex && options.node_key_path) {
-        fprintf(stderr, "lantern: specify only one of --node-key or --node-key-path\n");
+        lantern_log_error(
+            "cli",
+            &(const struct lantern_log_metadata){.validator = options.node_id},
+            "specify only one of --node-key or --node-key-path");
         goto error;
     }
 
@@ -154,22 +190,42 @@ int main(int argc, char **argv) {
     }
 
     if (!options.node_id) {
-        fprintf(stderr, "lantern: --node-id is required\n");
+        lantern_log_error(
+            "cli",
+            &(const struct lantern_log_metadata){0},
+            "--node-id is required");
         goto error;
     }
 
     if (lantern_init(&client, &options) != 0) {
-        fprintf(stderr, "lantern: initialization failed\n");
+        lantern_log_error(
+            "cli",
+            &(const struct lantern_log_metadata){.validator = options.node_id},
+            "initialization failed");
         goto error;
     }
 
-    printf(
-        "lantern ready | genesis_time=%" PRIu64 " validators=%" PRIu64 " enr=%zu manual_bootnodes=%zu local_enr=%s\n",
+    lantern_log_info(
+        "cli",
+        &(const struct lantern_log_metadata){.validator = client.node_id},
+        "lantern ready genesis_time=%" PRIu64 " validators=%" PRIu64 " enr=%zu manual_bootnodes=%zu local_enr=%s",
         client.genesis.chain_config.genesis_time,
         client.genesis.chain_config.validator_count,
         client.genesis.enrs.count,
         client.bootnodes.len,
         client.local_enr.encoded ? client.local_enr.encoded : "-");
+
+    struct timespec sleep_duration;
+    sleep_duration.tv_sec = 1;
+    sleep_duration.tv_nsec = 0;
+    while (g_keep_running) {
+        nanosleep(&sleep_duration, NULL);
+    }
+
+    lantern_log_info(
+        "cli",
+        &(const struct lantern_log_metadata){.validator = client.node_id},
+        "shutdown requested");
 
 cleanup:
     lantern_shutdown(&client);
@@ -229,7 +285,11 @@ static int add_bootnodes_from_file(struct lantern_client_options *options, const
 
     FILE *fp = fopen(path, "r");
     if (!fp) {
-        perror("lantern: fopen bootnodes");
+        lantern_log_error(
+            "cli",
+            &(const struct lantern_log_metadata){.validator = options->node_id},
+            "unable to open bootnodes file %s",
+            path);
         return -1;
     }
 
@@ -288,12 +348,23 @@ static int add_bootnodes_from_file(struct lantern_client_options *options, const
             return -1;
         }
         added++;
+        lantern_log_info(
+            "cli",
+            &(const struct lantern_log_metadata){
+                .validator = options->node_id,
+                .peer = value_start},
+            "bootnode registered from %s",
+            path);
     }
 
     fclose(fp);
 
     if (added == 0) {
-        fprintf(stderr, "lantern: no ENRs found in %s\n", path);
+        lantern_log_warn(
+            "cli",
+            &(const struct lantern_log_metadata){.validator = options->node_id},
+            "no ENRs found in %s",
+            path);
         return -1;
     }
 

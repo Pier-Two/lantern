@@ -62,5 +62,10 @@ int lantern_state_select_block_parent(const LanternState *state, LanternRoot *ou
 int lantern_state_collect_attestations_for_block(
     const LanternState *state,
     LanternAttestations *out_attestations);
+int lantern_state_compute_vote_checkpoints(
+    const LanternState *state,
+    LanternCheckpoint *out_head,
+    LanternCheckpoint *out_target,
+    LanternCheckpoint *out_source);
 
 #endif /* LANTERN_CONSENSUS_STATE_H */

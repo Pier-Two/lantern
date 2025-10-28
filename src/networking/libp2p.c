@@ -1,5 +1,7 @@
 #include "lantern/networking/libp2p.h"
 
+#include "lantern/support/log.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,7 +70,10 @@ void lantern_libp2p_host_stop(struct lantern_libp2p_host *state) {
         return;
     }
     if (libp2p_host_stop(state->host) != 0) {
-        fprintf(stderr, "lantern: libp2p_host_stop failed\n");
+        lantern_log_warn(
+            "network",
+            &(const struct lantern_log_metadata){.peer = "local"},
+            "libp2p_host_stop failed");
     }
     state->started = 0;
 }
@@ -90,7 +95,10 @@ int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct la
         return -1;
     }
     if (config->secret_len != 32) {
-        fprintf(stderr, "lantern: libp2p expects 32-byte secp256k1 secrets\n");
+        lantern_log_error(
+            "network",
+            &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
+            "libp2p expects 32-byte secp256k1 secrets");
         return -1;
     }
 
@@ -105,7 +113,12 @@ int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct la
     int addr_err = 0;
     multiaddr_t *ma = multiaddr_new_from_str(config->listen_multiaddr, &addr_err);
     if (!ma || addr_err != 0) {
-        fprintf(stderr, "lantern: invalid listen multiaddr '%s' (err=%d)\n", config->listen_multiaddr, addr_err);
+        lantern_log_error(
+            "network",
+            &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
+            "invalid listen multiaddr '%s' (err=%d)",
+            config->listen_multiaddr,
+            addr_err);
         multiaddr_free(ma);
         libp2p_host_builder_free(builder);
         return -1;
@@ -114,34 +127,55 @@ int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct la
 
     int b_rc = libp2p_host_builder_listen_addr(builder, config->listen_multiaddr);
     if (b_rc != 0) {
-        fprintf(stderr, "lantern: libp2p listen addr %s failed (%d)\n", config->listen_multiaddr, b_rc);
+        lantern_log_error(
+            "network",
+            &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
+            "libp2p listen addr %s failed (%d)",
+            config->listen_multiaddr,
+            b_rc);
         rc = -1;
     }
     if (rc == 0) {
         b_rc = libp2p_host_builder_transport(builder, "quic");
         if (b_rc != 0) {
-            fprintf(stderr, "lantern: libp2p transport setup failed (%d)\n", b_rc);
+            lantern_log_error(
+                "network",
+                &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
+                "libp2p transport setup failed (%d)",
+                b_rc);
             rc = -1;
         }
     }
     if (rc == 0) {
         b_rc = libp2p_host_builder_security(builder, "noise");
         if (b_rc != 0) {
-            fprintf(stderr, "lantern: libp2p security setup failed (%d)\n", b_rc);
+            lantern_log_error(
+                "network",
+                &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
+                "libp2p security setup failed (%d)",
+                b_rc);
             rc = -1;
         }
     }
     if (rc == 0) {
         b_rc = libp2p_host_builder_muxer(builder, "yamux");
         if (b_rc != 0) {
-            fprintf(stderr, "lantern: libp2p muxer setup failed (%d)\n", b_rc);
+            lantern_log_error(
+                "network",
+                &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
+                "libp2p muxer setup failed (%d)",
+                b_rc);
             rc = -1;
         }
     }
     if (rc == 0) {
         b_rc = libp2p_host_builder_multistream(builder, 5000, true);
         if (b_rc != 0) {
-            fprintf(stderr, "lantern: libp2p multistream setup failed (%d)\n", b_rc);
+            lantern_log_error(
+                "network",
+                &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
+                "libp2p multistream setup failed (%d)",
+                b_rc);
             rc = -1;
         }
     }
@@ -151,7 +185,11 @@ int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct la
     if (rc == 0) {
         build_rc = libp2p_host_builder_build(builder, &host);
         if (build_rc != 0 || !host) {
-            fprintf(stderr, "lantern: libp2p host builder failed (%d)\n", build_rc);
+            lantern_log_error(
+                "network",
+                &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
+                "libp2p host builder failed (%d)",
+                build_rc);
             rc = -1;
         }
     }
@@ -173,17 +211,28 @@ int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct la
 
     if (libp2p_host_set_private_key(host, identity_pb, identity_len) != 0) {
         free(identity_pb);
-        fprintf(stderr, "lantern: libp2p failed to set private key\n");
+        lantern_log_error(
+            "network",
+            &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
+            "libp2p failed to set private key");
         libp2p_host_free(host);
         return -1;
     }
     free(identity_pb);
 
     if (libp2p_host_start(host) != 0) {
-        fprintf(stderr, "lantern: libp2p host start failed\n");
+        lantern_log_error(
+            "network",
+            &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
+            "libp2p host start failed");
         libp2p_host_free(host);
         return -1;
     }
+
+    lantern_log_info(
+        "network",
+        &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
+        "libp2p host started");
 
     state->host = host;
     state->started = 1;

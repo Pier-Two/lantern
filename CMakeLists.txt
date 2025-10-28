@@ -22,6 +22,8 @@ set(SECP256K1_BUILD_EXHAUSTIVE_TESTS OFF CACHE BOOL "" FORCE)
 set(SECP256K1_BUILD_CTIME_TESTS OFF CACHE BOOL "" FORCE)
 set(SECP256K1_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
+find_package(Threads REQUIRED)
+
 
 add_library(lantern STATIC
     src/consensus/containers.c
@@ -38,9 +40,12 @@ add_library(lantern STATIC
     src/encoding/snappy.c
     src/networking/enr.c
     src/networking/gossip.c
+    src/networking/gossip_payloads.c
     src/networking/libp2p.c
     src/networking/messages.c
     src/encoding/rlp.c
+    src/http/server.c
+    src/support/log.c
     src/support/string_list.c
     src/support/strings.c
     src/internal/yaml_parser.c
@@ -59,10 +64,10 @@ target_include_directories(lantern
 )
 
 lantern_configure_dependencies(lantern)
-target_link_libraries(lantern PRIVATE secp256k1 libtomcrypt)
+target_link_libraries(lantern PRIVATE secp256k1 libtomcrypt Threads::Threads)
 
 add_executable(lantern_cli src/core/main.c)
-target_link_libraries(lantern_cli PRIVATE lantern)
+target_link_libraries(lantern_cli PRIVATE lantern Threads::Threads)
 
 option(LANTERN_BUILD_TESTS "Build lantern unit tests" ON)
 if(LANTERN_BUILD_TESTS)

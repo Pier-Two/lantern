@@ -1,8 +1,11 @@
 #include "lantern/consensus/state.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "lantern/support/log.h"
 
 #include "lantern/consensus/duties.h"
 #include "lantern/consensus/fork_choice.h"
@@ -190,6 +193,72 @@ static bool lantern_root_is_zero(const LanternRoot *root) {
         }
     }
     return true;
+}
+
+static uint64_t lantern_u64_isqrt(uint64_t value) {
+    uint64_t result = 0;
+    uint64_t bit = 1ull << 62;
+    while (bit > value) {
+        bit >>= 2;
+    }
+    while (bit != 0) {
+        if (value >= result + bit) {
+            value -= result + bit;
+            result = (result >> 1) + bit;
+        } else {
+            result >>= 1;
+        }
+        bit >>= 2;
+    }
+    return result;
+}
+
+static bool lantern_is_pronic(uint64_t delta) {
+    if (delta == 0) {
+        return true;
+    }
+    uint64_t root = lantern_u64_isqrt(delta);
+    uint64_t candidates[3];
+    size_t count = 0;
+    if (root > 0) {
+        candidates[count++] = root - 1;
+    }
+    candidates[count++] = root;
+    if (root < UINT64_MAX) {
+        candidates[count++] = root + 1;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        uint64_t a = candidates[i];
+        if (a == UINT64_MAX) {
+            continue;
+        }
+        uint64_t b = a + 1;
+        if (b == 0) {
+            continue;
+        }
+        if (a > UINT64_MAX / b) {
+            continue;
+        }
+        if (a * b == delta) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool lantern_slot_is_justifiable(uint64_t candidate_slot, uint64_t finalized_slot) {
+    if (candidate_slot < finalized_slot) {
+        return false;
+    }
+    uint64_t delta = candidate_slot - finalized_slot;
+    if (delta <= 5) {
+        return true;
+    }
+    uint64_t root = lantern_u64_isqrt(delta);
+    if (root * root == delta) {
+        return true;
+    }
+    return lantern_is_pronic(delta);
 }
 
 static int lantern_root_list_append(struct lantern_root_list *list, const LanternRoot *root) {
@@ -510,6 +579,12 @@ int lantern_state_process_slots(LanternState *state, uint64_t target_slot) {
             return -1;
         }
         state->slot += 1;
+        lantern_log_debug(
+            "state",
+            &(const struct lantern_log_metadata){
+                .has_slot = true,
+                .slot = state->slot},
+            "slot advanced");
     }
     return 0;
 }
@@ -890,5 +965,84 @@ int lantern_state_collect_attestations_for_block(
             return -1;
         }
     }
+    return 0;
+}
+
+int lantern_state_compute_vote_checkpoints(
+    const LanternState *state,
+    LanternCheckpoint *out_head,
+    LanternCheckpoint *out_target,
+    LanternCheckpoint *out_source) {
+    if (!state || !out_head || !out_target || !out_source) {
+        return -1;
+    }
+    if (!state->fork_choice) {
+        return -1;
+    }
+
+    const LanternForkChoice *store = state->fork_choice;
+    LanternRoot head_root;
+    if (lantern_fork_choice_current_head(store, &head_root) != 0) {
+        return -1;
+    }
+    uint64_t head_slot = 0;
+    if (lantern_fork_choice_block_info(store, &head_root, &head_slot, NULL, NULL) != 0) {
+        return -1;
+    }
+
+    LanternRoot target_root = head_root;
+    uint64_t target_slot = head_slot;
+
+    uint64_t safe_slot = head_slot;
+    bool has_safe = false;
+    const LanternRoot *safe_ptr = lantern_fork_choice_safe_target(store);
+    if (safe_ptr) {
+        if (lantern_fork_choice_block_info(store, safe_ptr, &safe_slot, NULL, NULL) != 0) {
+            return -1;
+        }
+        has_safe = true;
+    }
+
+    if (has_safe) {
+        for (size_t i = 0; i < 3 && target_slot > safe_slot; ++i) {
+            LanternRoot parent_root;
+            bool has_parent = false;
+            if (lantern_fork_choice_block_info(store, &target_root, &target_slot, &parent_root, &has_parent) != 0) {
+                return -1;
+            }
+            if (!has_parent) {
+                break;
+            }
+            uint64_t parent_slot = 0;
+            if (lantern_fork_choice_block_info(store, &parent_root, &parent_slot, NULL, NULL) != 0) {
+                return -1;
+            }
+            target_root = parent_root;
+            target_slot = parent_slot;
+        }
+    }
+
+    while (!lantern_slot_is_justifiable(target_slot, state->latest_finalized.slot)) {
+        LanternRoot parent_root;
+        bool has_parent = false;
+        if (lantern_fork_choice_block_info(store, &target_root, &target_slot, &parent_root, &has_parent) != 0) {
+            return -1;
+        }
+        if (!has_parent) {
+            break;
+        }
+        uint64_t parent_slot = 0;
+        if (lantern_fork_choice_block_info(store, &parent_root, &parent_slot, NULL, NULL) != 0) {
+            return -1;
+        }
+        target_root = parent_root;
+        target_slot = parent_slot;
+    }
+
+    out_head->root = head_root;
+    out_head->slot = head_slot;
+    out_target->root = target_root;
+    out_target->slot = target_slot;
+    *out_source = state->latest_justified;
     return 0;
 }

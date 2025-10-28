@@ -130,47 +130,34 @@ static int encode_root_list(const struct lantern_root_list *list, uint8_t *out, 
         return -1;
     }
     size_t root_bytes = list->length * LANTERN_ROOT_SIZE;
-    if (list->length > UINT32_MAX) {
+    if (root_bytes > remaining) {
         return -1;
     }
-    if (root_bytes > SIZE_MAX - SSZ_BYTE_SIZE_OF_UINT32) {
+    if (root_bytes > 0 && !list->items) {
         return -1;
     }
-    size_t total = SSZ_BYTE_SIZE_OF_UINT32 + root_bytes;
-    if (remaining < total) {
-        return -1;
+    if (root_bytes > 0) {
+        memcpy(out, list->items, root_bytes);
     }
-
-    if (write_u32(out, remaining, (uint32_t)list->length) != 0) {
-        return -1;
-    }
-
-    if (root_bytes > 0 && list->items) {
-        memcpy(out + SSZ_BYTE_SIZE_OF_UINT32, list->items, root_bytes);
-    }
-
-    set_written(written, total);
+    set_written(written, root_bytes);
     return 0;
 }
 
 static int decode_root_list(struct lantern_root_list *list, const uint8_t *data, size_t data_len) {
-    if (!list || !data || data_len < SSZ_BYTE_SIZE_OF_UINT32) {
+    if (!list) {
         return -1;
     }
-    uint32_t count = 0;
-    if (read_u32(data, data_len, &count) != 0) {
+    if (data_len == 0) {
+        return lantern_root_list_resize(list, 0);
+    }
+    if (!data || data_len % LANTERN_ROOT_SIZE != 0) {
         return -1;
     }
-    size_t root_bytes = (size_t)count * LANTERN_ROOT_SIZE;
-    if (data_len - SSZ_BYTE_SIZE_OF_UINT32 != root_bytes) {
-        return -1;
-    }
+    size_t count = data_len / LANTERN_ROOT_SIZE;
     if (lantern_root_list_resize(list, count) != 0) {
         return -1;
     }
-    if (root_bytes > 0) {
-        memcpy(list->items, data + SSZ_BYTE_SIZE_OF_UINT32, root_bytes);
-    }
+    memcpy(list->items, data, data_len);
     return 0;
 }
 
@@ -178,49 +165,58 @@ static int encode_bitlist(const struct lantern_bitlist *list, uint8_t *out, size
     if (!list || !out) {
         return -1;
     }
-    if (list->bit_length > UINT32_MAX) {
-        return -1;
+    if (list->bit_length == 0) {
+        if (remaining < 1) {
+            return -1;
+        }
+        out[0] = 0x01;
+        set_written(written, 1);
+        return 0;
     }
     size_t byte_len = (list->bit_length + 7) / 8;
-    if (byte_len > SIZE_MAX - SSZ_BYTE_SIZE_OF_UINT32) {
+    bool needs_extra = (list->bit_length % 8) == 0;
+    size_t total = byte_len + (needs_extra ? 1 : 0);
+    if (total > remaining) {
         return -1;
     }
-    size_t total = SSZ_BYTE_SIZE_OF_UINT32 + byte_len;
-    if (remaining < total) {
-        return -1;
-    }
-
-    if (write_u32(out, remaining, (uint32_t)list->bit_length) != 0) {
+    if (!list->bytes) {
         return -1;
     }
     if (byte_len > 0) {
-        if (!list->bytes) {
-            return -1;
-        }
-        memcpy(out + SSZ_BYTE_SIZE_OF_UINT32, list->bytes, byte_len);
+        memcpy(out, list->bytes, byte_len);
     }
-
+    if (needs_extra) {
+        out[total - 1] = 0x01;
+    }
     set_written(written, total);
     return 0;
 }
 
 static int decode_bitlist(struct lantern_bitlist *list, const uint8_t *data, size_t data_len) {
-    if (!list || !data || data_len < SSZ_BYTE_SIZE_OF_UINT32) {
+    if (!list || !data || data_len == 0) {
         return -1;
     }
-    uint32_t bit_length = 0;
-    if (read_u32(data, data_len, &bit_length) != 0) {
+    uint8_t last = data[data_len - 1];
+    if (last == 0) {
         return -1;
     }
-    size_t byte_len = (bit_length + 7u) / 8u;
-    if (data_len - SSZ_BYTE_SIZE_OF_UINT32 != byte_len) {
+    int msb = -1;
+    for (int i = 7; i >= 0; --i) {
+        if ((last >> i) & 1) {
+            msb = i;
+            break;
+        }
+    }
+    if (msb < 0) {
         return -1;
     }
+    size_t bit_length = (data_len - 1) * 8 + (size_t)msb;
     if (lantern_bitlist_resize(list, bit_length) != 0) {
         return -1;
     }
+    size_t byte_len = (bit_length + 7) / 8;
     if (byte_len > 0) {
-        memcpy(list->bytes, data + SSZ_BYTE_SIZE_OF_UINT32, byte_len);
+        memcpy(list->bytes, data, byte_len);
     }
     return 0;
 }

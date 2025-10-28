@@ -7,6 +7,8 @@
 #include "lantern/consensus/ssz.h"
 #include "lantern/networking/gossip.h"
 #include "lantern/networking/messages.h"
+#include "lantern/networking/gossip_payloads.h"
+#include "ssz_constants.h"
 #include "lantern/encoding/snappy.h"
 
 #define CHECK(cond)                                                                 \
@@ -220,11 +222,82 @@ static void test_gossip_helpers(void) {
     free(compressed);
 }
 
+static void test_gossip_signed_vote_payload(void) {
+    LanternSignedVote vote = build_signed_vote(3, 12, 0x44);
+
+    size_t max_compressed = 0;
+    CHECK(lantern_snappy_max_compressed_size(LANTERN_SIGNED_VOTE_SSZ_SIZE, &max_compressed) == LANTERN_SNAPPY_OK);
+    uint8_t *compressed = malloc(max_compressed);
+    CHECK(compressed);
+
+    size_t compressed_len = 0;
+    check_zero(
+        lantern_gossip_encode_signed_vote_snappy(&vote, compressed, max_compressed, &compressed_len),
+        "encode signed vote gossip");
+    CHECK(compressed_len > 0);
+
+    LanternSignedVote decoded = {0};
+    check_zero(
+        lantern_gossip_decode_signed_vote_snappy(&decoded, compressed, compressed_len),
+        "decode signed vote gossip");
+    CHECK(decoded.data.validator_id == vote.data.validator_id);
+    CHECK(decoded.data.target.slot == vote.data.target.slot);
+
+    uint8_t invalid_payload[] = {0x01, 0x02, 0x03};
+    CHECK(lantern_gossip_decode_signed_vote_snappy(&decoded, invalid_payload, sizeof(invalid_payload)) != 0);
+
+    free(compressed);
+}
+
+static void test_gossip_signed_block_payload(void) {
+    LanternSignedBlock block;
+    memset(&block, 0, sizeof(block));
+    lantern_block_body_init(&block.message.body);
+    populate_block(&block, 5);
+
+    size_t att_count = block.message.body.attestations.length;
+    size_t raw_upper =
+        (SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE)
+        + (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
+        + (LANTERN_ROOT_SIZE * 2u)
+        + SSZ_BYTE_SIZE_OF_UINT32
+        + SSZ_BYTE_SIZE_OF_UINT32
+        + att_count * LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    size_t max_compressed = 0;
+    CHECK(lantern_snappy_max_compressed_size(raw_upper, &max_compressed) == LANTERN_SNAPPY_OK);
+    uint8_t *compressed = malloc(max_compressed);
+    CHECK(compressed);
+
+    size_t compressed_len = 0;
+    check_zero(
+        lantern_gossip_encode_signed_block_snappy(&block, compressed, max_compressed, &compressed_len),
+        "encode signed block gossip");
+    CHECK(compressed_len > 0);
+
+    LanternSignedBlock decoded;
+    memset(&decoded, 0, sizeof(decoded));
+    lantern_block_body_init(&decoded.message.body);
+    check_zero(
+        lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len),
+        "decode signed block gossip");
+    CHECK(decoded.message.slot == block.message.slot);
+    CHECK(decoded.message.body.attestations.length == block.message.body.attestations.length);
+
+    uint8_t invalid_payload[] = {0xFF};
+    CHECK(lantern_gossip_decode_signed_block_snappy(&decoded, invalid_payload, sizeof(invalid_payload)) != 0);
+
+    lantern_block_body_reset(&decoded.message.body);
+    lantern_block_body_reset(&block.message.body);
+    free(compressed);
+}
+
 int main(void) {
     test_status_snappy();
     test_blocks_by_root_request();
     test_blocks_by_root_response();
     test_gossip_helpers();
+    test_gossip_signed_vote_payload();
+    test_gossip_signed_block_payload();
     puts("lantern_networking_messages_test OK");
     return 0;
 }

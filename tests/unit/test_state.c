@@ -49,6 +49,58 @@ static bool checkpoints_equal(const LanternCheckpoint *a, const LanternCheckpoin
     return memcmp(a->root.bytes, b->root.bytes, LANTERN_ROOT_SIZE) == 0;
 }
 
+static void setup_state_and_fork_choice(
+    LanternState *state,
+    LanternForkChoice *fork_choice,
+    uint64_t genesis_time,
+    uint64_t validator_count,
+    LanternRoot *out_anchor_root) {
+    lantern_state_init(state);
+    expect_zero(lantern_state_generate_genesis(state, genesis_time, validator_count), "generate genesis for setup");
+
+    lantern_fork_choice_init(fork_choice);
+    expect_zero(lantern_fork_choice_configure(fork_choice, &state->config), "configure fork choice for setup");
+
+    LanternBlock anchor;
+    memset(&anchor, 0, sizeof(anchor));
+    anchor.slot = state->latest_block_header.slot;
+    anchor.proposer_index = state->latest_block_header.proposer_index;
+    anchor.parent_root = state->latest_block_header.parent_root;
+    anchor.state_root = state->latest_block_header.state_root;
+    lantern_block_body_init(&anchor.body);
+
+    expect_zero(lantern_hash_tree_root_block(&anchor, out_anchor_root), "hash anchor block");
+
+    expect_zero(
+        lantern_fork_choice_set_anchor(
+            fork_choice,
+            &anchor,
+            &state->latest_justified,
+            &state->latest_finalized,
+            out_anchor_root),
+        "set fork choice anchor");
+
+    lantern_state_attach_fork_choice(state, fork_choice);
+    lantern_block_body_reset(&anchor.body);
+}
+
+static void make_block(
+    const LanternState *state,
+    uint64_t slot,
+    const LanternRoot *parent_root,
+    LanternBlock *out_block,
+    LanternRoot *out_root) {
+    memset(out_block, 0, sizeof(*out_block));
+    out_block->slot = slot;
+    expect_zero(
+        lantern_proposer_for_slot(slot, state->config.num_validators, &out_block->proposer_index),
+        "compute proposer for block");
+    out_block->parent_root = *parent_root;
+    memset(out_block->state_root.bytes, 0, sizeof(out_block->state_root.bytes));
+    lantern_block_body_init(&out_block->body);
+    expect_zero(lantern_hash_tree_root_block(out_block, out_root), "hash block");
+}
+
 static int test_genesis_state(void) {
     LanternState state;
     lantern_state_init(&state);
@@ -382,6 +434,191 @@ static int test_select_block_parent_uses_fork_choice(void) {
     return 0;
 }
 
+static int test_compute_vote_checkpoints_basic(void) {
+    LanternState state;
+    LanternForkChoice fork_choice;
+    LanternRoot genesis_root;
+    setup_state_and_fork_choice(&state, &fork_choice, 1500, 4, &genesis_root);
+
+    LanternBlock block1;
+    LanternRoot block1_root;
+    make_block(&state, 1, &genesis_root, &block1, &block1_root);
+    expect_zero(lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, &block1_root), "add block1");
+    fork_choice.head = block1_root;
+    fork_choice.has_head = true;
+    fork_choice.safe_target = block1_root;
+    fork_choice.has_safe_target = true;
+
+    LanternCheckpoint head;
+    LanternCheckpoint target;
+    LanternCheckpoint source;
+    int rc = lantern_state_compute_vote_checkpoints(&state, &head, &target, &source);
+    if (rc != 0) {
+        fprintf(stderr, "compute vote checkpoints basic failed (rc=%d)\n", rc);
+        lantern_block_body_reset(&block1.body);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (head.slot != block1.slot || memcmp(head.root.bytes, block1_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "unexpected head checkpoint in basic test\n");
+        lantern_block_body_reset(&block1.body);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (!checkpoints_equal(&target, &head)) {
+        fprintf(stderr, "target mismatch in basic checkpoint computation\n");
+        lantern_block_body_reset(&block1.body);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (!checkpoints_equal(&source, &state.latest_justified)) {
+        fprintf(stderr, "source checkpoint mismatch in basic test\n");
+        lantern_block_body_reset(&block1.body);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+
+    lantern_block_body_reset(&block1.body);
+    lantern_state_reset(&state);
+    lantern_fork_choice_reset(&fork_choice);
+    return 0;
+}
+
+static int test_compute_vote_checkpoints_respects_safe_target(void) {
+    LanternState state;
+    LanternForkChoice fork_choice;
+    LanternRoot genesis_root;
+    setup_state_and_fork_choice(&state, &fork_choice, 1600, 6, &genesis_root);
+
+    LanternBlock block1;
+    LanternRoot block1_root;
+    make_block(&state, 1, &genesis_root, &block1, &block1_root);
+    expect_zero(lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, &block1_root), "add block1 safe target test");
+
+    LanternBlock block2;
+    LanternRoot block2_root;
+    make_block(&state, 2, &block1_root, &block2, &block2_root);
+    expect_zero(lantern_fork_choice_add_block(&fork_choice, &block2, NULL, NULL, &block2_root), "add block2 safe target test");
+
+    fork_choice.head = block2_root;
+    fork_choice.has_head = true;
+    fork_choice.safe_target = block1_root;
+    fork_choice.has_safe_target = true;
+
+    state.latest_finalized.slot = 0;
+    state.latest_finalized.root = genesis_root;
+    state.latest_justified = state.latest_finalized;
+
+    LanternCheckpoint head;
+    LanternCheckpoint target;
+    LanternCheckpoint source;
+    int rc = lantern_state_compute_vote_checkpoints(&state, &head, &target, &source);
+    if (rc != 0) {
+        fprintf(stderr, "compute vote checkpoints safe target failed (rc=%d)\n", rc);
+        lantern_block_body_reset(&block2.body);
+        lantern_block_body_reset(&block1.body);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (head.slot != block2.slot || memcmp(head.root.bytes, block2_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "unexpected head checkpoint in safe target test\n");
+        lantern_block_body_reset(&block2.body);
+        lantern_block_body_reset(&block1.body);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (target.slot != block1.slot || memcmp(target.root.bytes, block1_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "target checkpoint not aligned with safe target\n");
+        lantern_block_body_reset(&block2.body);
+        lantern_block_body_reset(&block1.body);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (!checkpoints_equal(&source, &state.latest_justified)) {
+        fprintf(stderr, "source checkpoint mismatch in safe target test\n");
+        lantern_block_body_reset(&block2.body);
+        lantern_block_body_reset(&block1.body);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+
+    lantern_block_body_reset(&block2.body);
+    lantern_block_body_reset(&block1.body);
+    lantern_state_reset(&state);
+    lantern_fork_choice_reset(&fork_choice);
+    return 0;
+}
+
+static int test_compute_vote_checkpoints_justifiable(void) {
+    LanternState state;
+    LanternForkChoice fork_choice;
+    LanternRoot genesis_root;
+    setup_state_and_fork_choice(&state, &fork_choice, 1700, 8, &genesis_root);
+
+    LanternRoot parent_root = genesis_root;
+    LanternRoot block_roots[8];
+    block_roots[0] = genesis_root;
+    for (uint64_t slot = 1; slot <= 7; ++slot) {
+        LanternBlock block;
+        LanternRoot block_root;
+        make_block(&state, slot, &parent_root, &block, &block_root);
+        expect_zero(lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, &block_root), "add block for justifiable test");
+        block_roots[slot] = block_root;
+        parent_root = block_root;
+        lantern_block_body_reset(&block.body);
+    }
+
+    fork_choice.head = block_roots[7];
+    fork_choice.has_head = true;
+    fork_choice.safe_target = block_roots[7];
+    fork_choice.has_safe_target = true;
+
+    state.latest_finalized.slot = 0;
+    state.latest_finalized.root = genesis_root;
+    state.latest_justified = state.latest_finalized;
+
+    LanternCheckpoint head;
+    LanternCheckpoint target;
+    LanternCheckpoint source;
+    int rc = lantern_state_compute_vote_checkpoints(&state, &head, &target, &source);
+    if (rc != 0) {
+        fprintf(stderr, "compute vote checkpoints justifiable failed (rc=%d)\n", rc);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (head.slot != 7 || memcmp(head.root.bytes, block_roots[7].bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "unexpected head checkpoint in justifiable test\n");
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (target.slot != 6 || memcmp(target.root.bytes, block_roots[6].bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "target checkpoint not adjusted for justifiability\n");
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (!checkpoints_equal(&source, &state.latest_justified)) {
+        fprintf(stderr, "source checkpoint mismatch in justifiable test\n");
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+
+    lantern_state_reset(&state);
+    lantern_fork_choice_reset(&fork_choice);
+    return 0;
+}
+
 int main(void) {
     if (test_genesis_state() != 0) {
         return 1;
@@ -402,6 +639,15 @@ int main(void) {
         return 1;
     }
     if (test_select_block_parent_uses_fork_choice() != 0) {
+        return 1;
+    }
+    if (test_compute_vote_checkpoints_basic() != 0) {
+        return 1;
+    }
+    if (test_compute_vote_checkpoints_respects_safe_target() != 0) {
+        return 1;
+    }
+    if (test_compute_vote_checkpoints_justifiable() != 0) {
         return 1;
     }
     puts("lantern_state_test OK");

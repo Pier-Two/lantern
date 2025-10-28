@@ -101,6 +101,12 @@ int lantern_fork_choice_advance_time(
     bool has_proposal);
 
 int lantern_fork_choice_current_head(const LanternForkChoice *store, LanternRoot *out_head);
+int lantern_fork_choice_block_info(
+    const LanternForkChoice *store,
+    const LanternRoot *root,
+    uint64_t *out_slot,
+    LanternRoot *out_parent_root,
+    bool *out_has_parent);
 const LanternCheckpoint *lantern_fork_choice_latest_justified(const LanternForkChoice *store);
 const LanternCheckpoint *lantern_fork_choice_latest_finalized(const LanternForkChoice *store);
 const LanternRoot *lantern_fork_choice_safe_target(const LanternForkChoice *store);
