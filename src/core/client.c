@@ -708,13 +708,13 @@ static int append_genesis_bootnodes(struct lantern_client *client) {
         }
         if (client->network.host) {
             if (lantern_libp2p_host_add_enr_peer(&client->network, record, LANTERN_LIBP2P_DEFAULT_PEER_TTL_MS) != 0) {
-                lantern_log_error(
+                lantern_log_warn(
                     "network",
                     &(const struct lantern_log_metadata){
                         .validator = client->node_id,
                         .peer = record->encoded},
                     "failed to add ENR peer from genesis");
-                return -1;
+                continue;
             }
             lantern_log_info(
                 "network",

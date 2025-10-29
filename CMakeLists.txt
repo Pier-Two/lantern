@@ -68,12 +68,22 @@ target_include_directories(lantern
         ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/libtomcrypt/src/headers
         ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/wjcryptlib/lib
 )
+target_compile_definitions(lantern
+    PRIVATE
+        _DEFAULT_SOURCE
+        _POSIX_C_SOURCE=200809L
+)
 
 lantern_configure_dependencies(lantern)
 target_link_libraries(lantern PRIVATE secp256k1 libtomcrypt Threads::Threads)
 
 add_executable(lantern_cli src/core/main.c)
 target_link_libraries(lantern_cli PRIVATE lantern Threads::Threads)
+target_compile_definitions(lantern_cli
+    PRIVATE
+        _DEFAULT_SOURCE
+        _POSIX_C_SOURCE=200809L
+)
 
 option(LANTERN_BUILD_TESTS "Build lantern unit tests" ON)
 if(LANTERN_BUILD_TESTS)
@@ -117,7 +127,16 @@ if(LANTERN_BUILD_TESTS)
 
     add_executable(lantern_networking_messages_test tests/unit/test_networking_messages.c)
     target_link_libraries(lantern_networking_messages_test PRIVATE lantern)
+    target_compile_definitions(
+        lantern_networking_messages_test
+        PRIVATE
+            LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
+    )
     add_test(NAME lantern_networking_messages COMMAND lantern_networking_messages_test)
+
+    add_executable(lantern_libp2p_test tests/unit/test_libp2p.c)
+    target_link_libraries(lantern_libp2p_test PRIVATE lantern)
+    add_test(NAME lantern_libp2p COMMAND lantern_libp2p_test)
 
     add_executable(lantern_fork_choice_test tests/unit/test_fork_choice.c)
     target_link_libraries(lantern_fork_choice_test PRIVATE lantern)
@@ -142,6 +161,7 @@ if(LANTERN_BUILD_TESTS)
         lantern_slot_clock
         lantern_snappy
         lantern_networking_messages
+        lantern_libp2p
         lantern_fork_choice
         lantern_storage
         lantern_validator_duties_integration

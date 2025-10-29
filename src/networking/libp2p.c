@@ -266,11 +266,14 @@ static int extract_ipv4_multiaddr(
     size_t buffer_len,
     uint16_t *port) {
     const struct lantern_enr_key_value *ip = lantern_enr_record_find(record, "ip");
-    const struct lantern_enr_key_value *udp = lantern_enr_record_find(record, "udp");
-    if (!ip || !udp || ip->value_len != 4 || udp->value_len != 2) {
+    const struct lantern_enr_key_value *port_field = lantern_enr_record_find(record, "quic");
+    if (!port_field) {
+        port_field = lantern_enr_record_find(record, "udp");
+    }
+    if (!ip || !port_field || ip->value_len != 4 || port_field->value_len != 2 || !port_field->value) {
         return -1;
     }
-    uint16_t parsed_port = (uint16_t)((udp->value[0] << 8) | udp->value[1]);
+    uint16_t parsed_port = (uint16_t)(((uint16_t)port_field->value[0] << 8) | (uint16_t)port_field->value[1]);
     char ip_text[INET_ADDRSTRLEN];
     if (!inet_ntop(AF_INET, ip->value, ip_text, sizeof(ip_text))) {
         return -1;
@@ -291,11 +294,20 @@ static int extract_ipv6_multiaddr(
     size_t buffer_len,
     uint16_t *port) {
     const struct lantern_enr_key_value *ip = lantern_enr_record_find(record, "ip6");
-    const struct lantern_enr_key_value *udp = lantern_enr_record_find(record, "udp6");
-    if (!ip || !udp || ip->value_len != 16 || udp->value_len != 2) {
+    const struct lantern_enr_key_value *port_field = lantern_enr_record_find(record, "quic6");
+    if (!port_field) {
+        port_field = lantern_enr_record_find(record, "udp6");
+    }
+    if (!port_field) {
+        port_field = lantern_enr_record_find(record, "quic");
+    }
+    if (!port_field) {
+        port_field = lantern_enr_record_find(record, "udp");
+    }
+    if (!ip || !port_field || ip->value_len != 16 || port_field->value_len != 2 || !port_field->value) {
         return -1;
     }
-    uint16_t parsed_port = (uint16_t)((udp->value[0] << 8) | udp->value[1]);
+    uint16_t parsed_port = (uint16_t)(((uint16_t)port_field->value[0] << 8) | (uint16_t)port_field->value[1]);
     char ip_text[INET6_ADDRSTRLEN];
     if (!inet_ntop(AF_INET6, ip->value, ip_text, sizeof(ip_text))) {
         return -1;

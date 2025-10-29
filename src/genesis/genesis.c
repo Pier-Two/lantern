@@ -17,6 +17,7 @@ static void free_validator_config_entry(struct lantern_validator_config_entry *e
 
 static int parse_chain_config(const char *path, struct lantern_chain_config *config);
 static int parse_validator_registry(const char *path, struct lantern_validator_registry *registry);
+static int parse_validator_registry_mapping(const char *path, struct lantern_validator_registry *registry);
 static int parse_validator_config(const char *path, struct lantern_validator_config *config);
 static int parse_nodes_file(const char *path, struct lantern_enr_record_list *list);
 static int read_state_blob(const char *path, uint8_t **bytes, size_t *size);
@@ -229,7 +230,7 @@ static int parse_validator_registry(const char *path, struct lantern_validator_r
     LanternYamlObject *objects = lantern_yaml_read_array(path, "validators", &count);
     if (!objects || count == 0) {
         lantern_yaml_free_objects(objects, count);
-        return -1;
+        return parse_validator_registry_mapping(path, registry);
     }
 
     struct lantern_validator_record *records = calloc(count, sizeof(*records));
@@ -249,6 +250,88 @@ static int parse_validator_registry(const char *path, struct lantern_validator_r
     lantern_yaml_free_objects(objects, count);
     registry->records = records;
     registry->count = count;
+    return 0;
+}
+
+static int parse_validator_registry_mapping(const char *path, struct lantern_validator_registry *registry) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        return -1;
+    }
+
+    size_t *indices = NULL;
+    size_t count = 0;
+    size_t capacity = 0;
+    size_t max_index = 0;
+
+    char line[1024];
+    while (fgets(line, sizeof(line), fp)) {
+        char *trimmed = trim_whitespace(line);
+        if (!trimmed || *trimmed != '-') {
+            continue;
+        }
+        ++trimmed;
+        while (*trimmed && isspace((unsigned char)*trimmed)) {
+            ++trimmed;
+        }
+        if (*trimmed == '\0') {
+            continue;
+        }
+        char *endptr = NULL;
+        unsigned long long value = strtoull(trimmed, &endptr, 10);
+        if (endptr == trimmed) {
+            continue;
+        }
+        if (value > SIZE_MAX) {
+            fclose(fp);
+            free(indices);
+            return -1;
+        }
+        if (count == capacity) {
+            size_t new_capacity = capacity == 0 ? 8 : capacity * 2;
+            size_t *new_indices = realloc(indices, new_capacity * sizeof(*new_indices));
+            if (!new_indices) {
+                fclose(fp);
+                free(indices);
+                return -1;
+            }
+            indices = new_indices;
+            capacity = new_capacity;
+        }
+        indices[count++] = (size_t)value;
+        if ((size_t)value > max_index) {
+            max_index = (size_t)value;
+        }
+    }
+    fclose(fp);
+
+    if (count == 0) {
+        free(indices);
+        return -1;
+    }
+
+    size_t record_count = max_index + 1;
+    struct lantern_validator_record *records = calloc(record_count, sizeof(*records));
+    if (!records) {
+        free(indices);
+        return -1;
+    }
+
+    const char *zero_hex = "0x00";
+    for (size_t i = 0; i < record_count; ++i) {
+        records[i].index = i;
+        records[i].pubkey_hex = strdup(zero_hex);
+        records[i].withdrawal_credentials_hex = strdup(zero_hex);
+        if (!records[i].pubkey_hex || !records[i].withdrawal_credentials_hex) {
+            free_validator_registry(&(struct lantern_validator_registry){.records = records, .count = record_count});
+            free(indices);
+            return -1;
+        }
+    }
+
+    registry->records = records;
+    registry->count = record_count;
+    free(indices);
     return 0;
 }
 

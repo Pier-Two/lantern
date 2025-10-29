@@ -27,6 +27,11 @@ function(_lantern_define_static target_name source_dir)
                 ${source_dir}/include
                 ${source_dir}/lib
         )
+        # Ensure POSIX-sized types (e.g., ssize_t) are available without editing the submodule.
+        target_compile_options(${target_name}
+            PRIVATE
+                -include sys/types.h
+        )
     endif()
 endfunction()
 
@@ -42,6 +47,7 @@ function(_lantern_define_snappy target_name source_dir)
         target_compile_definitions(${target_name}
             PUBLIC
                 NDEBUG=1
+                _DEFAULT_SOURCE
             PRIVATE
                 typeof=__typeof__
         )
@@ -134,6 +140,10 @@ ${_lantern_ignore_block})
                 target_include_directories(protocol_quic PRIVATE ${libp2p_source_dir}/include/libp2p)
                 target_include_directories(
                     protocol_quic PRIVATE ${libp2p_source_dir}/external/libtomcrypt/src/headers)
+                if(EXISTS ${CMAKE_BINARY_DIR}/_deps/picotls-src/include)
+                    target_include_directories(
+                        protocol_quic PRIVATE ${CMAKE_BINARY_DIR}/_deps/picotls-src/include)
+                endif()
             endif()
             if(TARGET protocol_noise)
                 target_include_directories(protocol_noise PRIVATE ${libp2p_binary_dir}/_deps/picotls-src/include)
@@ -141,6 +151,10 @@ ${_lantern_ignore_block})
                 target_include_directories(protocol_noise PRIVATE ${libp2p_source_dir}/include/libp2p)
                 target_include_directories(
                     protocol_noise PRIVATE ${libp2p_source_dir}/external/libtomcrypt/src/headers)
+                if(EXISTS ${CMAKE_BINARY_DIR}/_deps/picotls-src/include)
+                    target_include_directories(
+                        protocol_noise PRIVATE ${CMAKE_BINARY_DIR}/_deps/picotls-src/include)
+                endif()
             endif()
         endif()
     else()

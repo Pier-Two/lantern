@@ -4,6 +4,8 @@
 #include <string.h>
 
 #include "lantern/consensus/containers.h"
+#include "lantern/consensus/hash.h"
+#include "lantern/consensus/signature.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/core/client.h"
 #include "lantern/networking/gossip.h"
@@ -12,6 +14,10 @@
 #include "lantern/networking/gossip_payloads.h"
 #include "lantern/encoding/snappy.h"
 #include "ssz_constants.h"
+
+#ifndef LANTERN_TEST_FIXTURE_DIR
+#error "LANTERN_TEST_FIXTURE_DIR must be defined"
+#endif
 
 #define CHECK(cond)                                                                 \
     do {                                                                            \
@@ -160,6 +166,192 @@ static int block_publish_hook(
     lantern_block_body_reset(&decoded.message.body);
     ctx->called += 1;
     return 0;
+}
+
+static int parse_hex_bytes(const char *hex, uint8_t *out, size_t expected_len) {
+    if (!hex || !out) {
+        return -1;
+    }
+    if (hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X')) {
+        hex += 2;
+    }
+    size_t hex_len = strlen(hex);
+    if (hex_len != expected_len * 2u) {
+        return -1;
+    }
+    for (size_t i = 0; i < expected_len; ++i) {
+        char buf[3];
+        buf[0] = hex[(i * 2u)];
+        buf[1] = hex[(i * 2u) + 1u];
+        buf[2] = '\0';
+        char *end = NULL;
+        unsigned long value = strtoul(buf, &end, 16);
+        if (!end || *end != '\0') {
+            return -1;
+        }
+        out[i] = (uint8_t)value;
+    }
+    return 0;
+}
+
+static int load_fixture_file(const char *relative, uint8_t **out_buf, size_t *out_len) {
+    if (!relative || !out_buf || !out_len) {
+        return -1;
+    }
+    char path[512];
+    int written = snprintf(path, sizeof(path), "%s/%s", LANTERN_TEST_FIXTURE_DIR, relative);
+    if (written <= 0 || (size_t)written >= sizeof(path)) {
+        return -1;
+    }
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        perror("fopen");
+        return -1;
+    }
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return -1;
+    }
+    long size = ftell(file);
+    if (size < 0) {
+        fclose(file);
+        return -1;
+    }
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return -1;
+    }
+    uint8_t *buffer = (uint8_t *)malloc((size_t)size);
+    if (!buffer) {
+        fclose(file);
+        return -1;
+    }
+    size_t read_len = fread(buffer, 1u, (size_t)size, file);
+    fclose(file);
+    if (read_len != (size_t)size) {
+        free(buffer);
+        return -1;
+    }
+    *out_buf = buffer;
+    *out_len = read_len;
+    return 0;
+}
+
+static void test_replay_devnet_block_payloads(void) {
+    struct devnet_block_case {
+        const char *fixture;
+        uint64_t expected_slot;
+        uint64_t expected_proposer;
+        const char *expected_parent_root;
+        const char *expected_state_root;
+        const char *expected_block_root;
+        size_t expected_attestations;
+        uint64_t first_vote_slot;
+        uint64_t first_vote_head_slot;
+    } cases[] = {
+        {
+            .fixture = "devnet0/block_slot6.ssz_snappy",
+            .expected_slot = 6,
+            .expected_proposer = 0,
+            .expected_parent_root = "0xb4e0f2473e0819b1dbdec17adc011c61ebec46121f8c2642dabc43745df2f1a6",
+            .expected_state_root = "0x9d3ba02c972d48b943861189154fef8378426b40052a0c9a9a7e707900c6cb89",
+            .expected_block_root = "0x51b0d0b0737bdd173b4c5ba46493b0c04a732eaaef38d27512dac7124e6e2ff7",
+            .expected_attestations = 2,
+            .first_vote_slot = 5,
+            .first_vote_head_slot = 1,
+        },
+        {
+            .fixture = "devnet0/block_slot7.ssz_snappy",
+            .expected_slot = 7,
+            .expected_proposer = 1,
+            .expected_parent_root = "0xaff22c5edbda1ace79d20617204a02261de3dc1b97277d79992eba175f334f92",
+            .expected_state_root = "0x32aa99576ae2294491d86eeca8310f94eee6d28f8cb3d8fc9ecc086a8ea49b2e",
+            .expected_block_root = "0x2a7c152001a6b8712d66850d20e11faee62fcc373d51a8e305d0a3cd9ea22c05",
+            .expected_attestations = 2,
+            .first_vote_slot = 6,
+            .first_vote_head_slot = 6,
+        },
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        uint8_t *compressed = NULL;
+        size_t compressed_len = 0;
+        CHECK(load_fixture_file(cases[i].fixture, &compressed, &compressed_len) == 0);
+        CHECK(compressed_len > 0);
+
+        size_t raw_len = 0;
+        CHECK(lantern_snappy_uncompressed_length(compressed, compressed_len, &raw_len) == LANTERN_SNAPPY_OK);
+        CHECK(raw_len > 0);
+
+        LanternSignedBlock decoded;
+        memset(&decoded, 0, sizeof(decoded));
+        lantern_block_body_init(&decoded.message.body);
+        CHECK(lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len) == 0);
+
+        uint8_t expected_parent[LANTERN_ROOT_SIZE];
+        uint8_t expected_state[LANTERN_ROOT_SIZE];
+        uint8_t expected_block[LANTERN_ROOT_SIZE];
+        CHECK(parse_hex_bytes(cases[i].expected_parent_root, expected_parent, sizeof(expected_parent)) == 0);
+        CHECK(parse_hex_bytes(cases[i].expected_state_root, expected_state, sizeof(expected_state)) == 0);
+        CHECK(parse_hex_bytes(cases[i].expected_block_root, expected_block, sizeof(expected_block)) == 0);
+
+        CHECK(decoded.message.slot == cases[i].expected_slot);
+        CHECK(decoded.message.proposer_index == cases[i].expected_proposer);
+        CHECK(memcmp(decoded.message.parent_root.bytes, expected_parent, LANTERN_ROOT_SIZE) == 0);
+        CHECK(memcmp(decoded.message.state_root.bytes, expected_state, LANTERN_ROOT_SIZE) == 0);
+        CHECK(lantern_signature_is_zero(&decoded.signature));
+        CHECK(decoded.message.body.attestations.length == cases[i].expected_attestations);
+
+        if (decoded.message.body.attestations.length > 0 && decoded.message.body.attestations.data) {
+            const LanternSignedVote *vote = &decoded.message.body.attestations.data[0];
+            CHECK(vote->data.slot == cases[i].first_vote_slot);
+            CHECK(vote->data.head.slot == cases[i].first_vote_head_slot);
+            static const uint8_t zero_sig[LANTERN_SIGNATURE_SIZE] = {0};
+            CHECK(memcmp(vote->signature.bytes, zero_sig, LANTERN_SIGNATURE_SIZE) == 0);
+        }
+        for (size_t att_idx = 0; att_idx < decoded.message.body.attestations.length; ++att_idx) {
+            CHECK(lantern_signature_is_zero(&decoded.message.body.attestations.data[att_idx].signature));
+        }
+
+        LanternRoot computed_root;
+        memset(&computed_root, 0, sizeof(computed_root));
+        CHECK(lantern_hash_tree_root_block(&decoded.message, &computed_root) == 0);
+        CHECK(memcmp(computed_root.bytes, expected_block, LANTERN_ROOT_SIZE) == 0);
+
+        uint8_t *raw_fixture = (uint8_t *)malloc(raw_len);
+        CHECK(raw_fixture != NULL);
+        size_t raw_fixture_written = raw_len;
+        CHECK(lantern_snappy_decompress(compressed, compressed_len, raw_fixture, raw_len, &raw_fixture_written) == LANTERN_SNAPPY_OK);
+
+        uint8_t raw_encoded[512];
+        size_t raw_encoded_written = sizeof(raw_encoded);
+        CHECK(lantern_ssz_encode_signed_block(&decoded, raw_encoded, sizeof(raw_encoded), &raw_encoded_written) == 0);
+        CHECK(raw_encoded_written == raw_fixture_written);
+        CHECK(memcmp(raw_encoded, raw_fixture, raw_fixture_written) == 0);
+
+        size_t max_compressed = 0;
+        CHECK(lantern_snappy_max_compressed_size(raw_encoded_written, &max_compressed) == LANTERN_SNAPPY_OK);
+        uint8_t *recompressed = (uint8_t *)malloc(max_compressed);
+        CHECK(recompressed != NULL);
+        size_t recompressed_len = max_compressed;
+        CHECK(lantern_gossip_encode_signed_block_snappy(&decoded, recompressed, max_compressed, &recompressed_len) == 0);
+
+        size_t recon_len = 0;
+        CHECK(lantern_snappy_uncompressed_length(recompressed, recompressed_len, &recon_len) == LANTERN_SNAPPY_OK);
+        CHECK(recon_len == raw_encoded_written);
+        uint8_t *recon_raw = (uint8_t *)malloc(recon_len);
+        CHECK(recon_raw != NULL);
+        size_t recon_written = recon_len;
+        CHECK(lantern_snappy_decompress(recompressed, recompressed_len, recon_raw, recon_len, &recon_written) == LANTERN_SNAPPY_OK);
+        CHECK(recon_written == raw_encoded_written);
+        CHECK(memcmp(recon_raw, raw_encoded, raw_encoded_written) == 0);
+
+        lantern_block_body_reset(&decoded.message.body);
+        free(recon_raw);
+        free(recompressed);
+        free(raw_fixture);
+        free(compressed);
+    }
 }
 
 static void test_status_snappy(void) {
@@ -510,6 +702,7 @@ int main(void) {
     test_gossip_signed_vote_payload();
     test_gossip_signed_block_payload();
     test_gossip_block_snappy_roundtrip_random();
+    test_replay_devnet_block_payloads();
     test_gossipsub_service_loopback();
     test_client_publish_block_loopback();
     test_gossip_helpers();
