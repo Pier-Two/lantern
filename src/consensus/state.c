@@ -427,7 +427,7 @@ static int lantern_checkpoint_tally_prepare(struct lantern_checkpoint_tally *tal
     return 0;
 }
 
-static int lantern_state_allocate_validator_votes(LanternState *state, uint64_t validator_count) {
+int lantern_state_prepare_validator_votes(LanternState *state, uint64_t validator_count) {
     if (!state || validator_count == 0) {
         return -1;
     }
@@ -435,13 +435,65 @@ static int lantern_state_allocate_validator_votes(LanternState *state, uint64_t 
         return -1;
     }
     size_t count = (size_t)validator_count;
-    struct lantern_vote_record *records = calloc(count, sizeof(*records));
-    if (!records) {
+    if (state->validator_votes && state->validator_votes_len != count) {
+        free(state->validator_votes);
+        state->validator_votes = NULL;
+        state->validator_votes_len = 0;
+    }
+    if (!state->validator_votes) {
+        struct lantern_vote_record *records = calloc(count, sizeof(*records));
+        if (!records) {
+            return -1;
+        }
+        state->validator_votes = records;
+        state->validator_votes_len = count;
+    } else {
+        for (size_t i = 0; i < count; ++i) {
+            lantern_vote_record_reset(&state->validator_votes[i]);
+        }
+    }
+    return 0;
+}
+
+size_t lantern_state_validator_capacity(const LanternState *state) {
+    if (!state || !state->validator_votes) {
+        return 0;
+    }
+    return state->validator_votes_len;
+}
+
+bool lantern_state_validator_has_vote(const LanternState *state, size_t index) {
+    if (!state || !state->validator_votes || index >= state->validator_votes_len) {
+        return false;
+    }
+    return state->validator_votes[index].has_vote;
+}
+
+int lantern_state_get_validator_vote(const LanternState *state, size_t index, LanternVote *out_vote) {
+    if (!state || !state->validator_votes || index >= state->validator_votes_len || !out_vote) {
         return -1;
     }
-    state->validator_votes = records;
-    state->validator_votes_len = count;
+    if (!state->validator_votes[index].has_vote) {
+        return -1;
+    }
+    *out_vote = state->validator_votes[index].vote;
     return 0;
+}
+
+int lantern_state_set_validator_vote(LanternState *state, size_t index, const LanternVote *vote) {
+    if (!state || !state->validator_votes || index >= state->validator_votes_len || !vote) {
+        return -1;
+    }
+    state->validator_votes[index].vote = *vote;
+    state->validator_votes[index].has_vote = true;
+    return 0;
+}
+
+void lantern_state_clear_validator_vote(LanternState *state, size_t index) {
+    if (!state || !state->validator_votes || index >= state->validator_votes_len) {
+        return;
+    }
+    lantern_vote_record_reset(&state->validator_votes[index]);
 }
 
 static void lantern_root_zero(LanternRoot *root) {
@@ -504,7 +556,7 @@ int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, u
         return -1;
     }
     lantern_state_reset(state);
-    if (lantern_state_allocate_validator_votes(state, num_validators) != 0) {
+    if (lantern_state_prepare_validator_votes(state, num_validators) != 0) {
         lantern_state_reset(state);
         return -1;
     }

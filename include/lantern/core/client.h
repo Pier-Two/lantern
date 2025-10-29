@@ -4,10 +4,12 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/duties.h"
 #include "lantern/consensus/runtime.h"
+#include "lantern/consensus/fork_choice.h"
 #include "lantern/genesis/genesis.h"
 #include "lantern/http/metrics.h"
 #include "lantern/http/server.h"
@@ -52,6 +54,9 @@ struct lantern_client_options {
 struct lantern_local_validator {
     uint64_t global_index;
     const struct lantern_validator_record *registry;
+    uint8_t *secret;
+    size_t secret_len;
+    bool has_secret;
 };
 
 struct lantern_client {
@@ -79,6 +84,8 @@ struct lantern_client {
     bool has_validator_assignment;
     struct lantern_consensus_runtime runtime;
     bool has_runtime;
+    LanternForkChoice fork_choice;
+    bool has_fork_choice;
     LanternState state;
     bool has_state;
     bool *validator_enabled;

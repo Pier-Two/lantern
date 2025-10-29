@@ -133,6 +133,10 @@ static int verify_client_state(
             fprintf(stderr, "Validator registry pointer mismatch at %zu\n", i);
             return 1;
         }
+        if (!validator->has_secret || !validator->secret || validator->secret_len == 0) {
+            fprintf(stderr, "Validator secret missing for index %zu\n", i);
+            return 1;
+        }
     }
 
     size_t expected_bootnodes = options->bootnodes.len;
@@ -161,6 +165,11 @@ static int verify_client_state(
             "Bootnode count mismatch: expected %zu got %zu\n",
             expected_bootnodes,
             client->bootnodes.len);
+        return 1;
+    }
+    if (client->assigned_validators && client->assigned_validators->privkey_hex
+        && client->assigned_validators->privkey_hex[0] != '\0') {
+        fprintf(stderr, "Assigned validator privkey was not cleared\n");
         return 1;
     }
     return 0;

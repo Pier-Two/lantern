@@ -1,6 +1,7 @@
 #include "lantern/genesis/genesis.h"
 
 #include "lantern/support/strings.h"
+#include "lantern/support/secure_mem.h"
 #include "internal/yaml_parser.h"
 
 #include <ctype.h>
@@ -149,7 +150,13 @@ static void free_validator_config_entry(struct lantern_validator_config_entry *e
     }
     free(entry->name);
     entry->name = NULL;
-    free(entry->privkey_hex);
+    if (entry->privkey_hex) {
+        size_t len = strlen(entry->privkey_hex);
+        if (len > 0) {
+            lantern_secure_zero(entry->privkey_hex, len);
+        }
+        free(entry->privkey_hex);
+    }
     entry->privkey_hex = NULL;
     free(entry->enr.ip);
     entry->enr.ip = NULL;

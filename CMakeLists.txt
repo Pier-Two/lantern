@@ -49,9 +49,11 @@ add_library(lantern STATIC
     src/http/common.c
     src/http/metrics.c
     src/http/server.c
+    src/storage/storage.c
     src/support/log.c
     src/support/string_list.c
     src/support/strings.c
+    src/support/secure_mem.c
     src/internal/yaml_parser.c
     external/c-libp2p/src/multiformats/multibase/encoding/base64_url.c
     external/c-libp2p/external/wjcryptlib/lib/WjCryptLib_Sha256.c
@@ -121,6 +123,14 @@ if(LANTERN_BUILD_TESTS)
     target_link_libraries(lantern_fork_choice_test PRIVATE lantern)
     add_test(NAME lantern_fork_choice COMMAND lantern_fork_choice_test)
 
+    add_executable(lantern_storage_test tests/unit/test_storage.c)
+    target_link_libraries(lantern_storage_test PRIVATE lantern)
+    add_test(NAME lantern_storage COMMAND lantern_storage_test)
+
+    add_executable(lantern_validator_duties_integration_test tests/integration/test_validator_duties.c)
+    target_link_libraries(lantern_validator_duties_integration_test PRIVATE lantern)
+    add_test(NAME lantern_validator_duties_integration COMMAND lantern_validator_duties_integration_test)
+
     set(_lantern_ctest_targets
         lantern_client
         lantern_rlp
@@ -133,6 +143,8 @@ if(LANTERN_BUILD_TESTS)
         lantern_snappy
         lantern_networking_messages
         lantern_fork_choice
+        lantern_storage
+        lantern_validator_duties_integration
     )
     set_property(TEST ${_lantern_ctest_targets} PROPERTY TIMEOUT 30)
 

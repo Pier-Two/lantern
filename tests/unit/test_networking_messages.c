@@ -32,6 +32,55 @@ static void fill_bytes(uint8_t *dst, size_t len, uint8_t seed) {
     }
 }
 
+static uint32_t rng_state = UINT32_C(0x6ac1e39d);
+
+static uint32_t rng_next(void) {
+    uint32_t x = rng_state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    rng_state = x;
+    return x;
+}
+
+static uint64_t rng_next_u64(void) {
+    uint64_t hi = (uint64_t)rng_next();
+    uint64_t lo = (uint64_t)rng_next();
+    return (hi << 32) | lo;
+}
+
+static uint64_t rng_uniform(uint64_t max_inclusive) {
+    if (max_inclusive == 0) {
+        return 0;
+    }
+    return rng_next_u64() % (max_inclusive + 1);
+}
+
+static void rng_fill_bytes(uint8_t *dst, size_t len) {
+    if (!dst) {
+        return;
+    }
+    for (size_t i = 0; i < len; ++i) {
+        dst[i] = (uint8_t)(rng_next() & 0xFFu);
+    }
+}
+
+static size_t signed_block_min_capacity_for_test(const LanternSignedBlock *block) {
+    if (!block) {
+        return 0;
+    }
+    size_t base = (SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE)
+        + (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
+        + (LANTERN_ROOT_SIZE * 2u)
+        + SSZ_BYTE_SIZE_OF_UINT32
+        + SSZ_BYTE_SIZE_OF_UINT32;
+    size_t att_bytes = 0;
+    if (block->message.body.attestations.length > 0) {
+        att_bytes = block->message.body.attestations.length * LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    }
+    return base + att_bytes;
+}
+
 static LanternCheckpoint build_checkpoint(uint8_t seed, uint64_t slot) {
     LanternCheckpoint checkpoint;
     fill_bytes(checkpoint.root.bytes, sizeof(checkpoint.root.bytes), seed);
@@ -255,15 +304,8 @@ static void test_gossip_signed_block_payload(void) {
     lantern_block_body_init(&block.message.body);
     populate_block(&block, 5);
 
-    size_t att_count = block.message.body.attestations.length;
-    size_t raw_upper =
-        (SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE)
-        + (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
-        + (LANTERN_ROOT_SIZE * 2u)
-        + SSZ_BYTE_SIZE_OF_UINT32
-        + SSZ_BYTE_SIZE_OF_UINT32
-        + att_count * LANTERN_SIGNED_VOTE_SSZ_SIZE;
-    size_t max_compressed = 0;
+   size_t raw_upper = signed_block_min_capacity_for_test(&block);
+   size_t max_compressed = 0;
     CHECK(lantern_snappy_max_compressed_size(raw_upper, &max_compressed) == LANTERN_SNAPPY_OK);
     uint8_t *compressed = malloc(max_compressed);
     CHECK(compressed);
@@ -291,13 +333,88 @@ static void test_gossip_signed_block_payload(void) {
     free(compressed);
 }
 
+static void test_gossip_block_snappy_roundtrip_random(void) {
+    const size_t iterations = 64;
+    for (size_t i = 0; i < iterations; ++i) {
+        LanternSignedBlock original;
+        memset(&original, 0, sizeof(original));
+        lantern_block_body_init(&original.message.body);
+        original.message.slot = 1 + rng_uniform(2047);
+        original.message.proposer_index = rng_uniform(63);
+        rng_fill_bytes(original.message.parent_root.bytes, LANTERN_ROOT_SIZE);
+        rng_fill_bytes(original.message.state_root.bytes, LANTERN_ROOT_SIZE);
+        memset(original.signature.bytes, 0, sizeof(original.signature.bytes));
+
+        size_t att_count = rng_uniform(4);
+        for (size_t j = 0; j < att_count; ++j) {
+            LanternSignedVote vote;
+            memset(&vote, 0, sizeof(vote));
+            vote.data.validator_id = rng_uniform(255);
+            vote.data.slot = rng_uniform(original.message.slot);
+            vote.data.source.slot = vote.data.slot > 0 ? rng_uniform(vote.data.slot) : 0;
+            uint64_t target_floor = vote.data.slot > vote.data.source.slot ? vote.data.slot : vote.data.source.slot;
+            vote.data.target.slot = target_floor + rng_uniform(3);
+            vote.data.head.slot = vote.data.target.slot + rng_uniform(2);
+            rng_fill_bytes(vote.data.head.root.bytes, LANTERN_ROOT_SIZE);
+            rng_fill_bytes(vote.data.target.root.bytes, LANTERN_ROOT_SIZE);
+            rng_fill_bytes(vote.data.source.root.bytes, LANTERN_ROOT_SIZE);
+            memset(vote.signature.bytes, 0, sizeof(vote.signature.bytes));
+            CHECK(lantern_attestations_append(&original.message.body.attestations, &vote) == 0);
+        }
+
+        size_t raw_estimate = signed_block_min_capacity_for_test(&original);
+        CHECK(raw_estimate > 0);
+        size_t max_compressed = 0;
+        CHECK(lantern_snappy_max_compressed_size(raw_estimate, &max_compressed) == LANTERN_SNAPPY_OK);
+        uint8_t *compressed = malloc(max_compressed);
+        CHECK(compressed != NULL);
+
+        size_t written = 0;
+        check_zero(
+            lantern_gossip_encode_signed_block_snappy(&original, compressed, max_compressed, &written),
+            "random block encode");
+        CHECK(written > 0);
+
+        LanternSignedBlock decoded;
+        memset(&decoded, 0, sizeof(decoded));
+        lantern_block_body_init(&decoded.message.body);
+        check_zero(
+            lantern_gossip_decode_signed_block_snappy(&decoded, compressed, written),
+            "random block decode");
+
+        CHECK(decoded.message.slot == original.message.slot);
+        CHECK(decoded.message.proposer_index == original.message.proposer_index);
+        CHECK(memcmp(decoded.message.parent_root.bytes, original.message.parent_root.bytes, LANTERN_ROOT_SIZE) == 0);
+        CHECK(memcmp(decoded.message.state_root.bytes, original.message.state_root.bytes, LANTERN_ROOT_SIZE) == 0);
+        CHECK(decoded.message.body.attestations.length == original.message.body.attestations.length);
+        for (size_t j = 0; j < decoded.message.body.attestations.length; ++j) {
+            const LanternSignedVote *expected = &original.message.body.attestations.data[j];
+            const LanternSignedVote *actual = &decoded.message.body.attestations.data[j];
+            CHECK(actual->data.validator_id == expected->data.validator_id);
+            CHECK(actual->data.slot == expected->data.slot);
+            CHECK(actual->data.head.slot == expected->data.head.slot);
+            CHECK(actual->data.target.slot == expected->data.target.slot);
+            CHECK(actual->data.source.slot == expected->data.source.slot);
+            CHECK(memcmp(actual->data.head.root.bytes, expected->data.head.root.bytes, LANTERN_ROOT_SIZE) == 0);
+            CHECK(memcmp(actual->data.target.root.bytes, expected->data.target.root.bytes, LANTERN_ROOT_SIZE) == 0);
+            CHECK(memcmp(actual->data.source.root.bytes, expected->data.source.root.bytes, LANTERN_ROOT_SIZE) == 0);
+        }
+        CHECK(memcmp(decoded.signature.bytes, original.signature.bytes, LANTERN_SIGNATURE_SIZE) == 0);
+
+        free(compressed);
+        lantern_block_body_reset(&original.message.body);
+        lantern_block_body_reset(&decoded.message.body);
+    }
+}
+
 int main(void) {
     test_status_snappy();
     test_blocks_by_root_request();
     test_blocks_by_root_response();
-    test_gossip_helpers();
     test_gossip_signed_vote_payload();
     test_gossip_signed_block_payload();
+    test_gossip_block_snappy_roundtrip_random();
+    test_gossip_helpers();
     puts("lantern_networking_messages_test OK");
     return 0;
 }

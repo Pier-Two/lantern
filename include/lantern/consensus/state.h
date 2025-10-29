@@ -1,6 +1,7 @@
 #ifndef LANTERN_CONSENSUS_STATE_H
 #define LANTERN_CONSENSUS_STATE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -58,6 +59,12 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
 int lantern_state_process_attestations(LanternState *state, const LanternAttestations *attestations);
 int lantern_state_process_block(LanternState *state, const LanternBlock *block);
 int lantern_state_transition(LanternState *state, const LanternSignedBlock *signed_block);
+int lantern_state_prepare_validator_votes(LanternState *state, uint64_t validator_count);
+size_t lantern_state_validator_capacity(const LanternState *state);
+bool lantern_state_validator_has_vote(const LanternState *state, size_t index);
+int lantern_state_get_validator_vote(const LanternState *state, size_t index, LanternVote *out_vote);
+int lantern_state_set_validator_vote(LanternState *state, size_t index, const LanternVote *vote);
+void lantern_state_clear_validator_vote(LanternState *state, size_t index);
 int lantern_state_select_block_parent(const LanternState *state, LanternRoot *out_parent_root);
 int lantern_state_collect_attestations_for_block(
     const LanternState *state,
