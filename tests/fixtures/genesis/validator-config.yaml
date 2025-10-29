@@ -1,23 +1,57 @@
 shuffle: roundrobin
 validators:
-  - name: "lantern_0"
-    privkey: "0xabc123"
+  - name: "ream_0"
+    privkey: "8f292ed964a975cb1224b366c47cb412a561c019fdf49c1ac63240eac76f88f6"
     enrFields:
-      ip: "127.0.0.1"
-      quic: 9100
+      ip: "172.20.0.10"
+      quic: 9000
       seq: 1
     count: 1
-  - name: "lantern_1"
-    privkey: "0xdef456"
+
+  - name: "ream_1"
+    privkey: "8b5dffc203f4d6165527d19d999e0b004f3da08a6cfe48b005faf40e7e998341"
     enrFields:
-      ip: "127.0.0.1"
-      quic: 9101
-      seq: 2
-    count: 2
-  - name: "lantern_2"
-    privkey: "0x13579b"
+      ip: "172.20.0.11"
+      quic: 9000
+      seq: 1
+    count: 1
+
+  - name: "zeam_2"
+    privkey: "b090f3c8b527fbf5edcfa91da199675848b4711449d2594a72516ccfe779e6ed"
     enrFields:
-      ip: "127.0.0.1"
-      quic: 9102
-      seq: 3
+      ip: "172.20.0.12"
+      quic: 9000
+      seq: 1
+    count: 1
+
+  - name: "zeam_3"
+    privkey: "51648077ace3442b97463b0a17af0d5e85712fc653b215a5f70cd64e8c6f6203"
+    enrFields:
+      ip: "172.20.0.13"
+      quic: 9000
+      seq: 1
+    count: 1
+
+  - name: "qlean_4"
+    privkey: "c15ba8feafd89631ae6f5babd6c0eab4b8cf6f6b23d99402cd1533a903b1d25d"
+    enrFields:
+      ip: "172.20.0.14"
+      quic: 9000
+      seq: 1
+    count: 1
+
+  - name: "qlean_5"
+    privkey: "d9db40f0796d209f983f9fc54c4e8c587ca6a8d06e3f96cda8d8fa49810ca778"
+    enrFields:
+      ip: "172.20.0.15"
+      quic: 9000
+      seq: 1
+    count: 1
+
+  - name: "lantern_6"
+    privkey: "d45bf14de39094065e34425b1eac6ee9db48f186dbc5b307852839a9caa671be"
+    enrFields:
+      ip: "172.20.0.16"
+      quic: 9000
+      seq: 1
     count: 1

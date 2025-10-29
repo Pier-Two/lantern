@@ -772,6 +772,38 @@ static void test_leanspec_vectors(void) {
     lantern_state_reset(&state_decoded);
 }
 
+static void test_state_accepts_empty_justification_validators_payload(void) {
+    LanternState genesis_state;
+    lantern_state_init(&genesis_state);
+    expect_ok(lantern_state_generate_genesis(&genesis_state, 1234, 7), "genesis state");
+
+    uint8_t encoded[512];
+    size_t written = 0;
+    expect_ok(
+        lantern_ssz_encode_state(&genesis_state, encoded, sizeof(encoded), &written),
+        "encode genesis state");
+
+    size_t offsets_offset = LANTERN_CONFIG_SSZ_SIZE + sizeof(uint64_t) + LANTERN_BLOCK_HEADER_SSZ_SIZE
+        + (2 * LANTERN_CHECKPOINT_SSZ_SIZE);
+    uint32_t offsets[4];
+    memcpy(offsets, encoded + offsets_offset, sizeof(offsets));
+
+    size_t truncated_len = offsets[3];
+    assert(truncated_len <= written);
+
+    LanternState decoded;
+    lantern_state_init(&decoded);
+    expect_ok(
+        lantern_ssz_decode_state(&decoded, encoded, truncated_len),
+        "decode state with empty justification validators payload");
+    assert(decoded.justification_validators.bit_length == 0);
+    assert(decoded.config.num_validators == genesis_state.config.num_validators);
+    assert(decoded.justified_slots.bit_length == genesis_state.justified_slots.bit_length);
+
+    lantern_state_reset(&decoded);
+    lantern_state_reset(&genesis_state);
+}
+
 int main(void) {
     test_checkpoint_roundtrip();
     test_vote_roundtrip();
@@ -783,6 +815,7 @@ int main(void) {
     test_signed_block_roundtrip();
     test_signed_block_signature_validation();
     test_state_roundtrip();
+    test_state_accepts_empty_justification_validators_payload();
     test_leanspec_vectors();
     puts("lantern_ssz_test OK");
     return 0;

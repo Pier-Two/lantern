@@ -34,17 +34,17 @@ static int verify_client_state(
     const uint64_t *expected_indices,
     size_t expected_count,
     uint16_t expected_udp_port) {
-    if (client->genesis.chain_config.genesis_time != 1700000000ULL) {
+    if (client->genesis.chain_config.genesis_time != UINT64_C(1761717362)) {
         fprintf(stderr, "Unexpected genesis_time: %llu\n",
             (unsigned long long)client->genesis.chain_config.genesis_time);
         return 1;
     }
-    if (client->genesis.chain_config.validator_count != 4) {
+    if (client->genesis.chain_config.validator_count != 7) {
         fprintf(stderr, "Unexpected validator_count: %llu\n",
             (unsigned long long)client->genesis.chain_config.validator_count);
         return 1;
     }
-    if (client->genesis.enrs.count != 2) {
+    if (client->genesis.enrs.count != 7) {
         fprintf(stderr, "Unexpected ENR count: %zu\n", client->genesis.enrs.count);
         return 1;
     }
@@ -61,11 +61,11 @@ static int verify_client_state(
             return 1;
         }
     }
-    if (client->genesis.validator_registry.count != 4) {
+    if (client->genesis.validator_registry.count != 7) {
         fprintf(stderr, "Unexpected validator registry count: %zu\n", client->genesis.validator_registry.count);
         return 1;
     }
-    if (client->genesis.validator_config.count != 3) {
+    if (client->genesis.validator_config.count != 7) {
         fprintf(stderr, "Unexpected validator config count: %zu\n", client->genesis.validator_config.count);
         return 1;
     }
@@ -167,6 +167,18 @@ static int verify_client_state(
             client->bootnodes.len);
         return 1;
     }
+    if (!client->has_state) {
+        fprintf(stderr, "Client state not initialized\n");
+        return 1;
+    }
+    if (client->state.config.num_validators != client->genesis.chain_config.validator_count) {
+        fprintf(stderr, "State validator count mismatch\n");
+        return 1;
+    }
+    if (client->state.config.genesis_time != client->genesis.chain_config.genesis_time) {
+        fprintf(stderr, "State genesis time mismatch\n");
+        return 1;
+    }
     if (client->assigned_validators && client->assigned_validators->privkey_hex
         && client->assigned_validators->privkey_hex[0] != '\0') {
         fprintf(stderr, "Assigned validator privkey was not cleared\n");
@@ -197,8 +209,8 @@ int main(void) {
     options.nodes_path = nodes_path;
     options.genesis_state_path = state_path;
     options.validator_config_path = validator_config_path;
-    options.node_id = "lantern_0";
-    options.listen_address = "/ip4/127.0.0.1/udp/9100/quic_v1";
+    options.node_id = "ream_0";
+    options.listen_address = "/ip4/127.0.0.1/udp/9000/quic_v1";
     options.node_key_hex = "0xb71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291";
     options.metrics_port = 0;
 
@@ -208,20 +220,20 @@ int main(void) {
         return 1;
     }
 
-    const uint64_t node0_indices[] = {0};
-    const uint64_t node1_indices[] = {1, 2};
+    const uint64_t ream_indices[] = {0};
+    const uint64_t lantern_indices[] = {6};
 
     struct lantern_client client;
     bool client_ready = false;
     int exit_code = 1;
 
     if (lantern_init(&client, &options) != 0) {
-        fprintf(stderr, "lantern_init failed for lantern_0\n");
+        fprintf(stderr, "lantern_init failed for ream_0\n");
         goto cleanup;
     }
     client_ready = true;
 
-    if (verify_client_state(&client, &options, node0_indices, 1, 9100) != 0) {
+    if (verify_client_state(&client, &options, ream_indices, 1, 9000) != 0) {
         goto cleanup;
     }
 
@@ -229,16 +241,16 @@ int main(void) {
     client_ready = false;
     memset(&client, 0, sizeof(client));
 
-    options.node_id = "lantern_1";
-    options.listen_address = "/ip4/127.0.0.1/udp/9200/quic_v1";
+    options.node_id = "lantern_6";
+    options.listen_address = "/ip4/127.0.0.1/udp/9100/quic_v1";
 
     if (lantern_init(&client, &options) != 0) {
-        fprintf(stderr, "lantern_init failed for lantern_1\n");
+        fprintf(stderr, "lantern_init failed for lantern_6\n");
         goto cleanup;
     }
     client_ready = true;
 
-    if (verify_client_state(&client, &options, node1_indices, 2, 9101) != 0) {
+    if (verify_client_state(&client, &options, lantern_indices, 1, 9000) != 0) {
         goto cleanup;
     }
 

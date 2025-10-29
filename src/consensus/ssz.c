@@ -193,7 +193,13 @@ static int encode_bitlist(const struct lantern_bitlist *list, uint8_t *out, size
 }
 
 static int decode_bitlist(struct lantern_bitlist *list, const uint8_t *data, size_t data_len) {
-    if (!list || !data || data_len == 0) {
+    if (!list) {
+        return -1;
+    }
+    if (data_len == 0) {
+        return lantern_bitlist_resize(list, 0);
+    }
+    if (!data) {
         return -1;
     }
     uint8_t last = data[data_len - 1];
@@ -750,10 +756,17 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
 
     const size_t var_field_count = 4;
     size_t offset = 0;
+    const size_t offsets_size = var_field_count * SSZ_BYTE_SIZE_OF_UINT32;
+    const size_t min_truncated_size = LANTERN_CONFIG_SSZ_SIZE + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + offsets_size;
+    const size_t min_full_size = LANTERN_CONFIG_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT64 + LANTERN_BLOCK_HEADER_SSZ_SIZE
+        + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + offsets_size;
+    bool truncated = false;
 
-    if (data_len < LANTERN_CONFIG_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT64 + LANTERN_BLOCK_HEADER_SSZ_SIZE + (2 * LANTERN_CHECKPOINT_SSZ_SIZE)
-        + (var_field_count * SSZ_BYTE_SIZE_OF_UINT32)) {
-        return -1;
+    if (data_len < min_full_size) {
+        if (data_len < min_truncated_size) {
+            return -1;
+        }
+        truncated = true;
     }
 
     if (lantern_ssz_decode_config(&state->config, data + offset, LANTERN_CONFIG_SSZ_SIZE) != 0) {
@@ -761,25 +774,43 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
     }
     offset += LANTERN_CONFIG_SSZ_SIZE;
 
-    if (read_u64(data + offset, data_len - offset, &state->slot) != 0) {
+    if (truncated) {
+        state->slot = 0;
+        memset(&state->latest_block_header, 0, sizeof(state->latest_block_header));
+    } else {
+        if (read_u64(data + offset, data_len - offset, &state->slot) != 0) {
+            return -1;
+        }
+        offset += SSZ_BYTE_SIZE_OF_UINT64;
+
+        if (data_len - offset < LANTERN_BLOCK_HEADER_SSZ_SIZE) {
+            return -1;
+        }
+        if (lantern_ssz_decode_block_header(&state->latest_block_header, data + offset, LANTERN_BLOCK_HEADER_SSZ_SIZE) != 0) {
+            return -1;
+        }
+        offset += LANTERN_BLOCK_HEADER_SSZ_SIZE;
+    }
+
+    if (data_len - offset < LANTERN_CHECKPOINT_SSZ_SIZE) {
         return -1;
     }
-    offset += SSZ_BYTE_SIZE_OF_UINT64;
-
-    if (lantern_ssz_decode_block_header(&state->latest_block_header, data + offset, LANTERN_BLOCK_HEADER_SSZ_SIZE) != 0) {
-        return -1;
-    }
-    offset += LANTERN_BLOCK_HEADER_SSZ_SIZE;
-
     if (lantern_ssz_decode_checkpoint(&state->latest_justified, data + offset, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
         return -1;
     }
     offset += LANTERN_CHECKPOINT_SSZ_SIZE;
 
+    if (data_len - offset < LANTERN_CHECKPOINT_SSZ_SIZE) {
+        return -1;
+    }
     if (lantern_ssz_decode_checkpoint(&state->latest_finalized, data + offset, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
         return -1;
     }
     offset += LANTERN_CHECKPOINT_SSZ_SIZE;
+
+    if (data_len - offset < offsets_size) {
+        return -1;
+    }
 
     size_t offsets[var_field_count];
     for (size_t i = 0; i < var_field_count; ++i) {

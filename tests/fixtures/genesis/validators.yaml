@@ -1,9 +1,14 @@
-validators:
-  - pubkey: "0x010203"
-    withdrawal_credentials: "0xaabb"
-  - pubkey: "0x040506"
-    withdrawal_credentials: "0xccdd"
-  - pubkey: "0x070809"
-    withdrawal_credentials: "0xeeff"
-  - pubkey: "0x0a0b0c"
-    withdrawal_credentials: "0x1122"
+lantern_6:
+    - 6
+qlean_4:
+    - 4
+qlean_5:
+    - 5
+ream_0:
+    - 0
+ream_1:
+    - 1
+zeam_2:
+    - 2
+zeam_3:
+    - 3
