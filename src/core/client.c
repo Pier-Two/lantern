@@ -1375,6 +1375,45 @@ const struct lantern_local_validator *lantern_client_local_validator(
     return &client->local_validators[index];
 }
 
+int lantern_client_publish_block(struct lantern_client *client, const LanternSignedBlock *block) {
+    if (!client || !block) {
+        return -1;
+    }
+    if (!client->gossip_running) {
+        lantern_log_error(
+            "gossip",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "cannot publish block at slot %" PRIu64 ": gossip service inactive",
+            block->message.slot);
+        return -1;
+    }
+    if (lantern_gossipsub_service_publish_block(&client->gossip, block) != 0) {
+        lantern_log_error(
+            "gossip",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to publish block at slot %" PRIu64,
+            block->message.slot);
+        return -1;
+    }
+
+    LanternRoot block_root;
+    char root_hex[2 * LANTERN_ROOT_SIZE + 3];
+    if (lantern_hash_tree_root_signed_block(block, &block_root) == 0) {
+        format_root_hex(&block_root, root_hex, sizeof(root_hex));
+    } else {
+        root_hex[0] = '\0';
+    }
+
+    lantern_log_info(
+        "gossip",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "published block slot=%" PRIu64 " root=%s attestations=%zu",
+        block->message.slot,
+        root_hex[0] ? root_hex : "0x0",
+        block->message.body.attestations.length);
+    return 0;
+}
+
 static int load_node_key_bytes(const struct lantern_client_options *options, uint8_t out_key[32]) {
     if (!options || !out_key) {
         return -1;

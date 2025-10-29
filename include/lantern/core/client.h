@@ -108,6 +108,7 @@ size_t lantern_client_local_validator_count(const struct lantern_client *client)
 const struct lantern_local_validator *lantern_client_local_validator(
     const struct lantern_client *client,
     size_t index);
+int lantern_client_publish_block(struct lantern_client *client, const LanternSignedBlock *block);
 
 #ifdef __cplusplus
 }

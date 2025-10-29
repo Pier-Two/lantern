@@ -19,6 +19,7 @@
 #include "libp2p/host_builder.h"
 #include "libp2p/peerstore.h"
 #include "multiformats/multiaddr/multiaddr.h"
+#include "multiformats/multicodec/multicodec_codes.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
 #include "peer_id/peer_id.h"
 #include "peer_id/peer_id_proto.h"
@@ -55,6 +56,27 @@ static int encode_secp256k1_private_key_proto(const uint8_t *secret, size_t secr
     *out = buffer;
     *out_len = total;
     return 0;
+}
+
+static int multiaddr_has_protocol(const multiaddr_t *ma, uint64_t code) {
+    if (!ma) {
+        return 0;
+    }
+    size_t protocols = multiaddr_nprotocols(ma);
+    for (size_t idx = 0; idx < protocols; idx++) {
+        uint64_t current = 0;
+        if (multiaddr_get_protocol_code(ma, idx, &current) == 0 && current == code) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int multiaddr_is_quic(const multiaddr_t *ma) {
+    if (!ma) {
+        return 0;
+    }
+    return multiaddr_has_protocol(ma, MULTICODEC_QUIC_V1) || multiaddr_has_protocol(ma, MULTICODEC_QUIC);
 }
 
 void lantern_libp2p_host_init(struct lantern_libp2p_host *state) {
@@ -123,6 +145,16 @@ int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct la
         libp2p_host_builder_free(builder);
         return -1;
     }
+    if (!multiaddr_is_quic(ma)) {
+        lantern_log_error(
+            "network",
+            &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
+            "listen multiaddr '%s' must include /quic(_v1)",
+            config->listen_multiaddr);
+        multiaddr_free(ma);
+        libp2p_host_builder_free(builder);
+        return -1;
+    }
     multiaddr_free(ma);
 
     int b_rc = libp2p_host_builder_listen_addr(builder, config->listen_multiaddr);
@@ -141,29 +173,7 @@ int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct la
             lantern_log_error(
                 "network",
                 &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-                "libp2p transport setup failed (%d)",
-                b_rc);
-            rc = -1;
-        }
-    }
-    if (rc == 0) {
-        b_rc = libp2p_host_builder_security(builder, "noise");
-        if (b_rc != 0) {
-            lantern_log_error(
-                "network",
-                &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-                "libp2p security setup failed (%d)",
-                b_rc);
-            rc = -1;
-        }
-    }
-    if (rc == 0) {
-        b_rc = libp2p_host_builder_muxer(builder, "yamux");
-        if (b_rc != 0) {
-            lantern_log_error(
-                "network",
-                &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-                "libp2p muxer setup failed (%d)",
+                "libp2p transport 'quic' setup failed (%d)",
                 b_rc);
             rc = -1;
         }
@@ -177,6 +187,17 @@ int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct la
                 "libp2p multistream setup failed (%d)",
                 b_rc);
             rc = -1;
+        }
+    }
+    if (rc == 0) {
+        uint32_t flags = LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND | LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND;
+        b_rc = libp2p_host_builder_flags(builder, flags);
+        if (b_rc != 0) {
+            lantern_log_warn(
+                "network",
+                &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
+                "libp2p host flags setup failed (%d)",
+                b_rc);
         }
     }
 

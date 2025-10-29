@@ -24,6 +24,9 @@ struct lantern_gossipsub_service {
     char vote_topic[128];
     uint8_t *scratch;
     size_t scratch_capacity;
+    int (*publish_hook)(const char *topic, const uint8_t *payload, size_t payload_len, void *user_data);
+    void *publish_hook_user_data;
+    int loopback_only;
 };
 
 void lantern_gossipsub_service_init(struct lantern_gossipsub_service *service);
@@ -37,6 +40,13 @@ int lantern_gossipsub_service_publish_block(
 int lantern_gossipsub_service_publish_vote(
     struct lantern_gossipsub_service *service,
     const LanternSignedVote *vote);
+void lantern_gossipsub_service_set_publish_hook(
+    struct lantern_gossipsub_service *service,
+    int (*hook)(const char *topic, const uint8_t *payload, size_t payload_len, void *user_data),
+    void *user_data);
+void lantern_gossipsub_service_set_loopback_only(
+    struct lantern_gossipsub_service *service,
+    int loopback_only);
 
 #ifdef __cplusplus
 }

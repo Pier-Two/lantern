@@ -148,6 +148,9 @@ void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) 
     service->scratch_capacity = 0;
     memset(service->block_topic, 0, sizeof(service->block_topic));
     memset(service->vote_topic, 0, sizeof(service->vote_topic));
+    service->publish_hook = NULL;
+    service->publish_hook_user_data = NULL;
+    service->loopback_only = 0;
 }
 
 int lantern_gossipsub_service_start(
@@ -209,7 +212,18 @@ static int publish_payload(
     const char *topic,
     const uint8_t *payload,
     size_t payload_len) {
-    if (!service || !service->gossipsub || !topic || !payload || payload_len == 0) {
+    if (!service || !topic || !payload || payload_len == 0) {
+        return -1;
+    }
+    if (service->publish_hook) {
+        if (service->publish_hook(topic, payload, payload_len, service->publish_hook_user_data) != 0) {
+            return -1;
+        }
+    }
+    if (service->loopback_only) {
+        return 0;
+    }
+    if (!service->gossipsub) {
         return -1;
     }
     libp2p_gossipsub_message_t message;
@@ -274,4 +288,24 @@ int lantern_gossipsub_service_publish_vote(
     int publish_rc = publish_payload(service, service->vote_topic, compressed, written);
     free(compressed);
     return publish_rc;
+}
+
+void lantern_gossipsub_service_set_publish_hook(
+    struct lantern_gossipsub_service *service,
+    int (*hook)(const char *topic, const uint8_t *payload, size_t payload_len, void *user_data),
+    void *user_data) {
+    if (!service) {
+        return;
+    }
+    service->publish_hook = hook;
+    service->publish_hook_user_data = user_data;
+}
+
+void lantern_gossipsub_service_set_loopback_only(
+    struct lantern_gossipsub_service *service,
+    int loopback_only) {
+    if (!service) {
+        return;
+    }
+    service->loopback_only = loopback_only ? 1 : 0;
 }
