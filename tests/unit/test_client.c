@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -27,6 +28,8 @@ static bool string_list_contains(const struct lantern_string_list *list, const c
     }
     return false;
 }
+
+static const char *placeholder_registry_value = "0x00";
 
 static int verify_client_state(
     const struct lantern_client *client,
@@ -131,6 +134,18 @@ static int verify_client_state(
         }
         if (!validator->registry || validator->registry->index != expected_indices[i]) {
             fprintf(stderr, "Validator registry pointer mismatch at %zu\n", i);
+            return 1;
+        }
+        size_t global_index = (size_t)validator->registry->index;
+        (void)global_index;
+        if (!validator->registry->pubkey_hex
+            || strcmp(validator->registry->pubkey_hex, placeholder_registry_value) != 0) {
+            fprintf(stderr, "Validator registry pubkey mismatch at index %" PRIu64 "\n", validator->registry->index);
+            return 1;
+        }
+        const char *actual_withdrawal = validator->registry->withdrawal_credentials_hex;
+        if (!actual_withdrawal || strcmp(actual_withdrawal, placeholder_registry_value) != 0) {
+            fprintf(stderr, "Validator registry withdrawal mismatch at index %" PRIu64 "\n", validator->registry->index);
             return 1;
         }
         if (!validator->has_secret || !validator->secret || validator->secret_len == 0) {

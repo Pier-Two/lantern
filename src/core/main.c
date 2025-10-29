@@ -28,6 +28,7 @@ enum {
     OPT_BOOTNODES,
     OPT_BOOTNODE_FILE,
     OPT_DEVNET,
+    OPT_LOG_LEVEL,
 };
 
 static void print_usage(const char *prog);
@@ -54,7 +55,17 @@ int main(int argc, char **argv) {
     signal(SIGTERM, lantern_handle_signal);
 
     bool show_version = false;
-    bool show_help = false;
+   bool show_help = false;
+
+    const char *env_log_level = getenv("LANTERN_LOG_LEVEL");
+    if (env_log_level && lantern_log_set_level_from_string(env_log_level, NULL) != 0) {
+        lantern_log_error(
+            "cli",
+            &(const struct lantern_log_metadata){0},
+            "invalid LANTERN_LOG_LEVEL '%s'",
+            env_log_level);
+        goto error;
+    }
 
     static struct option long_options[] = {
         {"data-dir", required_argument, NULL, 'd'},
@@ -73,6 +84,7 @@ int main(int argc, char **argv) {
         {"bootnodes", required_argument, NULL, OPT_BOOTNODES},
         {"bootnodes-file", required_argument, NULL, OPT_BOOTNODE_FILE},
         {"devnet", required_argument, NULL, OPT_DEVNET},
+        {"log-level", required_argument, NULL, OPT_LOG_LEVEL},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'v'},
         {0, 0, 0, 0},
@@ -150,6 +162,16 @@ int main(int argc, char **argv) {
             break;
         case OPT_DEVNET:
             options.devnet = optarg;
+            break;
+        case OPT_LOG_LEVEL:
+            if (lantern_log_set_level_from_string(optarg, NULL) != 0) {
+                lantern_log_error(
+                    "cli",
+                    &(const struct lantern_log_metadata){.validator = options.node_id},
+                    "invalid log-level '%s'",
+                    optarg);
+                goto error;
+            }
             break;
         case OPT_BOOTNODES:
             if (add_bootnodes_argument(&options, optarg) != 0) {
@@ -264,6 +286,7 @@ static void print_usage(const char *prog) {
         "  --bootnodes VALUE            ENR or path to YAML/List file of ENRs\n"
         "  --bootnodes-file PATH        File with newline-delimited ENRs\n"
         "  --devnet NAME                Devnet identifier for gossip topics\n"
+        "  --log-level LEVEL           Minimum log level (trace, debug, info, warn, error)\n"
         "  --help                       Show this message\n"
         "  --version                    Print version information\n",
         prog,

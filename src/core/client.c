@@ -12,6 +12,8 @@
 #include "lantern/support/strings.h"
 #include "lantern/support/log.h"
 #include "lantern/support/secure_mem.h"
+#include "libp2p/events.h"
+#include "peer_id/peer_id.h"
 
 #include <inttypes.h>
 #include <limits.h>
@@ -51,6 +53,13 @@ static int reqresp_collect_blocks(
     LanternBlocksByRootResponse *out_blocks);
 static int initialize_fork_choice(struct lantern_client *client);
 static int restore_persisted_blocks(struct lantern_client *client);
+static void connection_events_cb(const libp2p_event_t *evt, void *user_data);
+static void connection_counter_update(
+    struct lantern_client *client,
+    int delta,
+    const peer_id_t *peer,
+    bool inbound);
+static void connection_counter_reset(struct lantern_client *client);
 
 struct lantern_persisted_block {
     LanternSignedBlock block;
@@ -62,6 +71,86 @@ struct lantern_persisted_block_list {
     size_t length;
     size_t capacity;
 };
+
+static void connection_counter_reset(struct lantern_client *client) {
+    if (!client) {
+        return;
+    }
+    if (!client->connection_lock_initialized) {
+        client->connected_peers = 0;
+        return;
+    }
+    if (pthread_mutex_lock(&client->connection_lock) == 0) {
+        client->connected_peers = 0;
+        pthread_mutex_unlock(&client->connection_lock);
+    } else {
+        client->connected_peers = 0;
+    }
+}
+
+static void connection_counter_update(
+    struct lantern_client *client,
+    int delta,
+    const peer_id_t *peer,
+    bool inbound) {
+    if (!client || !client->connection_lock_initialized) {
+        return;
+    }
+
+    char peer_text[128];
+    peer_text[0] = '\0';
+    if (peer) {
+        if (peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text)) < 0) {
+            peer_text[0] = '\0';
+        }
+    }
+
+    size_t total = 0;
+    if (pthread_mutex_lock(&client->connection_lock) == 0) {
+        if (delta > 0) {
+            client->connected_peers += (size_t)delta;
+        } else if (delta < 0) {
+            size_t decrease = (size_t)(-delta);
+            if (client->connected_peers > decrease) {
+                client->connected_peers -= decrease;
+            } else {
+                client->connected_peers = 0;
+            }
+        }
+        total = client->connected_peers;
+        pthread_mutex_unlock(&client->connection_lock);
+    } else {
+        return;
+    }
+
+    lantern_log_trace(
+        "network",
+        &(const struct lantern_log_metadata){
+            .validator = client->node_id,
+            .peer = peer_text[0] ? peer_text : NULL,
+        },
+        "connection %s inbound=%s total=%zu",
+        delta > 0 ? "opened" : "closed",
+        inbound ? "true" : "false",
+        total);
+}
+
+static void connection_events_cb(const libp2p_event_t *evt, void *user_data) {
+    if (!evt || !user_data) {
+        return;
+    }
+    struct lantern_client *client = (struct lantern_client *)user_data;
+    switch (evt->kind) {
+    case LIBP2P_EVT_CONN_OPENED:
+        connection_counter_update(client, 1, evt->u.conn_opened.peer, evt->u.conn_opened.inbound);
+        break;
+    case LIBP2P_EVT_CONN_CLOSED:
+        connection_counter_update(client, -1, evt->u.conn_closed.peer, false);
+        break;
+    default:
+        break;
+    }
+}
 
 static void persisted_block_list_init(struct lantern_persisted_block_list *list) {
     if (!list) {
@@ -468,6 +557,29 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
         memset(node_key, 0, sizeof(node_key));
         goto error;
     }
+
+    if (!client->connection_lock_initialized) {
+        if (pthread_mutex_init(&client->connection_lock, NULL) != 0) {
+            lantern_log_error(
+                "network",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "failed to initialize connection lock");
+            memset(node_key, 0, sizeof(node_key));
+            goto error;
+        }
+        client->connection_lock_initialized = true;
+    }
+    connection_counter_reset(client);
+
+    if (libp2p_event_subscribe(client->network.host, connection_events_cb, client, &client->connection_subscription) != 0) {
+        lantern_log_error(
+            "network",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to subscribe to libp2p connection events");
+        memset(node_key, 0, sizeof(node_key));
+        goto error;
+    }
+
     struct lantern_gossipsub_config gossip_cfg = {
         .host = client->network.host,
         .devnet = client->devnet,
@@ -586,6 +698,19 @@ void lantern_shutdown(struct lantern_client *client) {
     lantern_http_server_stop(&client->http_server);
     lantern_http_server_init(&client->http_server);
     client->http_running = false;
+
+    if (client->network.host && client->connection_subscription) {
+        libp2p_event_unsubscribe(client->network.host, client->connection_subscription);
+    }
+    client->connection_subscription = NULL;
+
+    if (client->connection_lock_initialized) {
+        connection_counter_reset(client);
+        pthread_mutex_destroy(&client->connection_lock);
+        client->connection_lock_initialized = false;
+    } else {
+        client->connected_peers = 0;
+    }
 
     if (client->validator_lock_initialized) {
         if (pthread_mutex_lock(&client->validator_lock) == 0) {
@@ -1005,6 +1130,14 @@ static int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *o
         snprintf(out_snapshot->node_id, sizeof(out_snapshot->node_id), "%s", client->node_id);
     }
 
+    size_t connected = 0;
+    if (client->connection_lock_initialized) {
+        if (pthread_mutex_lock(&client->connection_lock) == 0) {
+            connected = client->connected_peers;
+            pthread_mutex_unlock(&client->connection_lock);
+        }
+    }
+
     if (client->has_state) {
         out_snapshot->head_slot = client->state.slot;
         if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &out_snapshot->head_root) != 0) {
@@ -1020,7 +1153,7 @@ static int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *o
     }
 
     out_snapshot->known_peers = client->bootnodes.len;
-    out_snapshot->connected_peers = 0;
+    out_snapshot->connected_peers = connected;
     out_snapshot->gossip_topics = 2;
     out_snapshot->gossip_validation_failures = 0;
     out_snapshot->validators_total = client->local_validator_count;

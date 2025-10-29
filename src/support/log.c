@@ -1,5 +1,6 @@
 #include "lantern/support/log.h"
 
+#include <ctype.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,9 +8,12 @@
 #include <time.h>
 
 static char g_node_id[96] = {0};
+static enum LanternLogLevel g_min_level = LANTERN_LOG_LEVEL_DEBUG;
 
 static const char *level_to_string(enum LanternLogLevel level) {
     switch (level) {
+    case LANTERN_LOG_LEVEL_TRACE:
+        return "TRACE";
     case LANTERN_LOG_LEVEL_DEBUG:
         return "DEBUG";
     case LANTERN_LOG_LEVEL_INFO:
@@ -38,6 +42,69 @@ void lantern_log_set_node_id(const char *node_id) {
 
 void lantern_log_reset_node_id(void) {
     g_node_id[0] = '\0';
+}
+
+void lantern_log_set_level(enum LanternLogLevel level) {
+    g_min_level = level;
+}
+
+enum LanternLogLevel lantern_log_get_level(void) {
+    return g_min_level;
+}
+
+static int equals_ignore_case(const char *lhs, const char *rhs) {
+    if (!lhs || !rhs) {
+        return 0;
+    }
+    while (*lhs && *rhs) {
+        unsigned char a = (unsigned char)(*lhs);
+        unsigned char b = (unsigned char)(*rhs);
+        if (tolower(a) != tolower(b)) {
+            return 0;
+        }
+        ++lhs;
+        ++rhs;
+    }
+    return *lhs == '\0' && *rhs == '\0';
+}
+
+static int parse_level(const char *text, enum LanternLogLevel *out_level) {
+    if (!text || !out_level) {
+        return -1;
+    }
+    if (equals_ignore_case(text, "trace")) {
+        *out_level = LANTERN_LOG_LEVEL_TRACE;
+        return 0;
+    }
+    if (equals_ignore_case(text, "debug")) {
+        *out_level = LANTERN_LOG_LEVEL_DEBUG;
+        return 0;
+    }
+    if (equals_ignore_case(text, "info")) {
+        *out_level = LANTERN_LOG_LEVEL_INFO;
+        return 0;
+    }
+    if (equals_ignore_case(text, "warn") || equals_ignore_case(text, "warning")) {
+        *out_level = LANTERN_LOG_LEVEL_WARN;
+        return 0;
+    }
+    if (equals_ignore_case(text, "error")) {
+        *out_level = LANTERN_LOG_LEVEL_ERROR;
+        return 0;
+    }
+    return -1;
+}
+
+int lantern_log_set_level_from_string(const char *text, enum LanternLogLevel *out_level) {
+    enum LanternLogLevel parsed = LANTERN_LOG_LEVEL_INFO;
+    if (parse_level(text, &parsed) != 0) {
+        return -1;
+    }
+    lantern_log_set_level(parsed);
+    if (out_level) {
+        *out_level = parsed;
+    }
+    return 0;
 }
 
 static void append_field(char **cursor, size_t *remaining, const char *key, const char *value) {
@@ -178,6 +245,10 @@ void lantern_log_log(
     const struct lantern_log_metadata *metadata,
     const char *fmt,
     va_list args) {
+    if (level < g_min_level) {
+        return;
+    }
+
     char formatted[1024];
     int msg_written = vsnprintf(formatted, sizeof(formatted), fmt ? fmt : "", args);
     if (msg_written < 0) {
@@ -239,6 +310,17 @@ static void log_variadic(
     const char *fmt,
     va_list args) {
     lantern_log_log(level, component, metadata, fmt, args);
+}
+
+void lantern_log_trace(
+    const char *component,
+    const struct lantern_log_metadata *metadata,
+    const char *fmt,
+    ...) {
+    va_list args;
+    va_start(args, fmt);
+    log_variadic(LANTERN_LOG_LEVEL_TRACE, component, metadata, fmt, args);
+    va_end(args);
 }
 
 void lantern_log_debug(

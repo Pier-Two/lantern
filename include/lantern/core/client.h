@@ -51,6 +51,8 @@ struct lantern_client_options {
     struct lantern_string_list bootnodes;
 };
 
+struct libp2p_subscription;
+
 struct lantern_local_validator {
     uint64_t global_index;
     const struct lantern_validator_record *registry;
@@ -95,6 +97,10 @@ struct lantern_client {
     bool metrics_running;
     struct lantern_http_server http_server;
     bool http_running;
+    size_t connected_peers;
+    pthread_mutex_t connection_lock;
+    bool connection_lock_initialized;
+    struct libp2p_subscription *connection_subscription;
 };
 
 void lantern_client_options_init(struct lantern_client_options *options);

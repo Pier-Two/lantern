@@ -10,7 +10,8 @@ extern "C" {
 #endif
 
 enum LanternLogLevel {
-    LANTERN_LOG_LEVEL_DEBUG = 0,
+    LANTERN_LOG_LEVEL_TRACE = 0,
+    LANTERN_LOG_LEVEL_DEBUG,
     LANTERN_LOG_LEVEL_INFO,
     LANTERN_LOG_LEVEL_WARN,
     LANTERN_LOG_LEVEL_ERROR,
@@ -25,6 +26,9 @@ struct lantern_log_metadata {
 
 void lantern_log_set_node_id(const char *node_id);
 void lantern_log_reset_node_id(void);
+void lantern_log_set_level(enum LanternLogLevel level);
+enum LanternLogLevel lantern_log_get_level(void);
+int lantern_log_set_level_from_string(const char *text, enum LanternLogLevel *out_level);
 
 void lantern_log_log(
     enum LanternLogLevel level,
@@ -32,6 +36,12 @@ void lantern_log_log(
     const struct lantern_log_metadata *metadata,
     const char *fmt,
     va_list args);
+
+void lantern_log_trace(
+    const char *component,
+    const struct lantern_log_metadata *metadata,
+    const char *fmt,
+    ...) __attribute__((format(printf, 3, 4)));
 
 void lantern_log_debug(
     const char *component,

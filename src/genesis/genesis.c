@@ -7,6 +7,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -233,23 +234,117 @@ static int parse_validator_registry(const char *path, struct lantern_validator_r
         return parse_validator_registry_mapping(path, registry);
     }
 
-    struct lantern_validator_record *records = calloc(count, sizeof(*records));
+    bool has_pubkey_field = false;
+    for (size_t i = 0; i < count; ++i) {
+        if (yaml_object_value(&objects[i], "pubkey")) {
+            has_pubkey_field = true;
+            break;
+        }
+    }
+
+    if (!has_pubkey_field) {
+        lantern_yaml_free_objects(objects, count);
+        return parse_validator_registry_mapping(path, registry);
+    }
+
+    bool have_explicit_indices = false;
+    size_t max_index = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const char *index_val = yaml_object_value(&objects[i], "index");
+        if (!index_val) {
+            continue;
+        }
+        int ok = 0;
+        uint64_t parsed_index = parse_u64(index_val, &ok);
+        if (ok) {
+            have_explicit_indices = true;
+            if (parsed_index > SIZE_MAX) {
+                lantern_yaml_free_objects(objects, count);
+                return -1;
+            }
+            if ((size_t)parsed_index > max_index) {
+                max_index = (size_t)parsed_index;
+            }
+        }
+    }
+
+    size_t record_count = have_explicit_indices ? (max_index + 1) : count;
+    struct lantern_validator_record *records = calloc(record_count, sizeof(*records));
     if (!records) {
         lantern_yaml_free_objects(objects, count);
         return -1;
     }
 
-    for (size_t i = 0; i < count; ++i) {
-        const char *pubkey = yaml_object_value(&objects[i], "pubkey");
-        const char *withdrawal = yaml_object_value(&objects[i], "withdrawal_credentials");
-        records[i].index = i;
-        records[i].pubkey_hex = dup_trimmed(pubkey);
-        records[i].withdrawal_credentials_hex = dup_trimmed(withdrawal);
+    bool *assigned = calloc(record_count, sizeof(*assigned));
+    if (!assigned) {
+        free(records);
+        lantern_yaml_free_objects(objects, count);
+        return -1;
     }
 
+    for (size_t i = 0; i < count; ++i) {
+        size_t slot = i;
+        if (have_explicit_indices) {
+            const char *index_val = yaml_object_value(&objects[i], "index");
+            int ok = 0;
+            uint64_t parsed_index = parse_u64(index_val, &ok);
+            if (!index_val || !ok || parsed_index >= record_count) {
+                free(assigned);
+                free_validator_registry(&(struct lantern_validator_registry){.records = records, .count = record_count});
+                lantern_yaml_free_objects(objects, count);
+                return -1;
+            }
+            slot = (size_t)parsed_index;
+        }
+
+        if (assigned[slot]) {
+            free(assigned);
+            free_validator_registry(&(struct lantern_validator_registry){.records = records, .count = record_count});
+            lantern_yaml_free_objects(objects, count);
+            return -1;
+        }
+
+        const char *pubkey = yaml_object_value(&objects[i], "pubkey");
+        const char *withdrawal = yaml_object_value(&objects[i], "withdrawal_credentials");
+        if (!pubkey || !withdrawal) {
+            free(assigned);
+            free_validator_registry(&(struct lantern_validator_registry){.records = records, .count = record_count});
+            lantern_yaml_free_objects(objects, count);
+            return -1;
+        }
+
+        char *pubkey_hex = dup_trimmed(pubkey);
+        char *withdrawal_hex = dup_trimmed(withdrawal);
+        if (!pubkey_hex || !withdrawal_hex) {
+            free(pubkey_hex);
+            free(withdrawal_hex);
+            free(assigned);
+            free_validator_registry(&(struct lantern_validator_registry){.records = records, .count = record_count});
+            lantern_yaml_free_objects(objects, count);
+            return -1;
+        }
+
+        records[slot].index = (uint64_t)slot;
+        records[slot].pubkey_hex = pubkey_hex;
+        records[slot].withdrawal_credentials_hex = withdrawal_hex;
+        assigned[slot] = true;
+    }
+
+    if (have_explicit_indices) {
+        for (size_t i = 0; i < record_count; ++i) {
+            if (!assigned[i]) {
+                free(assigned);
+                free_validator_registry(&(struct lantern_validator_registry){.records = records, .count = record_count});
+                lantern_yaml_free_objects(objects, count);
+                return -1;
+            }
+        }
+    }
+
+    free(assigned);
     lantern_yaml_free_objects(objects, count);
     registry->records = records;
-    registry->count = count;
+    registry->count = record_count;
     return 0;
 }
 
