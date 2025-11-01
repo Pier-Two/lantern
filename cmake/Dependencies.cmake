@@ -168,5 +168,6 @@ ${_lantern_ignore_block})
             lantern_snappy_c
             libp2p_unified
             protocol_gossipsub
+            protocol_ping
     )
 endfunction()

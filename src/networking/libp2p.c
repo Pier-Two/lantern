@@ -16,6 +16,7 @@
 #include "lantern/networking/enr.h"
 
 #include "libp2p/host.h"
+#include "libp2p/log.h"
 #include "libp2p/host_builder.h"
 #include "libp2p/peerstore.h"
 #include "multiformats/multiaddr/multiaddr.h"
@@ -125,6 +126,29 @@ int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct la
     }
 
     lantern_libp2p_host_reset(state);
+
+    {
+        enum LanternLogLevel llevel = lantern_log_get_level();
+        libp2p_log_level_t target = LIBP2P_LOG_ERROR;
+        /* Reduce libp2p chatter (identify push retries, etc.) unless Lantern runs at TRACE. */
+        switch (llevel) {
+        case LANTERN_LOG_LEVEL_TRACE:
+            target = LIBP2P_LOG_TRACE;
+            break;
+        case LANTERN_LOG_LEVEL_DEBUG:
+            target = LIBP2P_LOG_INFO;
+            break;
+        case LANTERN_LOG_LEVEL_INFO:
+            target = LIBP2P_LOG_WARN;
+            break;
+        case LANTERN_LOG_LEVEL_WARN:
+        case LANTERN_LOG_LEVEL_ERROR:
+        default:
+            target = LIBP2P_LOG_ERROR;
+            break;
+        }
+        libp2p_log_set_level(target);
+    }
 
     libp2p_host_builder_t *builder = libp2p_host_builder_new();
     if (!builder) {
@@ -322,7 +346,7 @@ static int extract_ipv6_multiaddr(
     return 0;
 }
 
-static int format_peer_multiaddr(
+int lantern_libp2p_enr_to_multiaddr(
     const struct lantern_enr_record *record,
     char *buffer,
     size_t buffer_len,
@@ -384,7 +408,7 @@ int lantern_libp2p_host_add_enr_peer(
     }
     peer_id_t peer_id = {0};
     char multiaddr[256];
-    if (format_peer_multiaddr(record, multiaddr, sizeof(multiaddr), &peer_id) != 0) {
+    if (lantern_libp2p_enr_to_multiaddr(record, multiaddr, sizeof(multiaddr), &peer_id) != 0) {
         return -1;
     }
 

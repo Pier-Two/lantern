@@ -12,9 +12,19 @@
 #include "lantern/support/strings.h"
 #include "lantern/support/log.h"
 #include "lantern/support/secure_mem.h"
+#include "lantern/networking/messages.h"
+#include "lantern/encoding/snappy.h"
 #include "libp2p/events.h"
+#include "libp2p/errors.h"
+#include "libp2p/protocol_dial.h"
+#include "libp2p/stream.h"
+#include "libp2p/host.h"
+#include "protocol/gossipsub/gossipsub.h"
+#include "protocol/ping/protocol_ping.h"
 #include "peer_id/peer_id.h"
+#include "multiformats/unsigned_varint/unsigned_varint.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <pthread.h>
@@ -22,7 +32,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <sys/time.h>
+#endif
+
+#define LANTERN_PEER_DIAL_INTERVAL_SECONDS 5u
+#define LANTERN_BLOCKS_REQUEST_BACKOFF_BASE_MS 5000u
+#define LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_MS 300000u
+#define LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_FAILURES 8u
+
+enum lantern_blocks_request_outcome {
+    LANTERN_BLOCKS_REQUEST_SUCCESS = 0,
+    LANTERN_BLOCKS_REQUEST_FAILED,
+    LANTERN_BLOCKS_REQUEST_ABORTED
+};
+
+static uint64_t monotonic_millis(void);
+static uint64_t blocks_request_backoff_ms(uint32_t failures);
 static int set_owned_string(char **dest, const char *value);
 static int copy_genesis_paths(struct lantern_genesis_paths *paths, const struct lantern_client_options *options);
 static void reset_genesis_paths(struct lantern_genesis_paths *paths);
@@ -46,20 +76,70 @@ static int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *o
 static void format_root_hex(const LanternRoot *root, char *out, size_t out_len);
 static int reqresp_build_status(void *context, LanternStatusMessage *out_status);
 static int reqresp_handle_status(void *context, const LanternStatusMessage *peer_status, const char *peer_id);
+static void lantern_client_on_peer_status(
+    struct lantern_client *client,
+    const LanternStatusMessage *peer_status,
+    const char *peer_id);
+static void lantern_client_on_blocks_request_complete(
+    struct lantern_client *client,
+    const char *peer_id,
+    enum lantern_blocks_request_outcome outcome);
 static int reqresp_collect_blocks(
     void *context,
     const LanternRoot *roots,
     size_t root_count,
     LanternBlocksByRootResponse *out_blocks);
+static bool listen_address_is_unspecified(const char *addr);
+static void adopt_validator_listen_address(struct lantern_client *client);
 static int initialize_fork_choice(struct lantern_client *client);
 static int restore_persisted_blocks(struct lantern_client *client);
 static void connection_events_cb(const libp2p_event_t *evt, void *user_data);
+static const char *connection_reason_text(int reason);
 static void connection_counter_update(
     struct lantern_client *client,
     int delta,
     const peer_id_t *peer,
-    bool inbound);
+    bool inbound,
+    int reason);
 static void connection_counter_reset(struct lantern_client *client);
+static int start_peer_dialer(struct lantern_client *client);
+static void stop_peer_dialer(struct lantern_client *client);
+static void *peer_dialer_thread(void *arg);
+static void peer_dialer_attempt(struct lantern_client *client);
+static void peer_dialer_sleep(struct lantern_client *client, unsigned seconds);
+static bool lantern_root_is_zero(const LanternRoot *root);
+static int lantern_client_schedule_blocks_request(
+    struct lantern_client *client,
+    const char *peer_id_text,
+    const LanternRoot *root,
+    bool use_legacy);
+static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int err);
+static void *block_request_worker(void *arg);
+static int stream_write_all(libp2p_stream_t *stream, const uint8_t *data, size_t length);
+static int read_length_prefixed_chunk(libp2p_stream_t *stream, uint8_t **out_data, size_t *out_len, ssize_t *out_err);
+
+struct lantern_peer_status_entry {
+    char peer_id[128];
+    LanternStatusMessage status;
+    bool has_status;
+    bool requested_head;
+    uint64_t last_blocks_request_ms;
+    uint32_t consecutive_blocks_failures;
+};
+
+struct block_request_ctx {
+    struct lantern_client *client;
+    peer_id_t peer_id;
+    char peer_text[128];
+    LanternRoot root;
+    const char *protocol_id;
+    bool using_legacy;
+};
+
+struct block_request_worker_args {
+    struct block_request_ctx *ctx;
+    libp2p_stream_t *stream;
+};
 
 struct lantern_persisted_block {
     LanternSignedBlock block;
@@ -71,6 +151,43 @@ struct lantern_persisted_block_list {
     size_t length;
     size_t capacity;
 };
+
+static uint64_t monotonic_millis(void) {
+#if defined(_WIN32)
+    LARGE_INTEGER freq = {0};
+    LARGE_INTEGER counter = {0};
+    if (!QueryPerformanceFrequency(&freq) || !QueryPerformanceCounter(&counter) || freq.QuadPart == 0) {
+        return 0;
+    }
+    return (uint64_t)((counter.QuadPart * 1000ULL) / (uint64_t)freq.QuadPart);
+#elif defined(CLOCK_MONOTONIC)
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
+#else
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) != 0) {
+        return 0;
+    }
+    return (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)(tv.tv_usec / 1000ULL);
+#endif
+}
+
+static uint64_t blocks_request_backoff_ms(uint32_t failures) {
+    if (failures == 0) {
+        return 0;
+    }
+    if (failures > LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_FAILURES) {
+        failures = LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_FAILURES;
+    }
+    uint64_t backoff = (uint64_t)LANTERN_BLOCKS_REQUEST_BACKOFF_BASE_MS << (failures - 1u);
+    if (backoff > LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_MS) {
+        return LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_MS;
+    }
+    return backoff;
+}
 
 static void connection_counter_reset(struct lantern_client *client) {
     if (!client) {
@@ -92,7 +209,8 @@ static void connection_counter_update(
     struct lantern_client *client,
     int delta,
     const peer_id_t *peer,
-    bool inbound) {
+    bool inbound,
+    int reason) {
     if (!client || !client->connection_lock_initialized) {
         return;
     }
@@ -129,10 +247,211 @@ static void connection_counter_update(
             .validator = client->node_id,
             .peer = peer_text[0] ? peer_text : NULL,
         },
-        "connection %s inbound=%s total=%zu",
+        "connection %s inbound=%s total=%zu reason=%d (%s)",
         delta > 0 ? "opened" : "closed",
         inbound ? "true" : "false",
-        total);
+        total,
+        reason,
+        connection_reason_text(reason));
+}
+
+static void peer_dialer_sleep(struct lantern_client *client, unsigned seconds) {
+    if (!client || seconds == 0u) {
+        return;
+    }
+    struct timespec req = {.tv_sec = 1, .tv_nsec = 0};
+    for (unsigned i = 0; i < seconds; ++i) {
+        if (__atomic_load_n(&client->dialer_stop_flag, __ATOMIC_RELAXED) != 0) {
+            break;
+        }
+        (void)nanosleep(&req, NULL);
+    }
+}
+
+static bool listen_address_is_unspecified(const char *addr) {
+    if (!addr) {
+        return false;
+    }
+    if (strncmp(addr, "/ip4/0.0.0.0/", strlen("/ip4/0.0.0.0/")) == 0) {
+        return true;
+    }
+    if (strncmp(addr, "/ip6/::/", strlen("/ip6/::/")) == 0) {
+        return true;
+    }
+    return false;
+}
+
+static void adopt_validator_listen_address(struct lantern_client *client) {
+    if (!client || !client->assigned_validators) {
+        return;
+    }
+    const char *current = client->listen_address;
+    if (!listen_address_is_unspecified(current)) {
+        return;
+    }
+    const struct lantern_validator_config_enr *enr = &client->assigned_validators->enr;
+    if (!enr->ip || *enr->ip == '\0' || enr->quic_port == 0) {
+        return;
+    }
+    const char *fmt = strchr(enr->ip, ':') ? "/ip6/%s/udp/%u/quic_v1" : "/ip4/%s/udp/%u/quic_v1";
+    char derived[128];
+    int written = snprintf(derived, sizeof(derived), fmt, enr->ip, (unsigned)enr->quic_port);
+    if (written <= 0 || (size_t)written >= sizeof(derived)) {
+        lantern_log_warn(
+            "network",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to derive listen address from ENR ip=%s port=%u",
+            enr->ip,
+            (unsigned)enr->quic_port);
+        return;
+    }
+    if (set_owned_string(&client->listen_address, derived) != 0) {
+        lantern_log_warn(
+            "network",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to apply derived listen address %s",
+            derived);
+        return;
+    }
+    lantern_log_info(
+        "network",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "using validator ENR listen multiaddr %s",
+        client->listen_address);
+}
+
+static void peer_dialer_attempt(struct lantern_client *client) {
+    if (!client || !client->network.host) {
+        return;
+    }
+
+    size_t connected = client->connected_peers;
+    if (client->connection_lock_initialized) {
+        if (pthread_mutex_lock(&client->connection_lock) == 0) {
+            connected = client->connected_peers;
+            pthread_mutex_unlock(&client->connection_lock);
+        }
+    }
+
+    if (connected > 0) {
+        return;
+    }
+
+    const struct lantern_enr_record_list *enrs = &client->genesis.enrs;
+    if (!enrs || enrs->count == 0) {
+        return;
+    }
+
+    peer_id_t *local_peer = NULL;
+    if (libp2p_host_get_peer_id(client->network.host, &local_peer) != 0) {
+        local_peer = NULL;
+    }
+
+    for (size_t idx = 0; idx < enrs->count; ++idx) {
+        if (__atomic_load_n(&client->dialer_stop_flag, __ATOMIC_RELAXED) != 0) {
+            break;
+        }
+
+        const struct lantern_enr_record *record = &enrs->records[idx];
+        if (!record || !record->encoded) {
+            continue;
+        }
+
+        char multiaddr[256];
+        peer_id_t peer_id = {0};
+        if (lantern_libp2p_enr_to_multiaddr(record, multiaddr, sizeof(multiaddr), &peer_id) != 0) {
+            continue;
+        }
+
+        bool is_self = false;
+        if (local_peer) {
+            int eq = peer_id_equals(local_peer, &peer_id);
+            if (eq == 1) {
+                is_self = true;
+            }
+        }
+
+        if (!is_self) {
+            (void)lantern_libp2p_host_add_enr_peer(&client->network, record, LANTERN_LIBP2P_DEFAULT_PEER_TTL_MS);
+
+            char peer_text[128];
+            if (peer_id_to_string(&peer_id, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text)) < 0) {
+                peer_text[0] = '\0';
+            }
+
+            bool already_added = false;
+            if (peer_text[0]) {
+                already_added = string_list_contains(&client->dialer_peers, peer_text);
+            }
+
+            if (client->gossip_running && client->gossip.gossipsub) {
+                if (!already_added) {
+                    libp2p_err_t perr = libp2p_gossipsub_peering_add(client->gossip.gossipsub, &peer_id);
+                    if (perr == LIBP2P_ERR_OK) {
+                        if (peer_text[0]) {
+                            (void)lantern_string_list_append(&client->dialer_peers, peer_text);
+                        }
+                        lantern_log_trace(
+                            "network",
+                            &(const struct lantern_log_metadata){
+                                .validator = client->node_id,
+                                .peer = peer_text[0] ? peer_text : record->encoded},
+                            "dialer added peer to gossipsub peering");
+                    }
+                }
+            }
+        }
+
+        peer_id_destroy(&peer_id);
+    }
+
+    if (local_peer) {
+        peer_id_destroy(local_peer);
+        free(local_peer);
+    }
+}
+
+static void *peer_dialer_thread(void *arg) {
+    struct lantern_client *client = (struct lantern_client *)arg;
+    if (!client) {
+        return NULL;
+    }
+
+    while (__atomic_load_n(&client->dialer_stop_flag, __ATOMIC_RELAXED) == 0) {
+        peer_dialer_attempt(client);
+        peer_dialer_sleep(client, LANTERN_PEER_DIAL_INTERVAL_SECONDS);
+    }
+    return NULL;
+}
+
+static int start_peer_dialer(struct lantern_client *client) {
+    if (!client) {
+        return -1;
+    }
+    if (client->dialer_thread_started) {
+        return 0;
+    }
+    __atomic_store_n(&client->dialer_stop_flag, 0, __ATOMIC_RELAXED);
+    int rc = pthread_create(&client->dialer_thread, NULL, peer_dialer_thread, client);
+    if (rc != 0) {
+        __atomic_store_n(&client->dialer_stop_flag, 1, __ATOMIC_RELAXED);
+        return -1;
+    }
+    client->dialer_thread_started = true;
+    return 0;
+}
+
+static void stop_peer_dialer(struct lantern_client *client) {
+    if (!client) {
+        return;
+    }
+    if (!client->dialer_thread_started) {
+        __atomic_store_n(&client->dialer_stop_flag, 1, __ATOMIC_RELAXED);
+        return;
+    }
+    __atomic_store_n(&client->dialer_stop_flag, 1, __ATOMIC_RELAXED);
+    (void)pthread_join(client->dialer_thread, NULL);
+    client->dialer_thread_started = false;
 }
 
 static void connection_events_cb(const libp2p_event_t *evt, void *user_data) {
@@ -142,13 +461,102 @@ static void connection_events_cb(const libp2p_event_t *evt, void *user_data) {
     struct lantern_client *client = (struct lantern_client *)user_data;
     switch (evt->kind) {
     case LIBP2P_EVT_CONN_OPENED:
-        connection_counter_update(client, 1, evt->u.conn_opened.peer, evt->u.conn_opened.inbound);
+        connection_counter_update(client, 1, evt->u.conn_opened.peer, evt->u.conn_opened.inbound, 0);
         break;
     case LIBP2P_EVT_CONN_CLOSED:
-        connection_counter_update(client, -1, evt->u.conn_closed.peer, false);
+        connection_counter_update(client, -1, evt->u.conn_closed.peer, false, evt->u.conn_closed.reason);
         break;
+    case LIBP2P_EVT_DIALING: {
+        char peer_text[128];
+        peer_text[0] = '\0';
+        if (evt->u.dialing.peer) {
+            if (peer_id_to_string(evt->u.dialing.peer, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text)) < 0) {
+                peer_text[0] = '\0';
+            }
+        }
+        lantern_log_debug(
+            "network",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = peer_text[0] ? peer_text : NULL,
+            },
+            "dialing peer addr=%s",
+            evt->u.dialing.addr ? evt->u.dialing.addr : "-");
+        break;
+    }
+    case LIBP2P_EVT_OUTGOING_CONNECTION_ERROR: {
+        char peer_text[128];
+        peer_text[0] = '\0';
+        if (evt->u.outgoing_conn_error.peer) {
+            if (peer_id_to_string(evt->u.outgoing_conn_error.peer, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text)) < 0) {
+                peer_text[0] = '\0';
+            }
+        }
+        lantern_log_warn(
+            "network",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = peer_text[0] ? peer_text : NULL,
+            },
+            "outgoing connection error code=%d (%s) msg=%s",
+            evt->u.outgoing_conn_error.code,
+            connection_reason_text(evt->u.outgoing_conn_error.code),
+            evt->u.outgoing_conn_error.msg ? evt->u.outgoing_conn_error.msg : "-");
+        break;
+    }
+    case LIBP2P_EVT_INCOMING_CONNECTION_ERROR: {
+        char peer_text[128];
+        peer_text[0] = '\0';
+        if (evt->u.incoming_conn_error.peer) {
+            if (peer_id_to_string(evt->u.incoming_conn_error.peer, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text)) < 0) {
+                peer_text[0] = '\0';
+            }
+        }
+        lantern_log_warn(
+            "network",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = peer_text[0] ? peer_text : NULL,
+            },
+            "incoming connection error code=%d (%s) msg=%s",
+            evt->u.incoming_conn_error.code,
+            connection_reason_text(evt->u.incoming_conn_error.code),
+            evt->u.incoming_conn_error.msg ? evt->u.incoming_conn_error.msg : "-");
+        break;
+    }
     default:
         break;
+    }
+}
+
+static const char *connection_reason_text(int reason) {
+    switch (reason) {
+    case 0:
+        return "ok";
+    case LIBP2P_ERR_NULL_PTR:
+        return "null_ptr";
+    case LIBP2P_ERR_AGAIN:
+        return "again";
+    case LIBP2P_ERR_EOF:
+        return "eof";
+    case LIBP2P_ERR_TIMEOUT:
+        return "timeout";
+    case LIBP2P_ERR_CLOSED:
+        return "closed";
+    case LIBP2P_ERR_RESET:
+        return "reset";
+    case LIBP2P_ERR_INTERNAL:
+        return "internal";
+    case LIBP2P_ERR_PROTO_NEGOTIATION_FAILED:
+        return "protocol_negotiation_failed";
+    case LIBP2P_ERR_MSG_TOO_LARGE:
+        return "msg_too_large";
+    case LIBP2P_ERR_UNSUPPORTED:
+        return "unsupported";
+    case LIBP2P_ERR_CANCELED:
+        return "canceled";
+    default:
+        return "unknown";
     }
 }
 
@@ -364,9 +772,12 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
 
     memset(client, 0, sizeof(*client));
     lantern_string_list_init(&client->bootnodes);
+    lantern_string_list_init(&client->dialer_peers);
     lantern_genesis_artifacts_init(&client->genesis);
     lantern_enr_record_init(&client->local_enr);
     lantern_libp2p_host_init(&client->network);
+    client->ping_server = NULL;
+    client->ping_running = false;
     lantern_gossipsub_service_init(&client->gossip);
     lantern_reqresp_service_init(&client->reqresp);
     client->reqresp_running = false;
@@ -377,10 +788,12 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     lantern_metrics_server_init(&client->metrics_server);
     client->metrics_running = false;
     lantern_http_server_init(&client->http_server);
-    client->http_running = false;
-    lantern_state_init(&client->state);
-    lantern_fork_choice_init(&client->fork_choice);
-    client->has_fork_choice = false;
+   client->http_running = false;
+   lantern_state_init(&client->state);
+   lantern_fork_choice_init(&client->fork_choice);
+   client->has_fork_choice = false;
+    client->dialer_thread_started = false;
+    client->dialer_stop_flag = 1;
 
     if (set_owned_string(&client->data_dir, options->data_dir) != 0) {
         goto error;
@@ -394,6 +807,16 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     }
     if (set_owned_string(&client->devnet, options->devnet) != 0) {
         goto error;
+    }
+    if (!client->status_lock_initialized) {
+        if (pthread_mutex_init(&client->status_lock, NULL) != 0) {
+            lantern_log_error(
+                "client",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "failed to initialize peer status lock");
+            goto error;
+        }
+        client->status_lock_initialized = true;
     }
     client->http_port = options->http_port;
     client->metrics_port = options->metrics_port;
@@ -501,6 +924,7 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
             client->node_id);
         goto error;
     }
+    adopt_validator_listen_address(client);
     if (compute_local_validator_assignment(client) != 0) {
         lantern_log_error(
             "client",
@@ -580,6 +1004,24 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
         goto error;
     }
 
+    {
+        libp2p_protocol_server_t *ping_server = NULL;
+        if (libp2p_ping_service_start(client->network.host, &ping_server) != 0) {
+            lantern_log_error(
+                "network",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "failed to start libp2p ping service");
+            memset(node_key, 0, sizeof(node_key));
+            goto error;
+        }
+        client->ping_server = ping_server;
+        client->ping_running = true;
+        lantern_log_info(
+            "network",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "libp2p ping service started");
+    }
+
     struct lantern_gossipsub_config gossip_cfg = {
         .host = client->network.host,
         .devnet = client->devnet,
@@ -645,6 +1087,13 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
         client->assigned_validators->enr.sequence);
     memset(node_key, 0, sizeof(node_key));
 
+    if (start_peer_dialer(client) != 0) {
+        lantern_log_warn(
+            "network",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to start peer dialer thread");
+    }
+
     struct lantern_http_server_config http_config;
     memset(&http_config, 0, sizeof(http_config));
     http_config.port = client->http_port;
@@ -691,6 +1140,8 @@ void lantern_shutdown(struct lantern_client *client) {
         return;
     }
 
+    stop_peer_dialer(client);
+
     lantern_metrics_server_stop(&client->metrics_server);
     lantern_metrics_server_init(&client->metrics_server);
     client->metrics_running = false;
@@ -704,12 +1155,50 @@ void lantern_shutdown(struct lantern_client *client) {
     }
     client->connection_subscription = NULL;
 
+    if (client->network.host && client->ping_running && client->ping_server) {
+        if (libp2p_ping_service_stop(client->network.host, client->ping_server) != 0) {
+            lantern_log_warn(
+                "network",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "failed to stop libp2p ping service cleanly");
+        } else {
+            lantern_log_info(
+                "network",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "shutdown: libp2p ping service stopped");
+        }
+    }
+    client->ping_server = NULL;
+    client->ping_running = false;
+
     if (client->connection_lock_initialized) {
         connection_counter_reset(client);
         pthread_mutex_destroy(&client->connection_lock);
         client->connection_lock_initialized = false;
     } else {
         client->connected_peers = 0;
+    }
+
+    if (client->status_lock_initialized) {
+        if (pthread_mutex_lock(&client->status_lock) == 0) {
+            free(client->peer_status_entries);
+            client->peer_status_entries = NULL;
+            client->peer_status_count = 0;
+            client->peer_status_capacity = 0;
+            pthread_mutex_unlock(&client->status_lock);
+        } else {
+            free(client->peer_status_entries);
+            client->peer_status_entries = NULL;
+            client->peer_status_count = 0;
+            client->peer_status_capacity = 0;
+        }
+        pthread_mutex_destroy(&client->status_lock);
+        client->status_lock_initialized = false;
+    } else {
+        free(client->peer_status_entries);
+        client->peer_status_entries = NULL;
+        client->peer_status_count = 0;
+        client->peer_status_capacity = 0;
     }
 
     if (client->validator_lock_initialized) {
@@ -728,6 +1217,7 @@ void lantern_shutdown(struct lantern_client *client) {
         client->validator_enabled = NULL;
     }
 
+    lantern_string_list_reset(&client->dialer_peers);
     lantern_string_list_reset(&client->bootnodes);
     free(client->data_dir);
     client->data_dir = NULL;
@@ -1199,6 +1689,18 @@ static void format_root_hex(const LanternRoot *root, char *out, size_t out_len) 
     }
 }
 
+static bool lantern_root_is_zero(const LanternRoot *root) {
+    if (!root) {
+        return true;
+    }
+    for (size_t i = 0; i < LANTERN_ROOT_SIZE; ++i) {
+        if (root->bytes[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static int reqresp_build_status(void *context, LanternStatusMessage *out_status) {
     if (!context || !out_status) {
         return -1;
@@ -1218,10 +1720,10 @@ static int reqresp_build_status(void *context, LanternStatusMessage *out_status)
 }
 
 static int reqresp_handle_status(void *context, const LanternStatusMessage *peer_status, const char *peer_id) {
-    (void)context;
-    if (!peer_status) {
+    if (!context || !peer_status) {
         return -1;
     }
+    struct lantern_client *client = context;
     char head_hex[2 * LANTERN_ROOT_SIZE + 3];
     char finalized_hex[2 * LANTERN_ROOT_SIZE + 3];
     format_root_hex(&peer_status->head.root, head_hex, sizeof(head_hex));
@@ -1229,12 +1731,618 @@ static int reqresp_handle_status(void *context, const LanternStatusMessage *peer
 
     lantern_log_info(
         "network",
-        &(const struct lantern_log_metadata){.peer = peer_id},
+        &(const struct lantern_log_metadata){
+            .validator = client->node_id,
+            .peer = peer_id},
         "peer status head_slot=%" PRIu64 " head_root=%s finalized_slot=%" PRIu64 " finalized_root=%s",
         peer_status->head.slot,
         head_hex[0] ? head_hex : "0x0",
         peer_status->finalized.slot,
         finalized_hex[0] ? finalized_hex : "0x0");
+    lantern_client_on_peer_status(client, peer_status, peer_id);
+    return 0;
+}
+
+static void lantern_client_on_peer_status(
+    struct lantern_client *client,
+    const LanternStatusMessage *peer_status,
+    const char *peer_id) {
+    if (!client || !peer_status || !client->status_lock_initialized) {
+        return;
+    }
+    if (!peer_id || *peer_id == '\0') {
+        return;
+    }
+    if (lantern_root_is_zero(&peer_status->head.root)) {
+        return;
+    }
+
+    char head_hex[2 * LANTERN_ROOT_SIZE + 3];
+    format_root_hex(&peer_status->head.root, head_hex, sizeof(head_hex));
+
+    const size_t peer_cap = sizeof(((struct lantern_peer_status_entry *)0)->peer_id);
+    char peer_copy[sizeof(((struct lantern_peer_status_entry *)0)->peer_id)];
+    memset(peer_copy, 0, sizeof(peer_copy));
+    strncpy(peer_copy, peer_id, peer_cap - 1);
+
+    LanternRoot request_root = peer_status->head.root;
+    bool should_request = false;
+
+    if (pthread_mutex_lock(&client->status_lock) != 0) {
+        return;
+    }
+
+    struct lantern_peer_status_entry *entry = NULL;
+    for (size_t i = 0; i < client->peer_status_count; ++i) {
+        if (strncmp(client->peer_status_entries[i].peer_id, peer_copy, peer_cap) == 0) {
+            entry = &client->peer_status_entries[i];
+            break;
+        }
+    }
+
+    if (!entry) {
+        if (client->peer_status_count == client->peer_status_capacity) {
+            size_t new_capacity = client->peer_status_capacity == 0 ? 4 : client->peer_status_capacity * 2;
+            if (new_capacity > (SIZE_MAX / sizeof(*client->peer_status_entries))) {
+                pthread_mutex_unlock(&client->status_lock);
+                return;
+            }
+            struct lantern_peer_status_entry *grown = realloc(
+                client->peer_status_entries,
+                new_capacity * sizeof(*client->peer_status_entries));
+            if (!grown) {
+                pthread_mutex_unlock(&client->status_lock);
+                return;
+            }
+            memset(
+                grown + client->peer_status_capacity,
+                0,
+                (new_capacity - client->peer_status_capacity) * sizeof(*grown));
+            client->peer_status_entries = grown;
+            client->peer_status_capacity = new_capacity;
+        }
+        entry = &client->peer_status_entries[client->peer_status_count++];
+        memset(entry, 0, sizeof(*entry));
+        memcpy(entry->peer_id, peer_copy, peer_cap);
+    }
+
+    entry->status = *peer_status;
+    entry->has_status = true;
+    if (!entry->requested_head) {
+        uint64_t now_ms = monotonic_millis();
+        uint64_t backoff_ms = blocks_request_backoff_ms(entry->consecutive_blocks_failures);
+        bool within_backoff = entry->last_blocks_request_ms != 0
+            && now_ms < entry->last_blocks_request_ms + backoff_ms;
+        if (!within_backoff) {
+            entry->requested_head = true;
+            entry->last_blocks_request_ms = now_ms;
+            should_request = true;
+        } else {
+            uint64_t resume_ms = entry->last_blocks_request_ms + backoff_ms;
+            uint64_t remaining_ms = resume_ms > now_ms ? (resume_ms - now_ms) : 0;
+            lantern_log_debug(
+                "reqresp",
+                &(const struct lantern_log_metadata){
+                    .validator = client->node_id,
+                    .peer = peer_copy},
+                "backing off blocks_by_root head=%s failures=%u remaining_ms=%" PRIu64,
+                head_hex[0] ? head_hex : "0x0",
+                entry->consecutive_blocks_failures,
+                remaining_ms);
+        }
+    }
+
+    pthread_mutex_unlock(&client->status_lock);
+
+    if (should_request) {
+        if (lantern_client_schedule_blocks_request(client, peer_copy, &request_root, false) != 0) {
+            lantern_client_on_blocks_request_complete(
+                client,
+                peer_copy,
+                LANTERN_BLOCKS_REQUEST_ABORTED);
+        }
+    }
+}
+
+static void lantern_client_on_blocks_request_complete(
+    struct lantern_client *client,
+    const char *peer_id,
+    enum lantern_blocks_request_outcome outcome) {
+    if (!client || !peer_id || !client->status_lock_initialized) {
+        return;
+    }
+    const size_t peer_cap = sizeof(((struct lantern_peer_status_entry *)0)->peer_id);
+    if (pthread_mutex_lock(&client->status_lock) != 0) {
+        return;
+    }
+    for (size_t i = 0; i < client->peer_status_count; ++i) {
+        struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
+        if (strncmp(entry->peer_id, peer_id, peer_cap) == 0) {
+            entry->requested_head = false;
+            switch (outcome) {
+            case LANTERN_BLOCKS_REQUEST_SUCCESS:
+                entry->consecutive_blocks_failures = 0;
+                break;
+            case LANTERN_BLOCKS_REQUEST_FAILED:
+                if (entry->consecutive_blocks_failures < UINT32_MAX) {
+                    entry->consecutive_blocks_failures += 1;
+                }
+                break;
+            case LANTERN_BLOCKS_REQUEST_ABORTED:
+                entry->last_blocks_request_ms = 0;
+                break;
+            default:
+                break;
+            }
+            if (outcome != LANTERN_BLOCKS_REQUEST_ABORTED && entry->last_blocks_request_ms == 0) {
+                entry->last_blocks_request_ms = monotonic_millis();
+            }
+            break;
+        }
+    }
+    pthread_mutex_unlock(&client->status_lock);
+}
+
+static int stream_write_all(libp2p_stream_t *stream, const uint8_t *data, size_t length) {
+    if (!stream || (!data && length > 0)) {
+        return -1;
+    }
+    size_t offset = 0;
+    while (offset < length) {
+        ssize_t written = libp2p_stream_write(stream, data + offset, length - offset);
+        if (written > 0) {
+            offset += (size_t)written;
+            continue;
+        }
+        if (written == (ssize_t)LIBP2P_ERR_AGAIN || written == (ssize_t)LIBP2P_ERR_TIMEOUT) {
+            continue;
+        }
+        return -1;
+    }
+    return 0;
+}
+
+static int read_length_prefixed_chunk(libp2p_stream_t *stream, uint8_t **out_data, size_t *out_len, ssize_t *out_err) {
+    if (!stream || !out_data || !out_len) {
+        if (out_err) {
+            *out_err = LIBP2P_ERR_NULL_PTR;
+        }
+        return -1;
+    }
+    uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
+    size_t header_used = 0;
+    uint64_t payload_len = 0;
+    ssize_t last_err = 0;
+
+    while (header_used < sizeof(header)) {
+        (void)libp2p_stream_set_deadline(stream, LANTERN_REQRESP_STALL_TIMEOUT_MS);
+        ssize_t n = libp2p_stream_read(stream, &header[header_used], 1);
+        if (n == 1) {
+            header_used += 1;
+            size_t consumed = 0;
+            if (unsigned_varint_decode(header, header_used, &payload_len, &consumed) == UNSIGNED_VARINT_OK) {
+                break;
+            }
+            continue;
+        }
+        if (n == (ssize_t)LIBP2P_ERR_AGAIN) {
+            continue;
+        }
+        if (n == 0 || n == (ssize_t)LIBP2P_ERR_EOF || n == (ssize_t)LIBP2P_ERR_CLOSED || n == (ssize_t)LIBP2P_ERR_RESET) {
+            last_err = n == 0 ? (ssize_t)LIBP2P_ERR_EOF : n;
+            break;
+        }
+        last_err = n;
+        break;
+    }
+    (void)libp2p_stream_set_deadline(stream, 0);
+
+    if (payload_len == 0 || payload_len > LANTERN_REQRESP_MAX_CHUNK_BYTES || payload_len > SIZE_MAX) {
+        last_err = LIBP2P_ERR_MSG_TOO_LARGE;
+    }
+
+    if (last_err != 0) {
+        if (out_err) {
+            *out_err = last_err;
+        }
+        return -1;
+    }
+
+    size_t payload_size = (size_t)payload_len;
+    uint8_t *buffer = (uint8_t *)malloc(payload_size);
+    if (!buffer) {
+        if (out_err) {
+            *out_err = -ENOMEM;
+        }
+        return -1;
+    }
+
+    size_t collected = 0;
+    while (collected < payload_size) {
+        (void)libp2p_stream_set_deadline(stream, LANTERN_REQRESP_STALL_TIMEOUT_MS);
+        ssize_t n = libp2p_stream_read(stream, buffer + collected, payload_size - collected);
+        if (n > 0) {
+            collected += (size_t)n;
+            continue;
+        }
+        if (n == (ssize_t)LIBP2P_ERR_AGAIN) {
+            continue;
+        }
+        (void)libp2p_stream_set_deadline(stream, 0);
+        free(buffer);
+        last_err = n == 0 ? (ssize_t)LIBP2P_ERR_EOF : n;
+        if (out_err) {
+            *out_err = last_err;
+        }
+        return -1;
+    }
+    (void)libp2p_stream_set_deadline(stream, 0);
+
+    *out_data = buffer;
+    *out_len = payload_size;
+    if (out_err) {
+        *out_err = 0;
+    }
+    return 0;
+}
+
+static void block_request_ctx_free(struct block_request_ctx *ctx) {
+    if (!ctx) {
+        return;
+    }
+    peer_id_destroy(&ctx->peer_id);
+    free(ctx);
+}
+
+static void *block_request_worker(void *arg) {
+    struct block_request_worker_args *worker = (struct block_request_worker_args *)arg;
+    if (!worker) {
+        return NULL;
+    }
+    struct block_request_ctx *ctx = worker->ctx;
+    libp2p_stream_t *stream = worker->stream;
+    free(worker);
+    if (!ctx || !stream) {
+        if (stream) {
+            libp2p_stream_close(stream);
+            libp2p_stream_free(stream);
+        }
+        block_request_ctx_free(ctx);
+        return NULL;
+    }
+
+    struct lantern_log_metadata meta = {
+        .validator = ctx->client ? ctx->client->node_id : NULL,
+        .peer = ctx->peer_text[0] ? ctx->peer_text : NULL,
+    };
+
+    char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    format_root_hex(&ctx->root, root_hex, sizeof(root_hex));
+
+    LanternBlocksByRootRequest request;
+    lantern_blocks_by_root_request_init(&request);
+
+    LanternBlocksByRootResponse response_msg;
+    lantern_blocks_by_root_response_init(&response_msg);
+
+    uint8_t *payload = NULL;
+    uint8_t *response = NULL;
+    bool request_success = false;
+    bool schedule_legacy = false;
+
+    if (lantern_root_list_resize(&request.roots, 1) != 0) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to size blocks_by_root request");
+        schedule_legacy = !ctx->using_legacy;
+        goto cleanup;
+    }
+    request.roots.items[0] = ctx->root;
+
+    size_t raw_size = sizeof(uint32_t) + LANTERN_ROOT_SIZE;
+    size_t max_payload = 0;
+    if (lantern_snappy_max_compressed_size(raw_size, &max_payload) != LANTERN_SNAPPY_OK) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to compute snappy size for blocks_by_root request");
+        schedule_legacy = !ctx->using_legacy;
+        goto cleanup;
+    }
+
+    payload = (uint8_t *)malloc(max_payload);
+    if (!payload) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "out of memory building blocks_by_root request");
+        schedule_legacy = !ctx->using_legacy;
+        goto cleanup;
+    }
+
+    size_t payload_len = 0;
+    if (lantern_network_blocks_by_root_request_encode_snappy(&request, payload, max_payload, &payload_len) != 0
+        || payload_len == 0) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to encode blocks_by_root request");
+        schedule_legacy = !ctx->using_legacy;
+        goto cleanup;
+    }
+
+    uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
+    size_t header_len = 0;
+    if (unsigned_varint_encode(payload_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to encode blocks_by_root header length=%zu",
+            payload_len);
+        schedule_legacy = !ctx->using_legacy;
+        goto cleanup;
+    }
+
+    lantern_log_info(
+        "reqresp",
+        &meta,
+        "sending %s request root=%s bytes=%zu",
+        ctx->protocol_id,
+        root_hex[0] ? root_hex : "0x0",
+        payload_len);
+
+    if (stream_write_all(stream, header, header_len) != 0 || stream_write_all(stream, payload, payload_len) != 0) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to write blocks_by_root request");
+        schedule_legacy = !ctx->using_legacy;
+        goto cleanup;
+    }
+
+    size_t response_len = 0;
+    ssize_t read_err = 0;
+    if (read_length_prefixed_chunk(stream, &response, &response_len, &read_err) != 0) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to read blocks_by_root response err=%zd",
+            read_err);
+        schedule_legacy = !ctx->using_legacy;
+        goto cleanup;
+    }
+
+    if (lantern_network_blocks_by_root_response_decode_snappy(&response_msg, response, response_len) != 0) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to decode blocks_by_root response bytes=%zu",
+            response_len);
+        schedule_legacy = !ctx->using_legacy;
+        goto cleanup;
+    }
+
+    lantern_log_info(
+        "reqresp",
+        &meta,
+        "received %zu block(s) via %s",
+        response_msg.length,
+        ctx->protocol_id);
+
+    request_success = true;
+
+    for (size_t i = 0; i < response_msg.length; ++i) {
+        LanternRoot computed = {{0}};
+        if (lantern_hash_tree_root_block(&response_msg.blocks[i].message, &computed) != 0) {
+            lantern_log_warn(
+                "reqresp",
+                &meta,
+                "failed to hash block index=%zu slot=%" PRIu64,
+                i,
+                response_msg.blocks[i].message.slot);
+            continue;
+        }
+        char computed_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        format_root_hex(&computed, computed_hex, sizeof(computed_hex));
+        bool matches = memcmp(computed.bytes, ctx->root.bytes, LANTERN_ROOT_SIZE) == 0;
+        lantern_log_info(
+            "reqresp",
+            &meta,
+            "block index=%zu slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s attestations=%zu",
+            i,
+            response_msg.blocks[i].message.slot,
+            response_msg.blocks[i].message.proposer_index,
+            computed_hex[0] ? computed_hex : "0x0",
+            matches ? "true" : "false",
+            response_msg.blocks[i].message.body.attestations.length);
+    }
+
+cleanup:
+    lantern_blocks_by_root_response_reset(&response_msg);
+    free(response);
+    free(payload);
+    lantern_blocks_by_root_request_reset(&request);
+    libp2p_stream_close(stream);
+    libp2p_stream_free(stream);
+
+    if (!request_success) {
+        if (schedule_legacy && ctx->client) {
+            if (lantern_client_schedule_blocks_request(ctx->client, ctx->peer_text, &ctx->root, true) != 0) {
+                lantern_client_on_blocks_request_complete(
+                    ctx->client,
+                    ctx->peer_text,
+                    LANTERN_BLOCKS_REQUEST_FAILED);
+            }
+        } else if (ctx->client && ctx->using_legacy) {
+            lantern_client_on_blocks_request_complete(
+                ctx->client,
+                ctx->peer_text,
+                LANTERN_BLOCKS_REQUEST_FAILED);
+        }
+    } else if (ctx->client) {
+        lantern_client_on_blocks_request_complete(
+            ctx->client,
+            ctx->peer_text,
+            LANTERN_BLOCKS_REQUEST_SUCCESS);
+    }
+
+    block_request_ctx_free(ctx);
+    return NULL;
+}
+
+static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int err) {
+    struct block_request_ctx *ctx = (struct block_request_ctx *)user_data;
+    if (!ctx) {
+        if (stream) {
+            libp2p_stream_close(stream);
+            libp2p_stream_free(stream);
+        }
+        return;
+    }
+    struct lantern_log_metadata meta = {
+        .validator = ctx->client ? ctx->client->node_id : NULL,
+        .peer = ctx->peer_text[0] ? ctx->peer_text : NULL,
+    };
+    if (err != 0 || !stream) {
+        lantern_log_warn(
+            "reqresp",
+            &meta,
+            "failed to open %s stream err=%d",
+            ctx->protocol_id,
+            err);
+        bool attempted_fallback = false;
+        if (!ctx->using_legacy && ctx->client) {
+            attempted_fallback = (lantern_client_schedule_blocks_request(
+                                      ctx->client,
+                                      ctx->peer_text,
+                                      &ctx->root,
+                                      true)
+                                  == 0);
+            if (!attempted_fallback) {
+                lantern_client_on_blocks_request_complete(
+                    ctx->client,
+                    ctx->peer_text,
+                    LANTERN_BLOCKS_REQUEST_FAILED);
+            }
+        } else if (ctx->client) {
+            lantern_client_on_blocks_request_complete(
+                ctx->client,
+                ctx->peer_text,
+                LANTERN_BLOCKS_REQUEST_FAILED);
+        }
+        if (stream) {
+            libp2p_stream_close(stream);
+            libp2p_stream_free(stream);
+        }
+        block_request_ctx_free(ctx);
+        return;
+    }
+
+    struct block_request_worker_args *worker = (struct block_request_worker_args *)malloc(sizeof(*worker));
+    if (!worker) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to allocate worker for %s stream",
+            ctx->protocol_id);
+        libp2p_stream_close(stream);
+        libp2p_stream_free(stream);
+        if (ctx->client) {
+            lantern_client_on_blocks_request_complete(
+                ctx->client,
+                ctx->peer_text,
+                LANTERN_BLOCKS_REQUEST_FAILED);
+        }
+        block_request_ctx_free(ctx);
+        return;
+    }
+    worker->ctx = ctx;
+    worker->stream = stream;
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, block_request_worker, worker) != 0) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to spawn blocks_by_root worker");
+        free(worker);
+        libp2p_stream_close(stream);
+        libp2p_stream_free(stream);
+        if (ctx->client) {
+            lantern_client_on_blocks_request_complete(
+                ctx->client,
+                ctx->peer_text,
+                LANTERN_BLOCKS_REQUEST_FAILED);
+        }
+        block_request_ctx_free(ctx);
+        return;
+    }
+    pthread_detach(thread);
+}
+
+static int lantern_client_schedule_blocks_request(
+    struct lantern_client *client,
+    const char *peer_id_text,
+    const LanternRoot *root,
+    bool use_legacy) {
+    if (!client || !peer_id_text || !root || !client->network.host) {
+        return -1;
+    }
+    if (lantern_root_is_zero(root)) {
+        return -1;
+    }
+
+    struct block_request_ctx *ctx = (struct block_request_ctx *)calloc(1, sizeof(*ctx));
+    if (!ctx) {
+        return -1;
+    }
+    ctx->client = client;
+    ctx->root = *root;
+    ctx->protocol_id = use_legacy ? LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY : LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
+    ctx->using_legacy = use_legacy;
+    strncpy(ctx->peer_text, peer_id_text, sizeof(ctx->peer_text) - 1);
+    ctx->peer_text[sizeof(ctx->peer_text) - 1] = '\0';
+
+    if (peer_id_create_from_string(peer_id_text, &ctx->peer_id) != PEER_ID_SUCCESS) {
+        lantern_log_warn(
+            "reqresp",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = peer_id_text},
+            "failed to parse peer id for blocks_by_root request");
+        block_request_ctx_free(ctx);
+        return -1;
+    }
+
+    char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    format_root_hex(root, root_hex, sizeof(root_hex));
+    lantern_log_info(
+        "reqresp",
+        &(const struct lantern_log_metadata){
+            .validator = client->node_id,
+            .peer = ctx->peer_text[0] ? ctx->peer_text : NULL},
+        "dialing peer for %s root=%s",
+        ctx->protocol_id,
+        root_hex[0] ? root_hex : "0x0");
+
+    int rc = libp2p_host_open_stream_async(
+        client->network.host,
+        &ctx->peer_id,
+        ctx->protocol_id,
+        block_request_on_open,
+        ctx);
+    if (rc != 0) {
+        lantern_log_warn(
+            "reqresp",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = ctx->peer_text[0] ? ctx->peer_text : NULL},
+            "libp2p open stream failed rc=%d",
+            rc);
+        block_request_ctx_free(ctx);
+        return -1;
+    }
     return 0;
 }
 

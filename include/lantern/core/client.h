@@ -52,6 +52,8 @@ struct lantern_client_options {
 };
 
 struct libp2p_subscription;
+struct libp2p_protocol_server;
+struct lantern_peer_status_entry;
 
 struct lantern_local_validator {
     uint64_t global_index;
@@ -73,6 +75,8 @@ struct lantern_client {
     struct lantern_genesis_artifacts genesis;
     struct lantern_enr_record local_enr;
     struct lantern_libp2p_host network;
+    struct libp2p_protocol_server *ping_server;
+    bool ping_running;
     struct lantern_gossipsub_service gossip;
     bool gossip_running;
     struct lantern_reqresp_service reqresp;
@@ -101,6 +105,15 @@ struct lantern_client {
     pthread_mutex_t connection_lock;
     bool connection_lock_initialized;
     struct libp2p_subscription *connection_subscription;
+    struct lantern_string_list dialer_peers;
+    pthread_t dialer_thread;
+    bool dialer_thread_started;
+    int dialer_stop_flag;
+    struct lantern_peer_status_entry *peer_status_entries;
+    size_t peer_status_count;
+    size_t peer_status_capacity;
+    pthread_mutex_t status_lock;
+    bool status_lock_initialized;
 };
 
 void lantern_client_options_init(struct lantern_client_options *options);

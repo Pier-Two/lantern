@@ -76,4 +76,5 @@ if [[ -n "${LANTERN_EXTRA_ARGS:-}" ]]; then
     args+=("${extra_args[@]}")
 fi
 
+
 exec /opt/lantern/bin/lantern "${args[@]}"

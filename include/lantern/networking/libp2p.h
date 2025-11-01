@@ -8,8 +8,9 @@
 extern "C" {
 #endif
 
-struct libp2p_host;
 struct lantern_enr_record;
+struct libp2p_host;
+typedef struct peer_id peer_id_t;
 
 #define LANTERN_LIBP2P_DEFAULT_PEER_TTL_MS (300000)
 
@@ -32,6 +33,11 @@ int lantern_libp2p_host_add_enr_peer(
     struct lantern_libp2p_host *state,
     const struct lantern_enr_record *record,
     int ttl_ms);
+int lantern_libp2p_enr_to_multiaddr(
+    const struct lantern_enr_record *record,
+    char *buffer,
+    size_t buffer_len,
+    peer_id_t *peer_id);
 
 #ifdef __cplusplus
 }
