@@ -214,6 +214,7 @@ int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct la
         }
     }
     if (rc == 0) {
+        /* Allow outbound identify now that publish_service skips peers without /ipfs/id/push support. */
         uint32_t flags = LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND | LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND;
         b_rc = libp2p_host_builder_flags(builder, flags);
         if (b_rc != 0) {
@@ -302,7 +303,7 @@ static int extract_ipv4_multiaddr(
     if (!inet_ntop(AF_INET, ip->value, ip_text, sizeof(ip_text))) {
         return -1;
     }
-    int written = snprintf(buffer, buffer_len, "/ip4/%s/udp/%u/quic_v1", ip_text, (unsigned)parsed_port);
+    int written = snprintf(buffer, buffer_len, "/ip4/%s/udp/%u/quic-v1", ip_text, (unsigned)parsed_port);
     if (written < 0 || (size_t)written >= buffer_len) {
         return -1;
     }
@@ -336,7 +337,7 @@ static int extract_ipv6_multiaddr(
     if (!inet_ntop(AF_INET6, ip->value, ip_text, sizeof(ip_text))) {
         return -1;
     }
-    int written = snprintf(buffer, buffer_len, "/ip6/%s/udp/%u/quic_v1", ip_text, (unsigned)parsed_port);
+    int written = snprintf(buffer, buffer_len, "/ip6/%s/udp/%u/quic-v1", ip_text, (unsigned)parsed_port);
     if (written < 0 || (size_t)written >= buffer_len) {
         return -1;
     }

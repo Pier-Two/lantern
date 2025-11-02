@@ -22,7 +22,7 @@ int main(void) {
     lantern_libp2p_host_init(&host);
 
     struct lantern_libp2p_config config = {
-        .listen_multiaddr = "/ip4/127.0.0.1/udp/9310/quic_v1",
+        .listen_multiaddr = "/ip4/127.0.0.1/udp/9310/quic-v1",
         .secp256k1_secret = kHostSecret,
         .secret_len = sizeof(kHostSecret),
     };

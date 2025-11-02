@@ -29,7 +29,7 @@ extern "C" {
 #define LANTERN_DEFAULT_GENESIS_STATE "./genesis/genesis.ssz"
 #define LANTERN_DEFAULT_VALIDATOR_CONFIG "./genesis/validator-config.yaml"
 #define LANTERN_DEFAULT_NODE_ID "lantern_0"
-#define LANTERN_DEFAULT_LISTEN_ADDR "/ip4/0.0.0.0/udp/9000/quic_v1"
+#define LANTERN_DEFAULT_LISTEN_ADDR "/ip4/0.0.0.0/udp/9000/quic-v1"
 #define LANTERN_DEFAULT_HTTP_PORT 5052
 #define LANTERN_DEFAULT_METRICS_PORT 8080
 #define LANTERN_DEFAULT_DEVNET "devnet0"
@@ -106,6 +106,7 @@ struct lantern_client {
     bool connection_lock_initialized;
     struct libp2p_subscription *connection_subscription;
     struct lantern_string_list dialer_peers;
+    struct lantern_string_list connected_peer_ids;
     pthread_t dialer_thread;
     bool dialer_thread_started;
     int dialer_stop_flag;

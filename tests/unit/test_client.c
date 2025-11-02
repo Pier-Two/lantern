@@ -225,7 +225,7 @@ int main(void) {
     options.genesis_state_path = state_path;
     options.validator_config_path = validator_config_path;
     options.node_id = "ream_0";
-    options.listen_address = "/ip4/127.0.0.1/udp/9000/quic_v1";
+    options.listen_address = "/ip4/127.0.0.1/udp/9000/quic-v1";
     options.node_key_hex = "0xb71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291";
     options.metrics_port = 0;
 
@@ -257,7 +257,7 @@ int main(void) {
     memset(&client, 0, sizeof(client));
 
     options.node_id = "lantern_6";
-    options.listen_address = "/ip4/127.0.0.1/udp/9100/quic_v1";
+    options.listen_address = "/ip4/127.0.0.1/udp/9100/quic-v1";
 
     if (lantern_init(&client, &options) != 0) {
         fprintf(stderr, "lantern_init failed for lantern_6\n");
