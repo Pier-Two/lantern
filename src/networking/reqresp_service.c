@@ -33,9 +33,26 @@ struct status_stream_ctx {
 
 struct blocks_stream_ctx {
     struct lantern_reqresp_service *service;
-    libp2p_stream_t *stream;
-    const char *protocol_id;
+   libp2p_stream_t *stream;
+   const char *protocol_id;
 };
+
+struct status_request_ctx {
+    struct lantern_reqresp_service *service;
+    peer_id_t peer_id;
+    char peer_text[128];
+};
+
+struct status_request_worker_args {
+    struct status_request_ctx *ctx;
+    libp2p_stream_t *stream;
+};
+
+static void log_stream_error(const char *phase, const char *protocol_id, const char *peer_id);
+static void status_request_notify_failure(
+    struct lantern_reqresp_service *service,
+    const char *peer_text,
+    int error);
 
 static void lantern_reqresp_service_clear(struct lantern_reqresp_service *service) {
     if (!service) {
@@ -45,6 +62,7 @@ static void lantern_reqresp_service_clear(struct lantern_reqresp_service *servic
     service->callbacks.context = NULL;
     service->callbacks.build_status = NULL;
     service->callbacks.handle_status = NULL;
+    service->callbacks.status_failure = NULL;
     service->callbacks.collect_blocks = NULL;
     service->status_server = NULL;
     service->blocks_server = NULL;
@@ -116,6 +134,14 @@ static void describe_peer(const peer_id_t *peer, char *buffer, size_t length) {
     if (written < 0) {
         buffer[0] = '\0';
     }
+}
+
+static void status_request_ctx_free(struct status_request_ctx *ctx) {
+    if (!ctx) {
+        return;
+    }
+    peer_id_destroy(&ctx->peer_id);
+    free(ctx);
 }
 
 static const char *stream_error_name(ssize_t code) {
@@ -326,10 +352,27 @@ static int read_length_prefixed_stream(
     return 0;
 }
 
-static int write_stream_all(libp2p_stream_t *stream, const uint8_t *data, size_t length) {
+static int write_stream_all(
+    libp2p_stream_t *stream,
+    const uint8_t *data,
+    size_t length,
+    const char *protocol_id,
+    const char *phase,
+    const char *peer_hint) {
     if (!stream || (!data && length > 0)) {
-        return -1;
+        return LIBP2P_ERR_NULL_PTR;
     }
+
+    char peer_text[128];
+    peer_text[0] = '\0';
+    if (!peer_hint || peer_hint[0] == '\0') {
+        const peer_id_t *peer = libp2p_stream_remote_peer(stream);
+        if (peer && peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text)) < 0) {
+            peer_text[0] = '\0';
+        }
+    }
+    const char *peer_label = (peer_hint && peer_hint[0]) ? peer_hint : (peer_text[0] ? peer_text : NULL);
+
     size_t offset = 0;
     while (offset < length) {
         ssize_t written = libp2p_stream_write(stream, data + offset, length - offset);
@@ -340,15 +383,113 @@ static int write_stream_all(libp2p_stream_t *stream, const uint8_t *data, size_t
         if (written == (ssize_t)LIBP2P_ERR_AGAIN || written == (ssize_t)LIBP2P_ERR_TIMEOUT) {
             continue;
         }
-        if (written == 0 || written == (ssize_t)LIBP2P_ERR_EOF || written == (ssize_t)LIBP2P_ERR_CLOSED) {
-            return -1;
+
+        ssize_t err = written;
+        if (written == 0) {
+            err = LIBP2P_ERR_EOF;
         }
-        if (written == (ssize_t)LIBP2P_ERR_RESET) {
-            return -1;
+
+        const char *err_name = stream_error_name(err);
+        struct lantern_log_metadata meta = {
+            .peer = peer_label,
+        };
+        lantern_log_trace(
+            "reqresp",
+            &meta,
+            "%s write failed protocol=%s err=%s(%zd) remaining=%zu",
+            phase ? phase : "stream",
+            protocol_id ? protocol_id : "-",
+            err_name ? err_name : "unknown",
+            err,
+            length - offset);
+        if (protocol_id) {
+            log_stream_error("write", protocol_id, peer_label);
         }
-        return -1;
+        return (int)err;
     }
     return 0;
+}
+
+static int send_response_chunk(
+    libp2p_stream_t *stream,
+    const struct lantern_log_metadata *meta,
+    const char *protocol_id,
+    const char *phase,
+    const char *peer_text,
+    const uint8_t *payload,
+    size_t payload_len) {
+    if (!stream) {
+        return -1;
+    }
+
+    uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
+    size_t header_len = 0;
+    if (unsigned_varint_encode(payload_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
+        lantern_log_error(
+            "reqresp",
+            meta,
+            "%s payload header encode failed bytes=%zu",
+            phase ? phase : "response",
+            payload_len);
+        return -1;
+    }
+
+    if (write_stream_all(
+            stream,
+            header,
+            header_len,
+            protocol_id,
+            phase ? phase : "response header",
+            peer_text)
+        != 0) {
+        lantern_log_error(
+            "reqresp",
+            meta,
+            "%s header write failed bytes=%zu",
+            phase ? phase : "response",
+            header_len);
+        return -1;
+    }
+
+    if (payload_len > 0
+        && write_stream_all(
+               stream,
+               payload,
+               payload_len,
+               protocol_id,
+               phase ? phase : "response payload",
+               peer_text)
+            != 0) {
+        lantern_log_error(
+            "reqresp",
+            meta,
+            "%s payload write failed bytes=%zu",
+            phase ? phase : "response",
+            payload_len);
+        return -1;
+    }
+
+    lantern_log_trace(
+        "reqresp",
+        meta,
+        "%s response sent payload_bytes=%zu",
+        phase ? phase : "response",
+        payload_len);
+
+    return 0;
+}
+
+static void status_request_notify_failure(
+    struct lantern_reqresp_service *service,
+    const char *peer_text,
+    int error) {
+    if (!service || !service->callbacks.status_failure) {
+        return;
+    }
+    service->callbacks.status_failure(
+        service->callbacks.context,
+        peer_text,
+        error);
 }
 
 static void close_stream(libp2p_stream_t *stream) {
@@ -491,7 +632,16 @@ static void *status_worker(void *arg) {
 
     log_payload_preview("status response raw", peer_text, buffer, written);
 
-    if (write_stream_all(stream, buffer, written) != 0) {
+    const struct lantern_log_metadata meta = {.peer = peer_text};
+    if (send_response_chunk(
+            stream,
+            &meta,
+            LANTERN_STATUS_PROTOCOL_ID,
+            "status response",
+            peer_text[0] ? peer_text : NULL,
+            buffer,
+            written)
+        != 0) {
         free(buffer);
         log_stream_error("write", LANTERN_STATUS_PROTOCOL_ID, peer_text);
         close_stream(stream);
@@ -505,6 +655,324 @@ static void *status_worker(void *arg) {
         &(const struct lantern_log_metadata){.peer = peer_text},
         "served status request");
     return NULL;
+}
+
+static void *status_request_worker(void *arg) {
+    struct status_request_worker_args *worker = (struct status_request_worker_args *)arg;
+    if (!worker) {
+        return NULL;
+    }
+    struct status_request_ctx *ctx = worker->ctx;
+    libp2p_stream_t *stream = worker->stream;
+    free(worker);
+    if (!ctx || !stream) {
+        if (stream) {
+            libp2p_stream_close(stream);
+            libp2p_stream_free(stream);
+        }
+        status_request_ctx_free(ctx);
+        return NULL;
+    }
+
+    struct lantern_reqresp_service *service = ctx->service;
+    char peer_text[sizeof(ctx->peer_text)];
+    memcpy(peer_text, ctx->peer_text, sizeof(peer_text));
+    if (peer_text[sizeof(peer_text) - 1] != '\0') {
+        peer_text[sizeof(peer_text) - 1] = '\0';
+    }
+    struct lantern_log_metadata meta = {
+        .peer = peer_text[0] ? peer_text : NULL,
+    };
+    int failure_code = LIBP2P_ERR_INTERNAL;
+    int rc = 0;
+
+    LanternStatusMessage local_status;
+    memset(&local_status, 0, sizeof(local_status));
+    if (!service->callbacks.build_status
+        || service->callbacks.build_status(service->callbacks.context, &local_status) != 0) {
+        lantern_log_warn(
+            "reqresp",
+            &meta,
+            "failed to build local status for request");
+        goto finish;
+    }
+
+    size_t max_payload = 0;
+    if (lantern_snappy_max_compressed_size(2u * LANTERN_CHECKPOINT_SSZ_SIZE, &max_payload) != LANTERN_SNAPPY_OK) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to compute snappy size for status request");
+        goto finish;
+    }
+
+    uint8_t *payload = (uint8_t *)malloc(max_payload);
+    if (!payload) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "out of memory building status request");
+        goto finish;
+    }
+
+    size_t payload_len = 0;
+    if (lantern_network_status_encode_snappy(&local_status, payload, max_payload, &payload_len) != 0) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to encode status request");
+        free(payload);
+        goto finish;
+    }
+
+    log_payload_preview("status request snappy", ctx->peer_text, payload, payload_len);
+
+    uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
+    size_t header_len = 0;
+    if (unsigned_varint_encode(payload_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to encode status request header bytes=%zu",
+            payload_len);
+        free(payload);
+        goto finish;
+    }
+
+    lantern_log_info(
+        "reqresp",
+        &meta,
+        "sending %s request bytes=%zu",
+        LANTERN_STATUS_PROTOCOL_ID,
+        payload_len);
+
+    const char *peer_label = ctx->peer_text[0] ? ctx->peer_text : NULL;
+    rc = write_stream_all(
+        stream,
+        header,
+        header_len,
+        LANTERN_STATUS_PROTOCOL_ID,
+        "status request header",
+        peer_label);
+    if (rc == 0 && payload_len > 0) {
+        rc = write_stream_all(
+            stream,
+            payload,
+            payload_len,
+            LANTERN_STATUS_PROTOCOL_ID,
+            "status request payload",
+            peer_label);
+    }
+    if (rc != 0) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to write status request");
+        free(payload);
+        failure_code = rc;
+        goto finish;
+    }
+    free(payload);
+
+    uint8_t *response = NULL;
+    size_t response_len = 0;
+    ssize_t read_err = 0;
+    rc = lantern_reqresp_read_response_chunk(stream, &response, &response_len, &read_err);
+    if (rc != 0) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to read status response err=%zd",
+            read_err);
+        failure_code = (read_err != 0) ? (int)read_err : LIBP2P_ERR_INTERNAL;
+        goto finish;
+    }
+
+    log_payload_preview("status response raw", ctx->peer_text, response, response_len);
+
+    LanternStatusMessage remote_status;
+    memset(&remote_status, 0, sizeof(remote_status));
+    if (response_len == 0
+        || lantern_network_status_decode_snappy(&remote_status, response, response_len) != 0) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to decode status response bytes=%zu",
+            response_len);
+        free(response);
+        failure_code = LIBP2P_ERR_INTERNAL;
+        goto finish;
+    }
+    free(response);
+
+    char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    if (lantern_bytes_to_hex(remote_status.head.root.bytes, LANTERN_ROOT_SIZE, head_hex, sizeof(head_hex), 1) != 0) {
+        head_hex[0] = '\0';
+    }
+    char finalized_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    if (lantern_bytes_to_hex(
+            remote_status.finalized.root.bytes,
+            LANTERN_ROOT_SIZE,
+            finalized_hex,
+            sizeof(finalized_hex),
+            1)
+        != 0) {
+        finalized_hex[0] = '\0';
+    }
+    lantern_log_trace(
+        "reqresp",
+        &meta,
+        "received status head_slot=%" PRIu64 " head_root=%s finalized_slot=%" PRIu64 " finalized_root=%s",
+        remote_status.head.slot,
+        head_hex[0] ? head_hex : "0x0",
+        remote_status.finalized.slot,
+        finalized_hex[0] ? finalized_hex : "0x0");
+
+    handle_remote_status(service, &remote_status, ctx->peer_text);
+    failure_code = LIBP2P_ERR_OK;
+
+finish:
+    libp2p_stream_close(stream);
+    libp2p_stream_free(stream);
+    status_request_ctx_free(ctx);
+    if (failure_code != LIBP2P_ERR_OK) {
+        status_request_notify_failure(service, peer_text[0] ? peer_text : NULL, failure_code);
+    }
+    return NULL;
+}
+
+static void status_request_on_open(libp2p_stream_t *stream, void *user_data, int err) {
+    struct status_request_ctx *ctx = (struct status_request_ctx *)user_data;
+    struct lantern_log_metadata meta = {
+        .peer = (ctx && ctx->peer_text[0]) ? ctx->peer_text : NULL,
+    };
+    if (!ctx) {
+        if (stream) {
+            libp2p_stream_close(stream);
+            libp2p_stream_free(stream);
+        }
+        return;
+    }
+
+    if (err != 0 || !stream) {
+        lantern_log_warn(
+            "reqresp",
+            &meta,
+            "failed to open %s stream err=%d",
+            LANTERN_STATUS_PROTOCOL_ID,
+            err);
+        status_request_notify_failure(ctx->service, meta.peer, err != 0 ? err : LIBP2P_ERR_INTERNAL);
+        if (stream) {
+            libp2p_stream_close(stream);
+            libp2p_stream_free(stream);
+        }
+        status_request_ctx_free(ctx);
+        return;
+    }
+
+    struct status_request_worker_args *worker = (struct status_request_worker_args *)malloc(sizeof(*worker));
+    if (!worker) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to allocate worker for %s stream",
+            LANTERN_STATUS_PROTOCOL_ID);
+        status_request_notify_failure(ctx->service, meta.peer, LIBP2P_ERR_INTERNAL);
+        libp2p_stream_close(stream);
+        libp2p_stream_free(stream);
+        status_request_ctx_free(ctx);
+        return;
+    }
+    worker->ctx = ctx;
+    worker->stream = stream;
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, status_request_worker, worker) != 0) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to spawn status request worker");
+        free(worker);
+        status_request_notify_failure(ctx->service, meta.peer, LIBP2P_ERR_INTERNAL);
+        libp2p_stream_close(stream);
+        libp2p_stream_free(stream);
+        status_request_ctx_free(ctx);
+        return;
+    }
+    pthread_detach(thread);
+}
+
+static int clone_peer_id(peer_id_t *dest, const peer_id_t *src) {
+    if (!dest || !src || !src->bytes || src->size == 0) {
+        return -1;
+    }
+    dest->bytes = (uint8_t *)malloc(src->size);
+    if (!dest->bytes) {
+        dest->size = 0;
+        return -1;
+    }
+    memcpy(dest->bytes, src->bytes, src->size);
+    dest->size = src->size;
+    return 0;
+}
+
+int lantern_reqresp_service_request_status(
+    struct lantern_reqresp_service *service,
+    const peer_id_t *peer_id,
+    const char *peer_id_text) {
+    if (!service || !service->host || !peer_id || !peer_id->bytes || peer_id->size == 0) {
+        return -1;
+    }
+
+    struct status_request_ctx *ctx = (struct status_request_ctx *)calloc(1, sizeof(*ctx));
+    if (!ctx) {
+        return -1;
+    }
+    ctx->service = service;
+
+    struct lantern_log_metadata meta = {
+        .peer = NULL,
+    };
+
+    if (peer_id_text && peer_id_text[0] != '\0') {
+        strncpy(ctx->peer_text, peer_id_text, sizeof(ctx->peer_text) - 1);
+        ctx->peer_text[sizeof(ctx->peer_text) - 1] = '\0';
+    } else {
+        if (peer_id_to_string(peer_id, PEER_ID_FMT_BASE58_LEGACY, ctx->peer_text, sizeof(ctx->peer_text)) < 0) {
+            ctx->peer_text[0] = '\0';
+        }
+    }
+    if (ctx->peer_text[0] != '\0') {
+        meta.peer = ctx->peer_text;
+    }
+
+    if (clone_peer_id(&ctx->peer_id, peer_id) != 0) {
+        lantern_log_warn(
+            "reqresp",
+            &meta,
+            "failed to clone peer id for status request");
+        status_request_notify_failure(service, meta.peer, LIBP2P_ERR_INTERNAL);
+        status_request_ctx_free(ctx);
+        return -1;
+    }
+
+    int rc = libp2p_host_open_stream_async(
+        service->host,
+        &ctx->peer_id,
+        LANTERN_STATUS_PROTOCOL_ID,
+        status_request_on_open,
+        ctx);
+    if (rc != 0) {
+        lantern_log_warn(
+            "reqresp",
+            &meta,
+            "libp2p open stream failed rc=%d",
+            rc);
+        status_request_notify_failure(service, meta.peer, rc);
+        status_request_ctx_free(ctx);
+        return -1;
+    }
+    return 0;
 }
 
 static void *blocks_worker(void *arg) {
@@ -615,7 +1083,16 @@ static void *blocks_worker(void *arg) {
 
     log_payload_preview("blocks_by_root response raw", peer_text, buffer, written);
 
-    if (write_stream_all(stream, buffer, written) != 0) {
+    const struct lantern_log_metadata meta = {.peer = peer_text};
+    if (send_response_chunk(
+            stream,
+            &meta,
+            protocol_id,
+            "blocks_by_root response",
+            peer_text[0] ? peer_text : NULL,
+            buffer,
+            written)
+        != 0) {
         free(buffer);
         log_stream_error("write", protocol_id, peer_text[0] ? peer_text : NULL);
         close_stream(stream);

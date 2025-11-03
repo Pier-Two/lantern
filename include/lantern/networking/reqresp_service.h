@@ -5,12 +5,15 @@
 #include <stddef.h>
 
 #include "lantern/networking/messages.h"
+#include "libp2p/stream.h"
+#include "peer_id/peer_id.h"
 
 #define LANTERN_REQRESP_STATUS_PROTOCOL "/leanconsensus/req/status/1/ssz_snappy"
 #define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL "/leanconsensus/req/lean_blocks_by_root/1/ssz_snappy"
 #define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_LEGACY "/leanconsensus/req/blocks_by_root/1/ssz_snappy"
 #define LANTERN_REQRESP_STATUS_PREVIEW_BYTES 64u
 #define LANTERN_REQRESP_MAX_CHUNK_BYTES (1u << 22)
+#define LANTERN_REQRESP_MAX_CONTEXT_BYTES (1u << 20)
 #define LANTERN_REQRESP_HEADER_MAX_BYTES 10u
 #define LANTERN_REQRESP_STALL_TIMEOUT_MS 2000u
 
@@ -30,6 +33,10 @@ struct lantern_reqresp_service_callbacks {
         void *context,
         const LanternStatusMessage *peer_status,
         const char *peer_id);
+    void (*status_failure)(
+        void *context,
+        const char *peer_id,
+        int error);
     int (*collect_blocks)(
         void *context,
         const LanternRoot *roots,
@@ -59,9 +66,19 @@ extern "C" {
 
 void lantern_reqresp_service_init(struct lantern_reqresp_service *service);
 void lantern_reqresp_service_reset(struct lantern_reqresp_service *service);
+int lantern_reqresp_service_request_status(
+    struct lantern_reqresp_service *service,
+    const peer_id_t *peer_id,
+    const char *peer_id_text);
 int lantern_reqresp_service_start(
     struct lantern_reqresp_service *service,
     const struct lantern_reqresp_service_config *config);
+
+int lantern_reqresp_read_response_chunk(
+    libp2p_stream_t *stream,
+    uint8_t **out_data,
+    size_t *out_len,
+    ssize_t *out_err);
 
 #ifdef __cplusplus
 }

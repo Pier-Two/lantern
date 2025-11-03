@@ -107,6 +107,8 @@ struct lantern_client {
     struct libp2p_subscription *connection_subscription;
     struct lantern_string_list dialer_peers;
     struct lantern_string_list connected_peer_ids;
+    struct lantern_string_list pending_status_peer_ids;
+    struct lantern_string_list status_failure_peer_ids;
     pthread_t dialer_thread;
     bool dialer_thread_started;
     int dialer_stop_flag;

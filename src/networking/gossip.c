@@ -56,7 +56,7 @@ int lantern_gossip_compute_message_id(
     uint8_t *snappy_scratch,
     size_t snappy_scratch_len,
     size_t *required_scratch) {
-    if (!message_id || !topic || topic_len == 0 || !payload) {
+    if (!message_id || !topic || topic_len == 0 || (!payload && payload_len > 0)) {
         return -1;
     }
     if (required_scratch) {
@@ -93,7 +93,7 @@ int lantern_gossip_compute_message_id(
     write_u64_le((uint64_t)topic_len, topic_len_encoded);
     Sha256Update(&ctx, topic_len_encoded, sizeof(topic_len_encoded));
     Sha256Update(&ctx, topic, topic_len);
-    if (data_len > 0) {
+    if (data_len > 0 && data_for_hash) {
         Sha256Update(&ctx, data_for_hash, data_len);
     }
     SHA256_HASH digest;

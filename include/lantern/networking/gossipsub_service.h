@@ -5,9 +5,11 @@
 #include <stdint.h>
 
 #include "lantern/consensus/containers.h"
+#include "peer_id/peer_id.h"
 
 struct libp2p_host;
 typedef struct libp2p_gossipsub libp2p_gossipsub_t;
+typedef struct libp2p_gossipsub_validator_handle libp2p_gossipsub_validator_handle_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -18,15 +20,28 @@ struct lantern_gossipsub_config {
     const char *devnet;
 };
 
+typedef int (*lantern_gossipsub_block_handler)(
+    const LanternSignedBlock *block,
+    const peer_id_t *from,
+    void *user_data);
+typedef int (*lantern_gossipsub_vote_handler)(
+    const LanternSignedVote *vote,
+    const peer_id_t *from,
+    void *user_data);
+
 struct lantern_gossipsub_service {
     libp2p_gossipsub_t *gossipsub;
     char block_topic[128];
     char vote_topic[128];
-    uint8_t *scratch;
-    size_t scratch_capacity;
     int (*publish_hook)(const char *topic, const uint8_t *payload, size_t payload_len, void *user_data);
     void *publish_hook_user_data;
     int loopback_only;
+    lantern_gossipsub_block_handler block_handler;
+    void *block_handler_user_data;
+    lantern_gossipsub_vote_handler vote_handler;
+    void *vote_handler_user_data;
+    libp2p_gossipsub_validator_handle_t *block_validator_handle;
+    libp2p_gossipsub_validator_handle_t *vote_validator_handle;
 };
 
 void lantern_gossipsub_service_init(struct lantern_gossipsub_service *service);
@@ -47,6 +62,14 @@ void lantern_gossipsub_service_set_publish_hook(
 void lantern_gossipsub_service_set_loopback_only(
     struct lantern_gossipsub_service *service,
     int loopback_only);
+void lantern_gossipsub_service_set_block_handler(
+    struct lantern_gossipsub_service *service,
+    lantern_gossipsub_block_handler handler,
+    void *user_data);
+void lantern_gossipsub_service_set_vote_handler(
+    struct lantern_gossipsub_service *service,
+    lantern_gossipsub_vote_handler handler,
+    void *user_data);
 
 #ifdef __cplusplus
 }

@@ -17,23 +17,18 @@
 
 #define LANTERN_GOSSIPSUB_TOPIC_CAP 128u
 
-static int ensure_scratch_capacity(struct lantern_gossipsub_service *service, size_t required) {
-    if (!service) {
-        return -1;
+static void describe_peer_id(const peer_id_t *peer, char *buffer, size_t length) {
+    if (!buffer || length == 0) {
+        return;
     }
-    if (required == 0) {
-        return 0;
+    if (!peer) {
+        buffer[0] = '\0';
+        return;
     }
-    if (service->scratch_capacity >= required) {
-        return 0;
+    int written = peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, buffer, length);
+    if (written < 0) {
+        buffer[0] = '\0';
     }
-    uint8_t *resized = (uint8_t *)realloc(service->scratch, required);
-    if (!resized) {
-        return -1;
-    }
-    service->scratch = resized;
-    service->scratch_capacity = required;
-    return 0;
 }
 
 static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
@@ -69,20 +64,20 @@ static libp2p_err_t lantern_gossipsub_message_id_cb(
         return LIBP2P_ERR_NULL_PTR;
     }
     const char *topic = msg->topic.topic;
-    if (!topic) {
-        return LIBP2P_ERR_INTERNAL;
-    }
+   if (!topic) {
+       return LIBP2P_ERR_INTERNAL;
+   }
 
     uint8_t *scratch = NULL;
     size_t scratch_len = 0;
     if (msg->data && msg->data_len > 0) {
         size_t expected = 0;
         if (lantern_snappy_uncompressed_length(msg->data, msg->data_len, &expected) == LANTERN_SNAPPY_OK && expected > 0) {
-            if (ensure_scratch_capacity(service, expected) != 0) {
+            scratch = (uint8_t *)malloc(expected);
+            if (!scratch) {
                 return LIBP2P_ERR_INTERNAL;
             }
-            scratch = service->scratch;
-            scratch_len = service->scratch_capacity;
+            scratch_len = expected;
         }
     }
 
@@ -97,9 +92,11 @@ static libp2p_err_t lantern_gossipsub_message_id_cb(
             scratch_len,
             NULL)
         != 0) {
+        free(scratch);
         return LIBP2P_ERR_INTERNAL;
     }
 
+    free(scratch);
     uint8_t *buffer = (uint8_t *)malloc(LANTERN_GOSSIP_MESSAGE_ID_SIZE);
     if (!buffer) {
         return LIBP2P_ERR_INTERNAL;
@@ -127,6 +124,92 @@ static int subscribe_topic(
     return err == LIBP2P_ERR_OK ? 0 : -1;
 }
 
+static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
+    const libp2p_gossipsub_message_t *msg,
+    void *user_data) {
+    struct lantern_gossipsub_service *service = (struct lantern_gossipsub_service *)user_data;
+    if (!service || !msg) {
+        return LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
+    }
+    if (!service->block_handler || !msg->data || msg->data_len == 0) {
+        return LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
+    }
+
+    LanternSignedBlock block;
+    memset(&block, 0, sizeof(block));
+    lantern_block_body_init(&block.message.body);
+
+    libp2p_gossipsub_validation_result_t result = LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
+    char peer_text[128];
+    describe_peer_id(msg->from, peer_text, sizeof(peer_text));
+    const struct lantern_log_metadata meta = {.peer = peer_text[0] ? peer_text : NULL};
+
+    lantern_log_debug(
+        "gossip",
+        &meta,
+        "block gossip message received bytes=%zu",
+        msg->data_len);
+    if (lantern_gossip_decode_signed_block_snappy(&block, msg->data, msg->data_len) != 0) {
+        lantern_log_warn(
+            "gossip",
+            &meta,
+            "failed to decode gossip block payload bytes=%zu",
+            msg->data_len);
+        result = LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
+        goto cleanup;
+    }
+
+    if (service->block_handler(&block, msg->from, service->block_handler_user_data) != 0) {
+        result = LIBP2P_GOSSIPSUB_VALIDATION_IGNORE;
+    }
+
+cleanup:
+    lantern_block_body_reset(&block.message.body);
+    return result;
+}
+
+static libp2p_gossipsub_validation_result_t gossipsub_vote_validator(
+    const libp2p_gossipsub_message_t *msg,
+    void *user_data) {
+    struct lantern_gossipsub_service *service = (struct lantern_gossipsub_service *)user_data;
+    if (!service || !msg) {
+        return LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
+    }
+    if (!service->vote_handler || !msg->data || msg->data_len == 0) {
+        return LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
+    }
+
+    LanternSignedVote vote;
+    memset(&vote, 0, sizeof(vote));
+
+    libp2p_gossipsub_validation_result_t result = LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
+    char peer_text[128];
+    describe_peer_id(msg->from, peer_text, sizeof(peer_text));
+    const struct lantern_log_metadata meta = {.peer = peer_text[0] ? peer_text : NULL};
+
+    lantern_log_debug(
+        "gossip",
+        &meta,
+        "vote gossip message received bytes=%zu",
+        msg->data_len);
+    if (lantern_gossip_decode_signed_vote_snappy(&vote, msg->data, msg->data_len) != 0) {
+        lantern_log_warn(
+            "gossip",
+            &meta,
+            "failed to decode gossip vote payload bytes=%zu",
+            msg->data_len);
+        result = LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
+        goto cleanup;
+    }
+
+    if (service->vote_handler(&vote, msg->from, service->vote_handler_user_data) != 0) {
+        result = LIBP2P_GOSSIPSUB_VALIDATION_IGNORE;
+    }
+
+cleanup:
+    return result;
+}
+
 void lantern_gossipsub_service_init(struct lantern_gossipsub_service *service) {
     if (!service) {
         return;
@@ -139,13 +222,20 @@ void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) 
         return;
     }
     if (service->gossipsub) {
+        if (service->block_validator_handle) {
+            (void)libp2p_gossipsub_remove_validator(service->gossipsub, service->block_validator_handle);
+        }
+        if (service->vote_validator_handle) {
+            (void)libp2p_gossipsub_remove_validator(service->gossipsub, service->vote_validator_handle);
+        }
+    }
+    service->block_validator_handle = NULL;
+    service->vote_validator_handle = NULL;
+    if (service->gossipsub) {
         libp2p_gossipsub_stop(service->gossipsub);
         libp2p_gossipsub_free(service->gossipsub);
         service->gossipsub = NULL;
     }
-    free(service->scratch);
-    service->scratch = NULL;
-    service->scratch_capacity = 0;
     memset(service->block_topic, 0, sizeof(service->block_topic));
     memset(service->vote_topic, 0, sizeof(service->vote_topic));
     service->publish_hook = NULL;
@@ -159,7 +249,22 @@ int lantern_gossipsub_service_start(
     if (!service || !config || !config->host || !config->devnet) {
         return -1;
     }
+    int previous_loopback = service->loopback_only;
+    int (*previous_publish_hook)(const char *, const uint8_t *, size_t, void *) = service->publish_hook;
+    void *previous_publish_user_data = service->publish_hook_user_data;
+    lantern_gossipsub_block_handler previous_block_handler = service->block_handler;
+    void *previous_block_user_data = service->block_handler_user_data;
+    lantern_gossipsub_vote_handler previous_vote_handler = service->vote_handler;
+    void *previous_vote_user_data = service->vote_handler_user_data;
+
     lantern_gossipsub_service_reset(service);
+    service->loopback_only = previous_loopback;
+    service->publish_hook = previous_publish_hook;
+    service->publish_hook_user_data = previous_publish_user_data;
+    service->block_handler = previous_block_handler;
+    service->block_handler_user_data = previous_block_user_data;
+    service->vote_handler = previous_vote_handler;
+    service->vote_handler_user_data = previous_vote_user_data;
 
     if (lantern_gossip_topic_format(
             LANTERN_GOSSIP_TOPIC_BLOCK,
@@ -200,6 +305,45 @@ int lantern_gossipsub_service_start(
         lantern_gossipsub_service_reset(service);
         return -1;
     }
+
+    if (service->block_handler) {
+        libp2p_gossipsub_validator_def_t def = {
+            .struct_size = sizeof(def),
+            .type = LIBP2P_GOSSIPSUB_VALIDATOR_SYNC,
+            .sync_fn = gossipsub_block_validator,
+            .async_fn = NULL,
+            .user_data = service
+        };
+        if (libp2p_gossipsub_add_validator(service->gossipsub, service->block_topic, &def, &service->block_validator_handle)
+            != LIBP2P_ERR_OK) {
+            lantern_log_error(
+                "gossip",
+                NULL,
+                "failed to register block gossip validator");
+            lantern_gossipsub_service_reset(service);
+            return -1;
+        }
+    }
+
+    if (service->vote_handler) {
+        libp2p_gossipsub_validator_def_t def = {
+            .struct_size = sizeof(def),
+            .type = LIBP2P_GOSSIPSUB_VALIDATOR_SYNC,
+            .sync_fn = gossipsub_vote_validator,
+            .async_fn = NULL,
+            .user_data = service
+        };
+        if (libp2p_gossipsub_add_validator(service->gossipsub, service->vote_topic, &def, &service->vote_validator_handle)
+            != LIBP2P_ERR_OK) {
+            lantern_log_error(
+                "gossip",
+                NULL,
+                "failed to register vote gossip validator");
+            lantern_gossipsub_service_reset(service);
+            return -1;
+        }
+    }
+
     lantern_log_info(
         "network",
         &(const struct lantern_log_metadata){.peer = config->devnet},
@@ -308,4 +452,26 @@ void lantern_gossipsub_service_set_loopback_only(
         return;
     }
     service->loopback_only = loopback_only ? 1 : 0;
+}
+
+void lantern_gossipsub_service_set_block_handler(
+    struct lantern_gossipsub_service *service,
+    lantern_gossipsub_block_handler handler,
+    void *user_data) {
+    if (!service) {
+        return;
+    }
+    service->block_handler = handler;
+    service->block_handler_user_data = user_data;
+}
+
+void lantern_gossipsub_service_set_vote_handler(
+    struct lantern_gossipsub_service *service,
+    lantern_gossipsub_vote_handler handler,
+    void *user_data) {
+    if (!service) {
+        return;
+    }
+    service->vote_handler = handler;
+    service->vote_handler_user_data = user_data;
 }

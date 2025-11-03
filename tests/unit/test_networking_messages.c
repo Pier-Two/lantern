@@ -390,6 +390,8 @@ static void test_blocks_by_root_request(void) {
     uint8_t encoded[128];
     size_t written = 0;
     check_zero(lantern_network_blocks_by_root_request_encode(&req, encoded, sizeof(encoded), &written), "request encode");
+    size_t expected_written = sizeof(uint32_t) + (req.roots.length * LANTERN_ROOT_SIZE);
+    CHECK(written == expected_written);
 
     LanternBlocksByRootRequest decoded;
     lantern_blocks_by_root_request_init(&decoded);
@@ -422,6 +424,24 @@ static void test_blocks_by_root_response(void) {
     uint8_t encoded[8192];
     size_t written = 0;
     check_zero(lantern_network_blocks_by_root_response_encode(&resp, encoded, sizeof(encoded), &written), "response encode");
+    CHECK(written > sizeof(uint32_t));
+    uint32_t container_offset = (uint32_t)encoded[0]
+        | ((uint32_t)encoded[1] << 8)
+        | ((uint32_t)encoded[2] << 16)
+        | ((uint32_t)encoded[3] << 24);
+    CHECK(container_offset == sizeof(uint32_t));
+    uint32_t first_offset = (uint32_t)encoded[4]
+        | ((uint32_t)encoded[5] << 8)
+        | ((uint32_t)encoded[6] << 16)
+        | ((uint32_t)encoded[7] << 24);
+    CHECK(first_offset == resp.length * sizeof(uint32_t));
+    if (resp.length > 1) {
+        uint32_t second_offset = (uint32_t)encoded[8]
+            | ((uint32_t)encoded[9] << 8)
+            | ((uint32_t)encoded[10] << 16)
+            | ((uint32_t)encoded[11] << 24);
+        CHECK(second_offset > first_offset);
+    }
 
     LanternBlocksByRootResponse decoded;
     lantern_blocks_by_root_response_init(&decoded);
