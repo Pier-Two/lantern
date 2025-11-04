@@ -9,6 +9,8 @@
 #include "lantern/consensus/ssz.h"
 #include "../fixtures/ssz_vectors.h"
 
+#define SIGNED_BLOCK_TEST_BUFFER_SIZE 32768
+
 static void fill_bytes(uint8_t *dst, size_t len, uint8_t seed) {
     for (size_t i = 0; i < len; ++i) {
         dst[i] = (uint8_t)(seed + i);
@@ -371,7 +373,7 @@ static void test_block_roundtrip(void) {
     LanternBlock block;
     populate_block(&block);
 
-    uint8_t buffer[4096];
+    uint8_t buffer[SIGNED_BLOCK_TEST_BUFFER_SIZE];
     size_t written = 0;
     assert(lantern_ssz_encode_block(&block, buffer, sizeof(buffer), &written) == 0);
 
@@ -402,7 +404,7 @@ static void test_signed_block_roundtrip(void) {
     memset(&signed_block, 0, sizeof(signed_block));
     populate_block(&signed_block.message);
 
-    uint8_t buffer[4096];
+    uint8_t buffer[SIGNED_BLOCK_TEST_BUFFER_SIZE];
     size_t written = 0;
     assert(lantern_ssz_encode_signed_block(&signed_block, buffer, sizeof(buffer), &written) == 0);
 
@@ -424,7 +426,7 @@ static void test_signed_block_signature_validation(void) {
     memset(&signed_block, 0, sizeof(signed_block));
     populate_block(&signed_block.message);
 
-    uint8_t buffer[4096];
+    uint8_t buffer[SIGNED_BLOCK_TEST_BUFFER_SIZE];
     size_t written = 0;
     assert(lantern_ssz_encode_signed_block(&signed_block, buffer, sizeof(buffer), &written) == 0);
 
@@ -439,6 +441,43 @@ static void test_signed_block_signature_validation(void) {
     assert(lantern_ssz_encode_signed_block(&signed_block, buffer, sizeof(buffer), &written) != 0);
 
     reset_block(&signed_block.message);
+}
+
+static void test_signed_block_decode_without_signature_section(void) {
+    LanternSignedBlock signed_block;
+    memset(&signed_block, 0, sizeof(signed_block));
+    populate_block(&signed_block.message);
+
+    uint8_t message_buf[SIGNED_BLOCK_TEST_BUFFER_SIZE];
+    size_t message_written = 0;
+    assert(lantern_ssz_encode_block(
+               &signed_block.message,
+               message_buf,
+               sizeof(message_buf),
+               &message_written)
+           == 0);
+
+    size_t encoded_len = sizeof(uint32_t) + message_written;
+    uint8_t *encoded = malloc(encoded_len);
+    assert(encoded != NULL);
+
+    encoded[0] = (uint8_t)sizeof(uint32_t);
+    encoded[1] = 0;
+    encoded[2] = 0;
+    encoded[3] = 0;
+    memcpy(encoded + sizeof(uint32_t), message_buf, message_written);
+
+    LanternSignedBlock decoded;
+    memset(&decoded, 0, sizeof(decoded));
+    lantern_block_body_init(&decoded.message.body);
+    assert(lantern_ssz_decode_signed_block(&decoded, encoded, encoded_len) == 0);
+    assert(memcmp(decoded.signature.bytes, signed_block.signature.bytes, LANTERN_SIGNATURE_SIZE) == 0);
+    assert(decoded.message.slot == signed_block.message.slot);
+    assert(decoded.message.body.attestations.length == signed_block.message.body.attestations.length);
+
+    reset_block(&signed_block.message);
+    reset_block(&decoded.message);
+    free(encoded);
 }
 
 static void test_state_roundtrip(void) {
@@ -814,6 +853,7 @@ int main(void) {
     test_block_roundtrip();
     test_signed_block_roundtrip();
     test_signed_block_signature_validation();
+    test_signed_block_decode_without_signature_section();
     test_state_roundtrip();
     test_state_accepts_empty_justification_validators_payload();
     test_leanspec_vectors();

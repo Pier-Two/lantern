@@ -1,14 +1,17 @@
 #include "lantern/networking/gossipsub_service.h"
 
 #include <limits.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "lantern/consensus/ssz.h"
 #include "lantern/encoding/snappy.h"
 #include "lantern/networking/gossip.h"
 #include "lantern/networking/gossip_payloads.h"
 #include "lantern/support/log.h"
+#include "lantern/support/strings.h"
 #include "ssz_constants.h"
 
 #include "libp2p/errors.h"
@@ -162,6 +165,23 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
     if (service->block_handler(&block, msg->from, service->block_handler_user_data) != 0) {
         result = LIBP2P_GOSSIPSUB_VALIDATION_IGNORE;
     }
+    char block_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    if (lantern_bytes_to_hex(
+            block.message.parent_root.bytes,
+            LANTERN_ROOT_SIZE,
+            block_root_hex,
+            sizeof(block_root_hex),
+            1)
+        != 0) {
+        block_root_hex[0] = '\0';
+    }
+    lantern_log_debug(
+        "gossip",
+        &meta,
+        "accepted block gossip slot=%" PRIu64 " proposer=%" PRIu64 " parent=%s",
+        block.message.slot,
+        block.message.proposer_index,
+        block_root_hex[0] ? block_root_hex : "0x0");
 
 cleanup:
     lantern_block_body_reset(&block.message.body);
@@ -205,6 +225,23 @@ static libp2p_gossipsub_validation_result_t gossipsub_vote_validator(
     if (service->vote_handler(&vote, msg->from, service->vote_handler_user_data) != 0) {
         result = LIBP2P_GOSSIPSUB_VALIDATION_IGNORE;
     }
+    char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    if (lantern_bytes_to_hex(
+            vote.data.head.root.bytes,
+            LANTERN_ROOT_SIZE,
+            head_hex,
+            sizeof(head_hex),
+            1)
+        != 0) {
+        head_hex[0] = '\0';
+    }
+    lantern_log_debug(
+        "gossip",
+        &meta,
+        "accepted vote gossip validator=%" PRIu64 " slot=%" PRIu64 " head=%s",
+        vote.data.validator_id,
+        vote.data.slot,
+        head_hex[0] ? head_hex : "0x0");
 
 cleanup:
     return result;
@@ -228,9 +265,13 @@ void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) 
         if (service->vote_validator_handle) {
             (void)libp2p_gossipsub_remove_validator(service->gossipsub, service->vote_validator_handle);
         }
+        if (service->vote_legacy_validator_handle) {
+            (void)libp2p_gossipsub_remove_validator(service->gossipsub, service->vote_legacy_validator_handle);
+        }
     }
     service->block_validator_handle = NULL;
     service->vote_validator_handle = NULL;
+    service->vote_legacy_validator_handle = NULL;
     if (service->gossipsub) {
         libp2p_gossipsub_stop(service->gossipsub);
         libp2p_gossipsub_free(service->gossipsub);
@@ -238,6 +279,7 @@ void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) 
     }
     memset(service->block_topic, 0, sizeof(service->block_topic));
     memset(service->vote_topic, 0, sizeof(service->vote_topic));
+    memset(service->legacy_vote_topic, 0, sizeof(service->legacy_vote_topic));
     service->publish_hook = NULL;
     service->publish_hook_user_data = NULL;
     service->loopback_only = 0;
@@ -282,6 +324,14 @@ int lantern_gossipsub_service_start(
         != 0) {
         return -1;
     }
+    if (snprintf(
+            service->legacy_vote_topic,
+            sizeof(service->legacy_vote_topic),
+            "/leanconsensus/%s/vote/ssz_snappy",
+            config->devnet)
+        < 0) {
+        return -1;
+    }
 
     libp2p_gossipsub_config_t cfg;
     if (libp2p_gossipsub_config_default(&cfg) != LIBP2P_ERR_OK) {
@@ -304,6 +354,12 @@ int lantern_gossipsub_service_start(
     if (subscribe_topic(service, service->vote_topic) != 0) {
         lantern_gossipsub_service_reset(service);
         return -1;
+    }
+    if (strcmp(service->legacy_vote_topic, service->vote_topic) != 0) {
+        if (subscribe_topic(service, service->legacy_vote_topic) != 0) {
+            lantern_gossipsub_service_reset(service);
+            return -1;
+        }
     }
 
     if (service->block_handler) {
@@ -339,6 +395,24 @@ int lantern_gossipsub_service_start(
                 "gossip",
                 NULL,
                 "failed to register vote gossip validator");
+            lantern_gossipsub_service_reset(service);
+            return -1;
+        }
+    }
+    if (service->vote_handler && strcmp(service->legacy_vote_topic, service->vote_topic) != 0) {
+        libp2p_gossipsub_validator_def_t def = {
+            .struct_size = sizeof(def),
+            .type = LIBP2P_GOSSIPSUB_VALIDATOR_SYNC,
+            .sync_fn = gossipsub_vote_validator,
+            .async_fn = NULL,
+            .user_data = service
+        };
+        if (libp2p_gossipsub_add_validator(service->gossipsub, service->legacy_vote_topic, &def, &service->vote_legacy_validator_handle)
+            != LIBP2P_ERR_OK) {
+            lantern_log_error(
+                "gossip",
+                NULL,
+                "failed to register legacy vote gossip validator");
             lantern_gossipsub_service_reset(service);
             return -1;
         }
@@ -425,11 +499,18 @@ int lantern_gossipsub_service_publish_vote(
     }
     size_t written = 0;
     int encode_rc = lantern_gossip_encode_signed_vote_snappy(vote, compressed, max_compressed, &written);
-    if (encode_rc != 0 || written == 0) {
-        free(compressed);
-        return -1;
-    }
+   if (encode_rc != 0 || written == 0) {
+       free(compressed);
+       return -1;
+   }
     int publish_rc = publish_payload(service, service->vote_topic, compressed, written);
+    if (publish_rc == 0 && strcmp(service->legacy_vote_topic, service->vote_topic) != 0) {
+        int legacy_rc = publish_payload(service, service->legacy_vote_topic, compressed, written);
+        if (legacy_rc != 0) {
+            /* propagate error but keep primary success */
+            publish_rc = legacy_rc;
+        }
+    }
     free(compressed);
     return publish_rc;
 }

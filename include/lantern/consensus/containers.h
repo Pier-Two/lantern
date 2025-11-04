@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #define LANTERN_ROOT_SIZE 32
-#define LANTERN_SIGNATURE_SIZE 32
+#define LANTERN_SIGNATURE_SIZE 4000
 #define LANTERN_MAX_ATTESTATIONS 4096
 
 typedef struct {

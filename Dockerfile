@@ -23,13 +23,16 @@ WORKDIR /usr/src/lantern
 
 COPY . .
 
-RUN ./scripts/bootstrap.sh
+RUN LANTERN_BOOTSTRAP_SKIP_SUBMODULE_SYNC=1 ./scripts/bootstrap.sh
 
 RUN cmake -S external/c-libp2p/external/libtommath -B deps/libtommath -DBUILD_SHARED_LIBS=ON \
     && cmake --build deps/libtommath --parallel "$(nproc)" \
     && cmake --install deps/libtommath
 
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+ARG LANTERN_FORCE_REBUILD=0
+RUN echo "LANTERN_FORCE_REBUILD=${LANTERN_FORCE_REBUILD}"
 RUN cmake --build build --target lantern_cli --parallel "$(nproc)"
 
 RUN cmake --build build --target lantern_client_test --parallel "$(nproc)" || true

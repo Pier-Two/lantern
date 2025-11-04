@@ -214,15 +214,19 @@ int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct la
         }
     }
     if (rc == 0) {
-        /* Allow outbound identify now that publish_service skips peers without /ipfs/id/push support. */
-        uint32_t flags = LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND | LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND;
-        b_rc = libp2p_host_builder_flags(builder, flags);
-        if (b_rc != 0) {
-            lantern_log_warn(
-                "network",
-                &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-                "libp2p host flags setup failed (%d)",
-                b_rc);
+        uint32_t flags = LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND;
+        if (config->allow_outbound_identify) {
+            flags |= LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND;
+        }
+        if (flags != 0u) {
+            b_rc = libp2p_host_builder_flags(builder, flags);
+            if (b_rc != 0) {
+                lantern_log_warn(
+                    "network",
+                    &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
+                    "libp2p host flags setup failed (%d)",
+                    b_rc);
+            }
         }
     }
 

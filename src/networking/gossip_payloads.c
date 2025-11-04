@@ -54,7 +54,7 @@ static int basic_vote_sanity(const LanternSignedVote *vote) {
     if (data->target.slot < data->source.slot) {
         return -1;
     }
-    if (data->slot > data->target.slot) {
+    if (data->slot < data->target.slot) {
         return -1;
     }
     return 0;

@@ -5,6 +5,7 @@
 #include "lantern/consensus/duties.h"
 #include "lantern/consensus/runtime.h"
 #include "lantern/consensus/state.h"
+#include "lantern/consensus/signature.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/storage/storage.h"
@@ -46,6 +47,8 @@
 #define LANTERN_BLOCKS_REQUEST_BACKOFF_BASE_MS 5000u
 #define LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_MS 300000u
 #define LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_FAILURES 8u
+#define LANTERN_BLOCKS_REQUEST_MIN_POLL_MS 2000u
+#define LANTERN_STATUS_POLL_INTERVAL_MS 6000u
 
 enum lantern_blocks_request_outcome {
     LANTERN_BLOCKS_REQUEST_SUCCESS = 0,
@@ -77,6 +80,17 @@ static int http_validator_info_cb(void *context, size_t index, struct lantern_ht
 static int http_set_validator_status_cb(void *context, uint64_t global_index, bool enabled);
 static int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snapshot);
 static void format_root_hex(const LanternRoot *root, char *out, size_t out_len);
+static bool lantern_client_lock_state(struct lantern_client *client);
+static void lantern_client_unlock_state(struct lantern_client *client, bool locked);
+static bool lantern_client_block_known_locked(
+    struct lantern_client *client,
+    const LanternRoot *root,
+    uint64_t *out_slot);
+static bool lantern_client_import_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    const struct lantern_log_metadata *meta);
 static int reqresp_build_status(void *context, LanternStatusMessage *out_status);
 static int reqresp_handle_status(void *context, const LanternStatusMessage *peer_status, const char *peer_id);
 static void reqresp_status_failure(void *context, const char *peer_id, int error);
@@ -107,7 +121,7 @@ static void connection_counter_update(
     int reason);
 static void connection_counter_reset(struct lantern_client *client);
 static void request_status_now(struct lantern_client *client, const peer_id_t *peer, const char *peer_text);
-static void drain_pending_status_requests(struct lantern_client *client);
+static inline void drain_pending_status_requests(struct lantern_client *client);
 static void request_status_from_bootnodes(struct lantern_client *client);
 static int start_peer_dialer(struct lantern_client *client);
 static void stop_peer_dialer(struct lantern_client *client);
@@ -115,6 +129,13 @@ static void *peer_dialer_thread(void *arg);
 static void peer_dialer_attempt(struct lantern_client *client);
 static void peer_dialer_sleep(struct lantern_client *client, unsigned seconds);
 static bool lantern_root_is_zero(const LanternRoot *root);
+
+static bool lantern_client_is_gossip_only(const struct lantern_client *client) {
+    if (!client || !client->devnet) {
+        return false;
+    }
+    return strcmp(client->devnet, "devnet0") == 0;
+}
 static int lantern_client_schedule_blocks_request(
     struct lantern_client *client,
     const char *peer_id_text,
@@ -150,6 +171,7 @@ struct lantern_peer_status_entry {
     LanternStatusMessage status;
     bool has_status;
     bool requested_head;
+    uint64_t last_status_request_ms;
     uint64_t last_blocks_request_ms;
     uint32_t consecutive_blocks_failures;
 };
@@ -287,11 +309,9 @@ static void connection_counter_update(
             }
         }
         if (delta > 0 && !inbound) {
-            if (client->reqresp_running) {
-                request_status_now(client, peer, label);
-            } else if (label && !string_list_contains(&client->pending_status_peer_ids, label)) {
-                (void)lantern_string_list_append(&client->pending_status_peer_ids, label);
-            }
+            /* Devnet-0 peers do not serve status over req/resp; rely on gossip only. */
+            /* request_status_now(client, peer, label); */
+            /* (void)lantern_string_list_append(&client->pending_status_peer_ids, label); */
         }
         total = client->connected_peers;
         pthread_mutex_unlock(&client->connection_lock);
@@ -314,6 +334,15 @@ static void connection_counter_update(
 }
 
 static void request_status_now(struct lantern_client *client, const peer_id_t *peer, const char *peer_text) {
+    if (lantern_client_is_gossip_only(client)) {
+        (void)peer;
+        (void)peer_text;
+        lantern_log_trace(
+            "reqresp",
+            &(const struct lantern_log_metadata){.validator = client ? client->node_id : NULL, .peer = peer_text},
+            "devnet0 gossip-only mode: skipping status request");
+        return;
+    }
     if (!client || !client->reqresp_running) {
         return;
     }
@@ -341,9 +370,35 @@ static void request_status_now(struct lantern_client *client, const peer_id_t *p
                 .validator = client->node_id},
             "initiated status request to peer");
     }
+    if (client->status_lock_initialized) {
+        char peer_buffer[128];
+        const char *status_peer = label;
+        if (!status_peer || status_peer[0] == '\0') {
+            peer_buffer[0] = '\0';
+            if (peer && peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_buffer, sizeof(peer_buffer)) == 0) {
+                status_peer = peer_buffer;
+            }
+        }
+        if (status_peer && status_peer[0]) {
+            if (pthread_mutex_lock(&client->status_lock) == 0) {
+                for (size_t i = 0; i < client->peer_status_count; ++i) {
+                    struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
+                    if (strncmp(entry->peer_id, status_peer, sizeof(entry->peer_id)) == 0) {
+                        if (status_rc == 0) {
+                            entry->last_status_request_ms = monotonic_millis();
+                        } else {
+                            entry->last_status_request_ms = 0;
+                        }
+                        break;
+                    }
+                }
+                pthread_mutex_unlock(&client->status_lock);
+            }
+        }
+    }
 }
 
-static void drain_pending_status_requests(struct lantern_client *client) {
+static inline void drain_pending_status_requests(struct lantern_client *client) {
     if (!client || !client->reqresp_running || !client->connection_lock_initialized) {
         return;
     }
@@ -508,6 +563,41 @@ static void adopt_validator_listen_address(struct lantern_client *client) {
 static void peer_dialer_attempt(struct lantern_client *client) {
     if (!client || !client->network.host) {
         return;
+    }
+
+    /* drain_pending_status_requests(client); */
+
+    if (!lantern_client_is_gossip_only(client)) {
+        struct lantern_string_list stale_status_peers;
+        lantern_string_list_init(&stale_status_peers);
+        if (client->status_lock_initialized) {
+            if (pthread_mutex_lock(&client->status_lock) == 0) {
+                uint64_t now_ms = monotonic_millis();
+                for (size_t i = 0; i < client->peer_status_count; ++i) {
+                    struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
+                    if (!entry || entry->peer_id[0] == '\0') {
+                        continue;
+                    }
+                    uint64_t last_ms = entry->last_status_request_ms;
+                    if (last_ms == 0 || now_ms >= last_ms + LANTERN_STATUS_POLL_INTERVAL_MS) {
+                        (void)lantern_string_list_append(&stale_status_peers, entry->peer_id);
+                    }
+                }
+                pthread_mutex_unlock(&client->status_lock);
+            }
+        }
+        for (size_t i = 0; stale_status_peers.len > 0 && i < stale_status_peers.len; ++i) {
+            const char *peer_text = stale_status_peers.items[i];
+            if (!peer_text) {
+                continue;
+            }
+            peer_id_t parsed = {0};
+            if (peer_id_create_from_string(peer_text, &parsed) == PEER_ID_SUCCESS) {
+                request_status_now(client, &parsed, peer_text);
+                peer_id_destroy(&parsed);
+            }
+        }
+        lantern_string_list_reset(&stale_status_peers);
     }
 
     const struct lantern_enr_record_list *enrs = &client->genesis.enrs;
@@ -1009,10 +1099,11 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     lantern_metrics_server_init(&client->metrics_server);
     client->metrics_running = false;
     lantern_http_server_init(&client->http_server);
-   client->http_running = false;
-   lantern_state_init(&client->state);
-   lantern_fork_choice_init(&client->fork_choice);
-   client->has_fork_choice = false;
+    client->http_running = false;
+    lantern_state_init(&client->state);
+    client->state_lock_initialized = false;
+    lantern_fork_choice_init(&client->fork_choice);
+    client->has_fork_choice = false;
     client->dialer_thread_started = false;
     client->dialer_stop_flag = 1;
 
@@ -1038,6 +1129,16 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
             goto error;
         }
         client->status_lock_initialized = true;
+    }
+    if (!client->state_lock_initialized) {
+        if (pthread_mutex_init(&client->state_lock, NULL) != 0) {
+            lantern_log_error(
+                "client",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "failed to initialize state lock");
+            goto error;
+        }
+        client->state_lock_initialized = true;
     }
     client->http_port = options->http_port;
     client->metrics_port = options->metrics_port;
@@ -1193,6 +1294,7 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
         .listen_multiaddr = client->listen_address,
         .secp256k1_secret = node_key,
         .secret_len = sizeof(node_key),
+        .allow_outbound_identify = 1,
     };
     if (lantern_libp2p_host_start(&client->network, &net_cfg) != 0) {
         lantern_log_error(
@@ -1280,7 +1382,12 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
         goto error;
     }
     client->reqresp_running = true;
-    drain_pending_status_requests(client);
+    if (lantern_client_is_gossip_only(client)) {
+        lantern_log_debug(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "gossip-only mode: request/response service running inbound-only");
+    }
 
     if (append_genesis_bootnodes(client) != 0) {
         lantern_log_error(
@@ -1290,7 +1397,7 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
         memset(node_key, 0, sizeof(node_key));
         goto error;
     }
-    request_status_from_bootnodes(client);
+    /* request_status_from_bootnodes(client); */
 
     if (lantern_enr_record_build_v4(
             &client->local_enr,
@@ -1497,6 +1604,10 @@ void lantern_shutdown(struct lantern_client *client) {
         client->has_state = false;
     } else {
         lantern_state_reset(&client->state);
+    }
+    if (client->state_lock_initialized) {
+        pthread_mutex_destroy(&client->state_lock);
+        client->state_lock_initialized = false;
     }
     lantern_fork_choice_reset(&client->fork_choice);
     client->has_fork_choice = false;
@@ -1876,6 +1987,7 @@ static int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *o
         }
     }
 
+    bool state_locked = lantern_client_lock_state(client);
     if (client->has_state) {
         out_snapshot->head_slot = client->state.slot;
         if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &out_snapshot->head_root) != 0) {
@@ -1889,6 +2001,7 @@ static int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *o
         memset(&out_snapshot->finalized, 0, sizeof(out_snapshot->finalized));
         out_snapshot->head_slot = 0;
     }
+    lantern_client_unlock_state(client, state_locked);
 
     out_snapshot->known_peers = client->bootnodes.len;
     out_snapshot->connected_peers = connected;
@@ -1935,6 +2048,168 @@ static void format_root_hex(const LanternRoot *root, char *out, size_t out_len) 
     if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, out, out_len, 1) != 0) {
         out[0] = '\0';
     }
+}
+
+static bool lantern_client_lock_state(struct lantern_client *client) {
+    if (!client || !client->state_lock_initialized) {
+        return false;
+    }
+    if (pthread_mutex_lock(&client->state_lock) != 0) {
+        lantern_log_warn(
+            "state",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to lock state mutex");
+        return false;
+    }
+    return true;
+}
+
+static void lantern_client_unlock_state(struct lantern_client *client, bool locked) {
+    if (!client || !locked || !client->state_lock_initialized) {
+        return;
+    }
+    pthread_mutex_unlock(&client->state_lock);
+}
+
+static bool lantern_client_block_known_locked(
+    struct lantern_client *client,
+    const LanternRoot *root,
+    uint64_t *out_slot) {
+    if (!client || !root || !client->has_fork_choice) {
+        return false;
+    }
+    uint64_t slot = 0;
+    if (lantern_fork_choice_block_info(&client->fork_choice, root, &slot, NULL, NULL) == 0) {
+        if (out_slot) {
+            *out_slot = slot;
+        }
+        return true;
+    }
+    return false;
+}
+
+static bool lantern_client_import_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    const struct lantern_log_metadata *meta) {
+    if (!client || !block || !client->has_state) {
+        return false;
+    }
+
+    bool state_locked = lantern_client_lock_state(client);
+    uint64_t local_slot = client->state.slot;
+
+    uint64_t known_slot = 0;
+    bool root_known = false;
+    if (block_root) {
+        if (state_locked) {
+            root_known = lantern_client_block_known_locked(client, block_root, &known_slot);
+        } else if (client->has_fork_choice) {
+            root_known = (lantern_fork_choice_block_info(&client->fork_choice, block_root, &known_slot, NULL, NULL) == 0);
+        }
+    }
+
+    if (root_known && block->message.slot <= known_slot) {
+        lantern_client_unlock_state(client, state_locked);
+        lantern_log_trace(
+            "state",
+            meta,
+            "skipping known block slot=%" PRIu64,
+            block->message.slot);
+        return false;
+    }
+
+    if (block->message.slot < local_slot && !root_known) {
+        lantern_client_unlock_state(client, state_locked);
+        lantern_log_debug(
+            "state",
+            meta,
+            "ignoring block slot=%" PRIu64 " local_slot=%" PRIu64,
+            block->message.slot,
+            local_slot);
+        return false;
+    }
+
+    LanternSignedBlock import_block = *block;
+    lantern_signature_zero(&import_block.signature);
+
+    if (lantern_state_transition(&client->state, &import_block) != 0) {
+        lantern_client_unlock_state(client, state_locked);
+        lantern_log_warn(
+            "state",
+            meta,
+            "state transition failed for slot=%" PRIu64,
+            block->message.slot);
+        return false;
+    }
+
+    if (client->has_fork_choice) {
+        if (lantern_fork_choice_accept_new_votes(&client->fork_choice) != 0) {
+            lantern_log_debug(
+                "forkchoice",
+                meta,
+                "accepting new votes failed after slot=%" PRIu64,
+                block->message.slot);
+        }
+        if (lantern_fork_choice_update_safe_target(&client->fork_choice) != 0) {
+            lantern_log_debug(
+                "forkchoice",
+                meta,
+                "updating safe target failed after slot=%" PRIu64,
+                block->message.slot);
+        }
+        if (lantern_fork_choice_recompute_head(&client->fork_choice) != 0) {
+            lantern_log_debug(
+                "forkchoice",
+                meta,
+                "recomputing head failed after slot=%" PRIu64,
+                block->message.slot);
+        }
+    }
+
+    uint64_t head_slot = client->state.slot;
+    LanternRoot head_root;
+    memset(&head_root, 0, sizeof(head_root));
+    if (client->has_fork_choice) {
+        if (lantern_fork_choice_current_head(&client->fork_choice, &head_root) == 0) {
+            uint64_t fork_slot = 0;
+            if (lantern_fork_choice_block_info(&client->fork_choice, &head_root, &fork_slot, NULL, NULL) == 0) {
+                head_slot = fork_slot;
+            }
+        }
+    }
+
+    if (client->data_dir) {
+        if (lantern_storage_save_state(client->data_dir, &client->state) != 0) {
+            lantern_log_warn(
+                "storage",
+                meta,
+                "failed to persist state after slot=%" PRIu64,
+                client->state.slot);
+        }
+        if (lantern_storage_save_votes(client->data_dir, &client->state) != 0) {
+            lantern_log_warn(
+                "storage",
+                meta,
+                "failed to persist votes after slot=%" PRIu64,
+                client->state.slot);
+        }
+    }
+
+    lantern_client_unlock_state(client, state_locked);
+
+    char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    format_root_hex(&head_root, head_hex, sizeof(head_hex));
+    lantern_log_info(
+        "state",
+        meta,
+        "imported block slot=%" PRIu64 " new_head_slot=%" PRIu64 " head_root=%s",
+        block->message.slot,
+        head_slot,
+        head_hex[0] ? head_hex : "0x0");
+
+    return true;
 }
 
 static bool lantern_root_is_zero(const LanternRoot *root) {
@@ -2116,6 +2391,23 @@ static void lantern_client_on_peer_status(
     strncpy(peer_copy, peer_id, peer_cap - 1);
 
     LanternRoot request_root = peer_status->head.root;
+    uint64_t local_slot = 0;
+    bool head_known = false;
+    bool state_locked = lantern_client_lock_state(client);
+    if (state_locked) {
+        local_slot = client->state.slot;
+        head_known = lantern_client_block_known_locked(client, &peer_status->head.root, NULL);
+    } else if (client->has_state) {
+        local_slot = client->state.slot;
+        if (client->has_fork_choice) {
+            uint64_t fork_slot = 0;
+            if (lantern_fork_choice_block_info(&client->fork_choice, &peer_status->head.root, &fork_slot, NULL, NULL) == 0) {
+                head_known = true;
+            }
+        }
+    }
+    lantern_client_unlock_state(client, state_locked);
+
     bool should_request = false;
 
     if (pthread_mutex_lock(&client->status_lock) != 0) {
@@ -2158,11 +2450,20 @@ static void lantern_client_on_peer_status(
 
     string_list_remove(&client->status_failure_peer_ids, peer_copy);
 
+    bool had_status = entry->has_status;
+    LanternStatusMessage previous_status = entry->status;
+    bool head_changed = !had_status
+        || previous_status.head.slot != peer_status->head.slot
+        || memcmp(previous_status.head.root.bytes, peer_status->head.root.bytes, LANTERN_ROOT_SIZE) != 0;
+
     entry->status = *peer_status;
     entry->has_status = true;
     if (!entry->requested_head) {
         uint64_t now_ms = monotonic_millis();
         uint64_t backoff_ms = blocks_request_backoff_ms(entry->consecutive_blocks_failures);
+        if (entry->consecutive_blocks_failures == 0 && backoff_ms < LANTERN_BLOCKS_REQUEST_MIN_POLL_MS) {
+            backoff_ms = LANTERN_BLOCKS_REQUEST_MIN_POLL_MS;
+        }
         bool within_backoff = entry->last_blocks_request_ms != 0
             && now_ms < entry->last_blocks_request_ms + backoff_ms;
         if (!within_backoff) {
@@ -2187,12 +2488,15 @@ static void lantern_client_on_peer_status(
     pthread_mutex_unlock(&client->status_lock);
 
     if (should_request) {
+        /* Devnet-0 relies on gossip for blocks; skip blocks_by_root scheduling. */
+        /*
         if (lantern_client_schedule_blocks_request(client, peer_copy, &request_root, false) != 0) {
             lantern_client_on_blocks_request_complete(
                 client,
                 peer_copy,
                 LANTERN_BLOCKS_REQUEST_ABORTED);
         }
+        */
     }
 }
 
@@ -2204,6 +2508,9 @@ static void lantern_client_on_blocks_request_complete(
         return;
     }
     const size_t peer_cap = sizeof(((struct lantern_peer_status_entry *)0)->peer_id);
+    char pending_peer[sizeof(((struct lantern_peer_status_entry *)0)->peer_id)];
+    pending_peer[0] = '\0';
+    bool enqueue_status = false;
     if (pthread_mutex_lock(&client->status_lock) != 0) {
         return;
     }
@@ -2229,10 +2536,29 @@ static void lantern_client_on_blocks_request_complete(
             if (outcome != LANTERN_BLOCKS_REQUEST_ABORTED && entry->last_blocks_request_ms == 0) {
                 entry->last_blocks_request_ms = monotonic_millis();
             }
+            if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS && entry->peer_id[0] != '\0') {
+                strncpy(pending_peer, entry->peer_id, peer_cap - 1);
+                pending_peer[peer_cap - 1] = '\0';
+                enqueue_status = true;
+            }
             break;
         }
     }
     pthread_mutex_unlock(&client->status_lock);
+
+    if (enqueue_status && pending_peer[0] != '\0' && client->connection_lock_initialized) {
+        bool appended = false;
+        if (pthread_mutex_lock(&client->connection_lock) == 0) {
+            if (!string_list_contains(&client->pending_status_peer_ids, pending_peer)) {
+                appended = (lantern_string_list_append(&client->pending_status_peer_ids, pending_peer) == 0);
+            }
+            pthread_mutex_unlock(&client->connection_lock);
+        }
+        if (appended) {
+            /* Devnet-0: skip req/resp status follow-up; rely on gossip updates. */
+            /* drain_pending_status_requests(client); */
+        }
+    }
 }
 
 static int stream_write_all(libp2p_stream_t *stream, const uint8_t *data, size_t length) {
@@ -2969,6 +3295,22 @@ static void *block_request_worker(void *arg) {
             response_len,
             preview_len > 0 ? " hex=" : "",
             preview_len > 0 ? response_hex : "");
+        if (response && response_len > 0) {
+            char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+            format_root_hex(&ctx->root, root_hex, sizeof(root_hex));
+            const char *suffix = root_hex;
+            if (suffix[0] == '0' && (suffix[1] == 'x' || suffix[1] == 'X')) {
+                suffix += 2;
+            }
+            char dump_path[256];
+            if (snprintf(dump_path, sizeof(dump_path), "/data/lantern_blocks_by_root_failed_%s.bin", suffix) > 0) {
+                FILE *dump = fopen(dump_path, "wb");
+                if (dump) {
+                    (void)fwrite(response, 1, response_len, dump);
+                    fclose(dump);
+                }
+            }
+        }
         schedule_legacy = !ctx->using_legacy;
         goto cleanup;
     }
@@ -3023,14 +3365,8 @@ cleanup:
     libp2p_stream_free(stream);
 
     if (!request_success) {
-        if (schedule_legacy && ctx->client) {
-            if (lantern_client_schedule_blocks_request(ctx->client, ctx->peer_text, &ctx->root, true) != 0) {
-                lantern_client_on_blocks_request_complete(
-                    ctx->client,
-                    ctx->peer_text,
-                    LANTERN_BLOCKS_REQUEST_FAILED);
-            }
-        } else if (ctx->client && ctx->using_legacy) {
+        /* Devnet-0: do not retry blocks_by_root fallbacks; rely on gossip. */
+        if (ctx->client && ctx->using_legacy) {
             lantern_client_on_blocks_request_complete(
                 ctx->client,
                 ctx->peer_text,
@@ -3067,20 +3403,12 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
             "failed to open %s stream err=%d",
             ctx->protocol_id,
             err);
-        bool attempted_fallback = false;
         if (!ctx->using_legacy && ctx->client) {
-            attempted_fallback = (lantern_client_schedule_blocks_request(
-                                      ctx->client,
-                                      ctx->peer_text,
-                                      &ctx->root,
-                                      true)
-                                  == 0);
-            if (!attempted_fallback) {
-                lantern_client_on_blocks_request_complete(
-                    ctx->client,
-                    ctx->peer_text,
-                    LANTERN_BLOCKS_REQUEST_FAILED);
-            }
+            /* Devnet-0: skip fallback scheduling; rely on gossip. */
+            lantern_client_on_blocks_request_complete(
+                ctx->client,
+                ctx->peer_text,
+                LANTERN_BLOCKS_REQUEST_FAILED);
         } else if (ctx->client) {
             lantern_client_on_blocks_request_complete(
                 ctx->client,
@@ -3142,6 +3470,12 @@ static int lantern_client_schedule_blocks_request(
     const char *peer_id_text,
     const LanternRoot *root,
     bool use_legacy) {
+    if (lantern_client_is_gossip_only(client)) {
+        (void)peer_id_text;
+        (void)root;
+        (void)use_legacy;
+        return -1;
+    }
     if (!client || !peer_id_text || !root || !client->network.host) {
         return -1;
     }
@@ -3246,6 +3580,8 @@ static void lantern_client_record_block(
                 root_hex[0] ? root_hex : "0x0");
         }
     }
+
+    (void)lantern_client_import_block(client, block, selected_root, &meta);
 }
 
 static int gossip_block_handler(

@@ -16,7 +16,7 @@ static const char *lantern_gossip_topic_name(enum lantern_gossip_topic_kind kind
         case LANTERN_GOSSIP_TOPIC_BLOCK:
             return "block";
         case LANTERN_GOSSIP_TOPIC_VOTE:
-            return "vote";
+            return "attestation";
         default:
             return NULL;
     }

@@ -630,7 +630,7 @@ int lantern_ssz_encode_signed_block(const LanternSignedBlock *block, uint8_t *ou
 }
 
 int lantern_ssz_decode_signed_block(LanternSignedBlock *block, const uint8_t *data, size_t data_len) {
-    if (!block || !data || data_len < SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE) {
+    if (!block || !data || data_len < SSZ_BYTE_SIZE_OF_UINT32) {
         return -1;
     }
 
@@ -638,14 +638,15 @@ int lantern_ssz_decode_signed_block(LanternSignedBlock *block, const uint8_t *da
     if (read_u32(data, data_len, &message_offset) != 0) {
         return -1;
     }
-    if (message_offset > data_len || message_offset < SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE) {
+    if (message_offset > data_len || message_offset < SSZ_BYTE_SIZE_OF_UINT32) {
         return -1;
     }
 
-    if (!lantern_signature_bytes_are_zero(data + SSZ_BYTE_SIZE_OF_UINT32, LANTERN_SIGNATURE_SIZE)) {
-        return -1;
+    if (message_offset >= SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE) {
+        memcpy(block->signature.bytes, data + SSZ_BYTE_SIZE_OF_UINT32, LANTERN_SIGNATURE_SIZE);
+    } else {
+        memset(block->signature.bytes, 0, LANTERN_SIGNATURE_SIZE);
     }
-    memset(block->signature.bytes, 0, LANTERN_SIGNATURE_SIZE);
 
     if (lantern_ssz_decode_block(&block->message, data + message_offset, data_len - message_offset) != 0) {
         return -1;

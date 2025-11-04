@@ -94,6 +94,8 @@ struct lantern_client {
     bool has_fork_choice;
     LanternState state;
     bool has_state;
+    pthread_mutex_t state_lock;
+    bool state_lock_initialized;
     bool *validator_enabled;
     pthread_mutex_t validator_lock;
     bool validator_lock_initialized;

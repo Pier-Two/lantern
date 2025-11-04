@@ -18,6 +18,7 @@ struct lantern_libp2p_config {
     const char *listen_multiaddr;
     const uint8_t *secp256k1_secret;
     size_t secret_len;
+    int allow_outbound_identify;
 };
 
 struct lantern_libp2p_host {
