@@ -337,6 +337,7 @@ int lantern_gossipsub_service_start(
     if (libp2p_gossipsub_config_default(&cfg) != LIBP2P_ERR_OK) {
         return -1;
     }
+    cfg.enable_flood_publish = true;
 
     libp2p_gossipsub_t *gs = NULL;
     if (libp2p_gossipsub_new(config->host, &cfg, &gs) != LIBP2P_ERR_OK || !gs) {

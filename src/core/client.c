@@ -1397,7 +1397,7 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
         memset(node_key, 0, sizeof(node_key));
         goto error;
     }
-    /* request_status_from_bootnodes(client); */
+    request_status_from_bootnodes(client);
 
     if (lantern_enr_record_build_v4(
             &client->local_enr,
