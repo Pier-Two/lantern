@@ -1,6 +1,6 @@
 # Lantern
 
-Lantern is the C reference client for the Ream Lean consensus network. It
+Lantern is a C implementation for Lean consensus. It
 implements gossip, fork-choice, state transition, and storage against the
 Devnet containers defined in [`tools/leanSpec`](../tools/leanSpec).
 
