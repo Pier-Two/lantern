@@ -1,0 +1,77 @@
+{
+    "tests/consensus/devnet/stf_examples/test_blocks.py::test_single_empty_block[fork_Devnet][fork_devnet-state_transition_test]": {
+        "network": "Devnet",
+        "pre": {
+            "config": {
+                "genesisTime": 0
+            },
+            "slot": 0,
+            "latestBlockHeader": {
+                "slot": 0,
+                "proposerIndex": 0,
+                "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "bodyRoot": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
+            },
+            "latestJustified": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "latestFinalized": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "historicalBlockHashes": {
+                "data": []
+            },
+            "justifiedSlots": {
+                "data": []
+            },
+            "validators": {
+                "data": [
+                    {
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    {
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    {
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    {
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    }
+                ]
+            },
+            "justificationsRoots": {
+                "data": []
+            },
+            "justificationsValidators": {
+                "data": []
+            }
+        },
+        "blocks": [
+            {
+                "slot": 1,
+                "proposer_index": 1,
+                "parent_root": "0xc0d44f989da630e63b222085a226fea923e2cc5321ba4c4aa4978b528949827e",
+                "state_root": "0x57c159521023a7181e36310c0e30f3fa4b49449df06fbb40023ae6db29b9d200",
+                "body": {
+                    "attestations": {
+                        "data": []
+                    }
+                }
+            }
+        ],
+        "post": {
+            "slot": 1
+        },
+        "_info": {
+            "hash": "0xe62d25ff2baeab4a11708294f614c38c9e4f964f74908e4ea53c5352bc40848a",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/stf_examples/test_blocks.py::test_single_empty_block[fork_Devnet]",
+            "description": "Test processing a single empty block (no attestations).\n\n    This is the simplest possible block processing test.\n    Uses default pre-state (auto-injected).",
+            "fixtureFormat": "state_transition_test"
+        }
+    }
+}

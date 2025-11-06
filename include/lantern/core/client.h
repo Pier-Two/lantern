@@ -54,6 +54,19 @@ struct lantern_client_options {
 struct libp2p_subscription;
 struct libp2p_protocol_server;
 struct lantern_peer_status_entry;
+struct lantern_pending_block {
+    LanternSignedBlock block;
+    LanternRoot root;
+    LanternRoot parent_root;
+    char peer_text[128];
+    bool parent_requested;
+};
+
+struct lantern_pending_block_list {
+    struct lantern_pending_block *items;
+    size_t length;
+    size_t capacity;
+};
 
 struct lantern_local_validator {
     uint64_t global_index;
@@ -111,6 +124,9 @@ struct lantern_client {
     struct lantern_string_list connected_peer_ids;
     struct lantern_string_list pending_status_peer_ids;
     struct lantern_string_list status_failure_peer_ids;
+    struct lantern_pending_block_list pending_blocks;
+    pthread_mutex_t pending_lock;
+    bool pending_lock_initialized;
     pthread_t dialer_thread;
     bool dialer_thread_started;
     int dialer_stop_flag;
@@ -133,6 +149,42 @@ const struct lantern_local_validator *lantern_client_local_validator(
     const struct lantern_client *client,
     size_t index);
 int lantern_client_publish_block(struct lantern_client *client, const LanternSignedBlock *block);
+
+int lantern_client_debug_import_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    const char *peer_id_text);
+size_t lantern_client_pending_block_count(const struct lantern_client *client);
+
+#define LANTERN_DEBUG_BLOCKS_REQUEST_SUCCESS 0
+#define LANTERN_DEBUG_BLOCKS_REQUEST_FAILED 1
+#define LANTERN_DEBUG_BLOCKS_REQUEST_ABORTED 2
+
+int lantern_client_debug_enqueue_pending_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    const LanternRoot *parent_root,
+    const char *peer_id_text);
+int lantern_client_debug_pending_entry(
+    const struct lantern_client *client,
+    size_t index,
+    LanternRoot *out_root,
+    LanternRoot *out_parent_root,
+    bool *out_parent_requested,
+    char *out_peer_text,
+    size_t peer_text_len);
+void lantern_client_debug_pending_reset(struct lantern_client *client);
+int lantern_client_debug_set_parent_requested(
+    struct lantern_client *client,
+    const LanternRoot *root,
+    bool requested);
+int lantern_client_debug_on_blocks_request_complete(
+    struct lantern_client *client,
+    const char *peer_id,
+    const LanternRoot *request_root,
+    int outcome_code);
 
 #ifdef __cplusplus
 }

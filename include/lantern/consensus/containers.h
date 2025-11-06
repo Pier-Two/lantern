@@ -8,6 +8,10 @@
 #define LANTERN_ROOT_SIZE 32
 #define LANTERN_SIGNATURE_SIZE 4000
 #define LANTERN_MAX_ATTESTATIONS 4096
+#define LANTERN_VALIDATOR_PUBKEY_SIZE 52
+#define LANTERN_VALIDATOR_REGISTRY_LIMIT 4096
+#define LANTERN_HISTORICAL_ROOTS_LIMIT 262144
+#define LANTERN_JUSTIFICATION_VALIDATORS_LIMIT ((size_t)LANTERN_HISTORICAL_ROOTS_LIMIT * (size_t)LANTERN_VALIDATOR_REGISTRY_LIMIT)
 
 typedef struct {
     uint8_t bytes[LANTERN_ROOT_SIZE];
@@ -49,6 +53,10 @@ typedef struct {
 typedef struct {
     LanternAttestations attestations;
 } LanternBlockBody;
+
+typedef struct {
+    uint8_t pubkey[LANTERN_VALIDATOR_PUBKEY_SIZE];
+} LanternValidator;
 
 typedef struct {
     uint64_t slot;

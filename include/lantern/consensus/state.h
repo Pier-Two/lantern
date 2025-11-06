@@ -31,6 +31,7 @@ typedef struct {
     LanternCheckpoint latest_finalized;
     struct lantern_root_list historical_block_hashes;
     struct lantern_bitlist justified_slots;
+    LanternRoot validators_root;
     struct lantern_root_list justification_roots;
     struct lantern_bitlist justification_validators;
     struct lantern_vote_record *validator_votes;

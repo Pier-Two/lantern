@@ -7,3 +7,6 @@
 [submodule "external/snappy-c"]
 	path = external/snappy-c
 	url = https://github.com/andikleen/snappy-c
+[submodule "external/jsmn"]
+	path = external/jsmn
+	url = https://github.com/zserge/jsmn.git

@@ -61,12 +61,22 @@ static void setup_state_and_fork_choice(
     lantern_fork_choice_init(fork_choice);
     expect_zero(lantern_fork_choice_configure(fork_choice, &state->config), "configure fork choice for setup");
 
+    LanternRoot state_root;
+    expect_zero(lantern_hash_tree_root_state(state, &state_root), "hash state for anchor setup");
+    state->latest_block_header.state_root = state_root;
+    LanternRoot header_root;
+    expect_zero(
+        lantern_hash_tree_root_block_header(&state->latest_block_header, &header_root),
+        "hash header for anchor setup");
+    state->latest_justified.root = header_root;
+    state->latest_finalized.root = header_root;
+
     LanternBlock anchor;
     memset(&anchor, 0, sizeof(anchor));
     anchor.slot = state->latest_block_header.slot;
     anchor.proposer_index = state->latest_block_header.proposer_index;
     anchor.parent_root = state->latest_block_header.parent_root;
-    anchor.state_root = state->latest_block_header.state_root;
+    anchor.state_root = state_root;
     lantern_block_body_init(&anchor.body);
 
     expect_zero(lantern_hash_tree_root_block(&anchor, out_anchor_root), "hash anchor block");
@@ -175,6 +185,7 @@ static int test_state_transition_applies_block(void) {
     LanternRoot post_root;
     expect_zero(lantern_hash_tree_root_state(&state, &post_root), "hash post state");
     assert(memcmp(post_root.bytes, expected_state_root.bytes, LANTERN_ROOT_SIZE) == 0);
+    assert(memcmp(state.latest_block_header.state_root.bytes, expected_state_root.bytes, LANTERN_ROOT_SIZE) == 0);
     assert(state.slot == expected.slot);
     assert(state.historical_block_hashes.length == expected.historical_block_hashes.length);
 

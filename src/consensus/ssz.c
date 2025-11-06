@@ -185,8 +185,11 @@ static int encode_bitlist(const struct lantern_bitlist *list, uint8_t *out, size
     if (byte_len > 0) {
         memcpy(out, list->bytes, byte_len);
     }
+    uint8_t length_bit_index = (uint8_t)(list->bit_length % 8);
     if (needs_extra) {
-        out[total - 1] = 0x01;
+        out[total - 1] = (uint8_t)(1u << length_bit_index);
+    } else {
+        out[byte_len - 1] |= (uint8_t)(1u << length_bit_index);
     }
     set_written(written, total);
     return 0;
@@ -223,6 +226,11 @@ static int decode_bitlist(struct lantern_bitlist *list, const uint8_t *data, siz
     size_t byte_len = (bit_length + 7) / 8;
     if (byte_len > 0) {
         memcpy(list->bytes, data, byte_len);
+        uint8_t remainder = (uint8_t)(bit_length % 8);
+        if (remainder != 0) {
+            uint8_t mask = (uint8_t)((1u << remainder) - 1u);
+            list->bytes[byte_len - 1] &= mask;
+        }
     }
     return 0;
 }
@@ -688,6 +696,11 @@ int lantern_ssz_encode_state(const LanternState *state, uint8_t *out, size_t out
     }
     offset += tmp;
 
+    if (write_root(out + offset, out_len - offset, &state->validators_root) != 0) {
+        return -1;
+    }
+    offset += LANTERN_ROOT_SIZE;
+
     if (out_len < offset + (var_field_count * SSZ_BYTE_SIZE_OF_UINT32)) {
         return -1;
     }
@@ -758,9 +771,10 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
     const size_t var_field_count = 4;
     size_t offset = 0;
     const size_t offsets_size = var_field_count * SSZ_BYTE_SIZE_OF_UINT32;
-    const size_t min_truncated_size = LANTERN_CONFIG_SSZ_SIZE + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + offsets_size;
+    const size_t min_truncated_size =
+        LANTERN_CONFIG_SSZ_SIZE + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + LANTERN_ROOT_SIZE + offsets_size;
     const size_t min_full_size = LANTERN_CONFIG_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT64 + LANTERN_BLOCK_HEADER_SSZ_SIZE
-        + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + offsets_size;
+        + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + LANTERN_ROOT_SIZE + offsets_size;
     bool truncated = false;
 
     if (data_len < min_full_size) {
@@ -808,6 +822,14 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
         return -1;
     }
     offset += LANTERN_CHECKPOINT_SSZ_SIZE;
+
+    if (data_len - offset < LANTERN_ROOT_SIZE) {
+        return -1;
+    }
+    if (read_root(data + offset, data_len - offset, &state->validators_root) != 0) {
+        return -1;
+    }
+    offset += LANTERN_ROOT_SIZE;
 
     if (data_len - offset < offsets_size) {
         return -1;

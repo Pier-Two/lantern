@@ -1,0 +1,138 @@
+{
+    "tests/consensus/devnet/fc/test_attestation_processing.py::test_attestations_move_to_known_between_blocks[fork_Devnet][fork_devnet-fork_choice_test]": {
+        "network": "Devnet",
+        "anchorState": {
+            "config": {
+                "genesisTime": 0
+            },
+            "slot": 0,
+            "latestBlockHeader": {
+                "slot": 0,
+                "proposerIndex": 0,
+                "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "bodyRoot": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
+            },
+            "latestJustified": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "latestFinalized": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "historicalBlockHashes": {
+                "data": []
+            },
+            "justifiedSlots": {
+                "data": []
+            },
+            "validators": {
+                "data": [
+                    {
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    {
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    {
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    {
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    }
+                ]
+            },
+            "justificationsRoots": {
+                "data": []
+            },
+            "justificationsValidators": {
+                "data": []
+            }
+        },
+        "anchorBlock": {
+            "slot": 0,
+            "proposerIndex": 0,
+            "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "stateRoot": "0x259dd6c91f2bab3b338fd2b4d9a6d8f8e678bc7d75590f96f323c5e82843e913",
+            "body": {
+                "attestations": {
+                    "data": []
+                }
+            }
+        },
+        "steps": [
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 1,
+                    "attestationChecks": [
+                        {
+                            "validator": 1,
+                            "attestationSlot": 1,
+                            "headSlot": 1,
+                            "sourceSlot": 0,
+                            "targetSlot": 1,
+                            "location": "new"
+                        }
+                    ]
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 1,
+                    "proposer_index": 1,
+                    "parent_root": "0xc0d44f989da630e63b222085a226fea923e2cc5321ba4c4aa4978b528949827e",
+                    "state_root": "0x57c159521023a7181e36310c0e30f3fa4b49449df06fbb40023ae6db29b9d200",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 2,
+                    "attestationChecks": [
+                        {
+                            "validator": 1,
+                            "attestationSlot": 1,
+                            "headSlot": 1,
+                            "sourceSlot": 0,
+                            "targetSlot": 1,
+                            "location": "known"
+                        },
+                        {
+                            "validator": 2,
+                            "attestationSlot": 2,
+                            "headSlot": 2,
+                            "sourceSlot": 1,
+                            "targetSlot": 2,
+                            "location": "new"
+                        }
+                    ]
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 2,
+                    "proposer_index": 2,
+                    "parent_root": "0xad26b6bd334c3210c3776ae2cb5ca6f27c89fdd7d1f9e9e08324f4c584b87134",
+                    "state_root": "0xb229cd5597a4c28c8895b60113d6a6b86602d19aa364f1bdeb6ecd5f51ae0756",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            }
+        ],
+        "_info": {
+            "hash": "0xb7a08f50ecf1f91fd1ba7367eb0458bada889347392a4f9e11dd51e17a5620c9",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/fc/test_attestation_processing.py::test_attestations_move_to_known_between_blocks[fork_Devnet]",
+            "description": "Attestations move from latest_new to latest_known between blocks.\n\n    Scenario\n    --------\n    Process blocks at slots 1 and 2 (different proposers: validators 1 and 2).\n\n    Expected:\n        - After slot 1: new attestations = 1, known attestations = 0\n        - After slot 2: new attestations = 1, known attestations = 1\n        - Validator 1's attestation moved to known with correct checkpoints\n        - Validator 2's attestation in new with correct checkpoints\n\n    Why This Matters\n    ----------------\n    The interval tick system drives attestation migration between slots.\n\n    Before processing the next block, interval ticks move all attestations from\n    new \u2192 known and clear the new dictionary. Then the next block's proposer\n    attestation enters the now-empty new dictionary.\n\n    This creates the attestation pipeline:\n    - Enter via new (arrivals)\n    - Graduate to known (accepted for fork choice)",
+            "fixtureFormat": "fork_choice_test"
+        }
+    }
+}

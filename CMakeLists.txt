@@ -85,6 +85,9 @@ target_compile_definitions(lantern_cli
         _POSIX_C_SOURCE=200809L
 )
 
+add_executable(lantern_repro_transition tools/repro_transition.c)
+target_link_libraries(lantern_repro_transition PRIVATE lantern)
+
 option(LANTERN_BUILD_TESTS "Build lantern unit tests" ON)
 if(LANTERN_BUILD_TESTS)
     enable_testing()
@@ -149,6 +152,17 @@ if(LANTERN_BUILD_TESTS)
     add_executable(lantern_validator_duties_integration_test tests/integration/test_validator_duties.c)
     target_link_libraries(lantern_validator_duties_integration_test PRIVATE lantern)
     add_test(NAME lantern_validator_duties_integration COMMAND lantern_validator_duties_integration_test)
+
+    add_executable(lantern_consensus_vectors_test tests/integration/test_consensus_vectors.c)
+    target_link_libraries(lantern_consensus_vectors_test PRIVATE lantern)
+    target_include_directories(lantern_consensus_vectors_test PRIVATE ${PROJECT_SOURCE_DIR}/external/jsmn)
+    target_compile_definitions(
+        lantern_consensus_vectors_test
+        PRIVATE
+            LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
+    )
+    add_test(NAME lantern_consensus_vectors COMMAND lantern_consensus_vectors_test)
+    set_tests_properties(lantern_consensus_vectors PROPERTIES TIMEOUT 120)
 
     set(_lantern_ctest_targets
         lantern_client

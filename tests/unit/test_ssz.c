@@ -823,7 +823,7 @@ static void test_state_accepts_empty_justification_validators_payload(void) {
         "encode genesis state");
 
     size_t offsets_offset = LANTERN_CONFIG_SSZ_SIZE + sizeof(uint64_t) + LANTERN_BLOCK_HEADER_SSZ_SIZE
-        + (2 * LANTERN_CHECKPOINT_SSZ_SIZE);
+        + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + LANTERN_ROOT_SIZE;
     uint32_t offsets[4];
     memcpy(offsets, encoded + offsets_offset, sizeof(offsets));
 

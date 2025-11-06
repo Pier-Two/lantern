@@ -509,7 +509,11 @@ static uint64_t quorum_threshold(uint64_t validators) {
         return 0;
     }
     uint64_t numerator = validators * 2u;
-    return (numerator + 2u) / 3u;
+    uint64_t threshold = numerator / 3u;
+    if (threshold == 0) {
+        threshold = 1;
+    }
+    return threshold;
 }
 
 static int find_start_index(
@@ -593,7 +597,6 @@ static int lmd_ghost_compute(
     while (true) {
         size_t best_child = SIZE_MAX;
         uint64_t best_weight = 0;
-        uint64_t best_slot = 0;
         bool found = false;
         for (size_t i = 0; i < store->block_len; ++i) {
             if (blocks[i].parent_index != current) {
@@ -603,15 +606,12 @@ static int lmd_ghost_compute(
             if (candidate_weight < min_score) {
                 continue;
             }
-            uint64_t candidate_slot = blocks[i].slot;
             bool better = false;
             if (!found) {
                 better = true;
             } else if (candidate_weight > best_weight) {
                 better = true;
-            } else if (candidate_weight == best_weight && candidate_slot > best_slot) {
-                better = true;
-            } else if (candidate_weight == best_weight && candidate_slot == best_slot) {
+            } else if (candidate_weight == best_weight) {
                 int cmp = root_compare(&blocks[i].root, &blocks[best_child].root);
                 if (cmp > 0) {
                     better = true;
@@ -621,7 +621,6 @@ static int lmd_ghost_compute(
                 found = true;
                 best_child = i;
                 best_weight = candidate_weight;
-                best_slot = candidate_slot;
             }
         }
         if (!found) {
