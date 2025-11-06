@@ -759,7 +759,7 @@ static void test_leanspec_vectors(void) {
     /* State */
     LanternState state_expected;
     build_state_vector(&state_expected);
-    uint8_t state_encoded[1024];
+    uint8_t state_encoded[sizeof(LANTERN_SSZ_VECTOR_STATE)];
     written = 0;
     expect_ok(lantern_ssz_encode_state(&state_expected, state_encoded, sizeof(state_encoded), &written), "state encode");
     assert(written == sizeof(LANTERN_SSZ_VECTOR_STATE));

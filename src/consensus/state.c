@@ -1105,6 +1105,17 @@ int lantern_state_process_attestations(LanternState *state, const LanternAttesta
 
     state->latest_justified = latest_justified;
     state->latest_finalized = latest_finalized;
+    if (state->validator_votes && state->validator_votes_len > 0) {
+        for (size_t i = 0; i < state->validator_votes_len; ++i) {
+            struct lantern_vote_record *record = &state->validator_votes[i];
+            if (!record->has_vote) {
+                continue;
+            }
+            if (lantern_checkpoint_equal(&record->vote.target, &state->latest_justified)) {
+                record->vote.source = state->latest_justified;
+            }
+        }
+    }
     lantern_state_prune_tallies(state, latest_finalized.slot);
     if (lantern_state_refresh_justifications(state) != 0) {
         return -1;
