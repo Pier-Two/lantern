@@ -1,4 +1,4 @@
-# Lantern
+# ![Lantern Logo](docs/assets/lantern_logo.svg)
 
 Lantern is a C implementation for Lean consensus. It
 implements gossip, fork-choice, state transition, and storage against the
