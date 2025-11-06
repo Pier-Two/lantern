@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Generate SSZ + Snappy payload fixtures from local-pq-devnet JSON captures.
+Generate SSZ + Snappy payload fixtures from lean devnet JSON captures.
 
-The local-pq-devnet Docker stack exposes HTTP JSON views of blocks that were
+The lean quickstart stack exposes HTTP JSON views of blocks that were
 gossiped on the network. These are not directly SSZ encoded, so this script
 reconstructs the canonical SSZ ``SignedBlock`` containers using the Lean spec
 reference implementation, then emits both the raw SSZ bytes and their Snappy
@@ -18,10 +18,12 @@ from pathlib import Path
 import snappy  # type: ignore[import]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PROJECT_ROOT = REPO_ROOT.parent
-LEAN_SPEC_SRC = PROJECT_ROOT / "leanSpec" / "src"
+DEVNET_FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "devnet0"
+LEAN_SPEC_ROOT = REPO_ROOT / "tools" / "leanSpec"
+LEAN_SPEC_SRC = LEAN_SPEC_ROOT / "src"
 
-sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(LEAN_SPEC_ROOT))
 sys.path.insert(0, str(LEAN_SPEC_SRC))
 
 from lean_spec.subspecs.containers.block import Block, BlockBody, SignedBlock
@@ -124,7 +126,7 @@ def write_payloads(json_path: Path) -> None:
 
 
 def main() -> None:
-    fixtures_dir = Path(__file__).resolve().parent / "devnet0"
+    fixtures_dir = DEVNET_FIXTURE_DIR
     json_files = sorted(
         path
         for path in fixtures_dir.glob("block_slot*.json")

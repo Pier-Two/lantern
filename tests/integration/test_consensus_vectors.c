@@ -4,8 +4,7 @@
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/support/strings.h"
-
-#include "jsmn.h"
+#include "tests/support/fixture_loader.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -22,7 +21,6 @@
 #error "LANTERN_TEST_FIXTURE_DIR must be defined"
 #endif
 
-#define JSON_INITIAL_TOKENS 256
 #define LABEL_MAX_LENGTH 64
 #define MAX_LABELS 128
 
@@ -348,13 +346,6 @@ static int sync_state_to_fork_choice_head(
     return 0;
 }
 
-struct json_document {
-    char *text;
-    size_t length;
-    jsmntok_t *tokens;
-    int token_count;
-};
-
 struct label_entry {
     char name[LABEL_MAX_LENGTH];
     LanternRoot root;
@@ -411,642 +402,11 @@ static int label_registry_assign(
     return -1;
 }
 
-static void json_document_reset(struct json_document *doc) {
-    if (!doc) {
-        return;
-    }
-    free(doc->tokens);
-    doc->tokens = NULL;
-    doc->token_count = 0;
-    doc->length = 0;
-    free(doc->text);
-    doc->text = NULL;
-}
-
-static int json_document_init(struct json_document *doc, char *text) {
-    if (!doc || !text) {
-        free(text);
-        return -1;
-    }
-    doc->text = text;
-    doc->length = strlen(text);
-    doc->tokens = NULL;
-    doc->token_count = 0;
-
-    int capacity = JSON_INITIAL_TOKENS;
-    while (capacity <= 32768) {
-        jsmntok_t *tokens = (jsmntok_t *)malloc((size_t)capacity * sizeof(jsmntok_t));
-        if (!tokens) {
-            json_document_reset(doc);
-            return -1;
-        }
-
-        jsmn_parser parser;
-        jsmn_init(&parser);
-        int result = jsmn_parse(&parser, doc->text, doc->length, tokens, capacity);
-        if (result >= 0) {
-            doc->tokens = tokens;
-            doc->token_count = result;
-            return 0;
-        }
-        free(tokens);
-        if (result == JSMN_ERROR_NOMEM) {
-            capacity *= 2;
-            continue;
-        }
-        json_document_reset(doc);
-        return -1;
-    }
-
-    json_document_reset(doc);
-    return -1;
-}
-
-static const jsmntok_t *json_token(const struct json_document *doc, int index) {
-    if (!doc || index < 0 || index >= doc->token_count) {
-        return NULL;
-    }
-    return &doc->tokens[index];
-}
-
-static int json_skip_token(const struct json_document *doc, int index) {
-    const jsmntok_t *tok = json_token(doc, index);
-    if (!tok) {
-        return -1;
-    }
-    index += 1;
-    if (tok->type == JSMN_ARRAY) {
-        for (int i = 0; i < tok->size; ++i) {
-            index = json_skip_token(doc, index);
-            if (index < 0) {
-                return -1;
-            }
-        }
-    } else if (tok->type == JSMN_OBJECT) {
-        for (int i = 0; i < tok->size; ++i) {
-            index = json_skip_token(doc, index);
-            if (index < 0) {
-                return -1;
-            }
-            index = json_skip_token(doc, index);
-            if (index < 0) {
-                return -1;
-            }
-        }
-    }
-    return index;
-}
-
-static bool json_token_equals(
-    const struct json_document *doc,
-    int index,
-    const char *value) {
-    const jsmntok_t *tok = json_token(doc, index);
-    if (!tok || tok->type != JSMN_STRING || !value) {
-        return false;
-    }
-    size_t len = strlen(value);
-    size_t tok_len = (size_t)(tok->end - tok->start);
-    if (tok_len != len) {
-        return false;
-    }
-    return strncmp(doc->text + tok->start, value, len) == 0;
-}
-
-static int json_object_get_field(
-    const struct json_document *doc,
-    int object_index,
-    const char *field) {
-    const jsmntok_t *obj = json_token(doc, object_index);
-    if (!obj || obj->type != JSMN_OBJECT) {
-        return -1;
-    }
-    int index = object_index + 1;
-    for (int i = 0; i < obj->size; ++i) {
-        int key_index = index;
-        int value_index = json_skip_token(doc, key_index);
-        if (value_index < 0) {
-            return -1;
-        }
-        if (json_token_equals(doc, key_index, field)) {
-            return value_index;
-        }
-        index = json_skip_token(doc, value_index);
-        if (index < 0) {
-            return -1;
-        }
-    }
-    return -1;
-}
-
-static int json_array_get_length(
-    const struct json_document *doc,
-    int array_index) {
-    const jsmntok_t *arr = json_token(doc, array_index);
-    if (!arr || arr->type != JSMN_ARRAY) {
-        return -1;
-    }
-    return arr->size;
-}
-
-static int json_array_get_element(
-    const struct json_document *doc,
-    int array_index,
-    int position) {
-    const jsmntok_t *arr = json_token(doc, array_index);
-    if (!arr || arr->type != JSMN_ARRAY || position < 0 || position >= arr->size) {
-        return -1;
-    }
-    int index = array_index + 1;
-    for (int i = 0; i < arr->size; ++i) {
-        if (i == position) {
-            return index;
-        }
-        index = json_skip_token(doc, index);
-        if (index < 0) {
-            return -1;
-        }
-    }
-    return -1;
-}
-
-static int json_object_get_value_at(
-    const struct json_document *doc,
-    int object_index,
-    int position) {
-    const jsmntok_t *obj = json_token(doc, object_index);
-    if (!obj || obj->type != JSMN_OBJECT || position < 0 || position >= obj->size) {
-        return -1;
-    }
-    int index = object_index + 1;
-    for (int i = 0; i < obj->size; ++i) {
-        int key_index = index;
-        index = json_skip_token(doc, key_index);
-        if (index < 0) {
-            return -1;
-        }
-        if (i == position) {
-            return index;
-        }
-        index = json_skip_token(doc, index);
-        if (index < 0) {
-            return -1;
-        }
-    }
-    return -1;
-}
-
-static int json_token_to_uint64(
-    const struct json_document *doc,
-    int index,
-    uint64_t *out_value) {
-    if (!out_value) {
-        return -1;
-    }
-    const jsmntok_t *tok = json_token(doc, index);
-    if (!tok || (tok->type != JSMN_PRIMITIVE && tok->type != JSMN_STRING)) {
-        return -1;
-    }
-    size_t len = (size_t)(tok->end - tok->start);
-    char buffer[64];
-    if (len >= sizeof(buffer)) {
-        return -1;
-    }
-    memcpy(buffer, doc->text + tok->start, len);
-    buffer[len] = '\0';
-    char *endptr = NULL;
-    errno = 0;
-    unsigned long long value = strtoull(buffer, &endptr, 10);
-    if (errno != 0 || endptr == buffer || *endptr != '\0') {
-        return -1;
-    }
-    *out_value = (uint64_t)value;
-    return 0;
-}
-
-static const char *json_token_string(
-    const struct json_document *doc,
-    int index,
-    size_t *out_length) {
-    if (out_length) {
-        *out_length = 0;
-    }
-    const jsmntok_t *tok = json_token(doc, index);
-    if (!tok || tok->type != JSMN_STRING) {
-        return NULL;
-    }
-    if (out_length) {
-        *out_length = (size_t)(tok->end - tok->start);
-    }
-    return doc->text + tok->start;
-}
-
-static int parse_hex_bytes(
-    const char *hex,
-    size_t len,
-    uint8_t *out,
-    size_t out_len) {
-    if (!hex || !out) {
-        return -1;
-    }
-    if (len < 2 || hex[0] != '0' || (hex[1] != 'x' && hex[1] != 'X')) {
-        return -1;
-    }
-    hex += 2;
-    len -= 2;
-    if (len != out_len * 2) {
-        return -1;
-    }
-    for (size_t i = 0; i < out_len; ++i) {
-        char buf[3];
-        buf[0] = hex[i * 2];
-        buf[1] = hex[(i * 2) + 1];
-        buf[2] = '\0';
-        char *endptr = NULL;
-        errno = 0;
-        unsigned long value = strtoul(buf, &endptr, 16);
-        if (errno != 0 || !endptr || *endptr != '\0') {
-            return -1;
-        }
-        out[i] = (uint8_t)value;
-    }
-    return 0;
-}
-
-static int json_token_to_root(
-    const struct json_document *doc,
-    int index,
-    LanternRoot *root) {
-    if (!root) {
-        return -1;
-    }
-    size_t len = 0;
-    const char *str = json_token_string(doc, index, &len);
-    if (!str) {
-        return -1;
-    }
-    return parse_hex_bytes(str, len, root->bytes, sizeof(root->bytes));
-}
-
-static int parse_anchor_state(
-    const struct json_document *doc,
-    int anchor_state_idx,
-    LanternState *state,
-    LanternCheckpoint *latest_justified,
-    LanternCheckpoint *latest_finalized,
-    uint64_t *genesis_time,
-    uint64_t *validator_count) {
-    if (!doc || !state || !latest_justified || !latest_finalized || !genesis_time || !validator_count) {
-        return -1;
-    }
-
-    int config_idx = json_object_get_field(doc, anchor_state_idx, "config");
-    if (config_idx < 0) {
-        return -1;
-    }
-    int genesis_idx = json_object_get_field(doc, config_idx, "genesisTime");
-    if (genesis_idx < 0) {
-        return -1;
-    }
-    if (json_token_to_uint64(doc, genesis_idx, genesis_time) != 0) {
-        return -1;
-    }
-
-    int validators_idx = json_object_get_field(doc, anchor_state_idx, "validators");
-    if (validators_idx < 0) {
-        return -1;
-    }
-    int data_idx = json_object_get_field(doc, validators_idx, "data");
-    if (data_idx < 0) {
-        return -1;
-    }
-    int count = json_array_get_length(doc, data_idx);
-    if (count < 0) {
-        return -1;
-    }
-    uint8_t *validator_pubkeys = NULL;
-    if (count > 0) {
-        size_t total_bytes = (size_t)count * LANTERN_VALIDATOR_PUBKEY_SIZE;
-        validator_pubkeys = (uint8_t *)malloc(total_bytes);
-        if (!validator_pubkeys) {
-            return -1;
-        }
-        memset(validator_pubkeys, 0, total_bytes);
-        for (int i = 0; i < count; ++i) {
-            int entry_idx = json_array_get_element(doc, data_idx, i);
-            if (entry_idx < 0) {
-                free(validator_pubkeys);
-                return -1;
-            }
-            int pubkey_idx = json_object_get_field(doc, entry_idx, "pubkey");
-            if (pubkey_idx < 0) {
-                free(validator_pubkeys);
-                return -1;
-            }
-            size_t pk_len = 0;
-            const char *pk_str = json_token_string(doc, pubkey_idx, &pk_len);
-            if (!pk_str) {
-                free(validator_pubkeys);
-                return -1;
-            }
-            if (parse_hex_bytes(
-                    pk_str,
-                    pk_len,
-                    validator_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
-                    LANTERN_VALIDATOR_PUBKEY_SIZE)
-                != 0) {
-                free(validator_pubkeys);
-                return -1;
-            }
-        }
-    }
-    *validator_count = (uint64_t)count;
-
-    lantern_state_init(state);
-    if (lantern_state_generate_genesis(state, *genesis_time, *validator_count) != 0) {
-        free(validator_pubkeys);
-        return -1;
-    }
-    if (lantern_state_prepare_validator_votes(state, *validator_count) != 0) {
-        free(validator_pubkeys);
-        return -1;
-    }
-    if (lantern_hash_tree_root_validators(
-            validator_pubkeys,
-            (size_t)count,
-            &state->validators_root)
-        != 0) {
-        free(validator_pubkeys);
-        return -1;
-    }
-    free(validator_pubkeys);
-
-    int slot_idx = json_object_get_field(doc, anchor_state_idx, "slot");
-    if (slot_idx >= 0) {
-        uint64_t slot = 0;
-        if (json_token_to_uint64(doc, slot_idx, &slot) != 0) {
-            return -1;
-        }
-        state->slot = slot;
-    }
-
-    int justified_idx = json_object_get_field(doc, anchor_state_idx, "latestJustified");
-    int finalized_idx = json_object_get_field(doc, anchor_state_idx, "latestFinalized");
-    if (justified_idx < 0 || finalized_idx < 0) {
-        return -1;
-    }
-    int root_idx = json_object_get_field(doc, justified_idx, "root");
-    int root_slot_idx = json_object_get_field(doc, justified_idx, "slot");
-    if (json_token_to_root(doc, root_idx, &latest_justified->root) != 0) {
-        return -1;
-    }
-    if (json_token_to_uint64(doc, root_slot_idx, &latest_justified->slot) != 0) {
-        return -1;
-    }
-    root_idx = json_object_get_field(doc, finalized_idx, "root");
-    root_slot_idx = json_object_get_field(doc, finalized_idx, "slot");
-    if (json_token_to_root(doc, root_idx, &latest_finalized->root) != 0) {
-        return -1;
-    }
-    if (json_token_to_uint64(doc, root_slot_idx, &latest_finalized->slot) != 0) {
-        return -1;
-    }
-    state->latest_justified = *latest_justified;
-    state->latest_finalized = *latest_finalized;
-
-    int header_idx = json_object_get_field(doc, anchor_state_idx, "latestBlockHeader");
-    if (header_idx < 0) {
-        return -1;
-    }
-    uint64_t header_slot = 0;
-    int field_idx = json_object_get_field(doc, header_idx, "slot");
-    if (json_token_to_uint64(doc, field_idx, &header_slot) != 0) {
-        return -1;
-    }
-    state->latest_block_header.slot = header_slot;
-
-    field_idx = json_object_get_field(doc, header_idx, "proposerIndex");
-    if (json_token_to_uint64(doc, field_idx, &state->latest_block_header.proposer_index) != 0) {
-        return -1;
-    }
-
-    field_idx = json_object_get_field(doc, header_idx, "parentRoot");
-    if (json_token_to_root(doc, field_idx, &state->latest_block_header.parent_root) != 0) {
-        return -1;
-    }
-
-    field_idx = json_object_get_field(doc, header_idx, "stateRoot");
-    if (json_token_to_root(doc, field_idx, &state->latest_block_header.state_root) != 0) {
-        return -1;
-    }
-
-    field_idx = json_object_get_field(doc, header_idx, "bodyRoot");
-    if (json_token_to_root(doc, field_idx, &state->latest_block_header.body_root) != 0) {
-        return -1;
-    }
-
-    return 0;
-}
-
-static int parse_attestations(
-    const struct json_document *doc,
-    int body_idx,
-    LanternBlockBody *body) {
-    if (!body) {
-        return -1;
-    }
-    lantern_block_body_init(body);
-    int att_idx = json_object_get_field(doc, body_idx, "attestations");
-    if (att_idx < 0) {
-        return 0;
-    }
-    int data_idx = json_object_get_field(doc, att_idx, "data");
-    if (data_idx < 0) {
-        return 0;
-    }
-    int length = json_array_get_length(doc, data_idx);
-    if (length < 0) {
-        return -1;
-    }
-    for (int i = 0; i < length; ++i) {
-        int entry_idx = json_array_get_element(doc, data_idx, i);
-        if (entry_idx < 0) {
-            return -1;
-        }
-        LanternSignedVote vote;
-        memset(&vote, 0, sizeof(vote));
-
-        int validator_idx = json_object_get_field(doc, entry_idx, "validator_id");
-        if (validator_idx < 0) {
-            return -1;
-        }
-        if (json_token_to_uint64(doc, validator_idx, &vote.data.validator_id) != 0) {
-            return -1;
-        }
-
-        int data_obj_idx = json_object_get_field(doc, entry_idx, "data");
-        if (data_obj_idx < 0) {
-            return -1;
-        }
-
-        int field_idx = json_object_get_field(doc, data_obj_idx, "slot");
-        if (json_token_to_uint64(doc, field_idx, &vote.data.slot) != 0) {
-            return -1;
-        }
-
-        field_idx = json_object_get_field(doc, data_obj_idx, "head");
-        if (field_idx < 0) {
-            return -1;
-        }
-        int root_idx = json_object_get_field(doc, field_idx, "root");
-        if (json_token_to_root(doc, root_idx, &vote.data.head.root) != 0) {
-            return -1;
-        }
-        root_idx = json_object_get_field(doc, field_idx, "slot");
-        if (json_token_to_uint64(doc, root_idx, &vote.data.head.slot) != 0) {
-            return -1;
-        }
-
-        field_idx = json_object_get_field(doc, data_obj_idx, "target");
-        if (field_idx < 0) {
-            return -1;
-        }
-        root_idx = json_object_get_field(doc, field_idx, "root");
-        if (json_token_to_root(doc, root_idx, &vote.data.target.root) != 0) {
-            return -1;
-        }
-        root_idx = json_object_get_field(doc, field_idx, "slot");
-        if (json_token_to_uint64(doc, root_idx, &vote.data.target.slot) != 0) {
-            return -1;
-        }
-
-        field_idx = json_object_get_field(doc, data_obj_idx, "source");
-        if (field_idx < 0) {
-            return -1;
-        }
-        root_idx = json_object_get_field(doc, field_idx, "root");
-        if (json_token_to_root(doc, root_idx, &vote.data.source.root) != 0) {
-            return -1;
-        }
-        root_idx = json_object_get_field(doc, field_idx, "slot");
-        if (json_token_to_uint64(doc, root_idx, &vote.data.source.slot) != 0) {
-            return -1;
-        }
-
-        memset(vote.signature.bytes, 0, sizeof(vote.signature.bytes));
-        if (lantern_attestations_append(&body->attestations, &vote) != 0) {
-            return -1;
-        }
-    }
-    return 0;
-}
-
-static int parse_block(
-    const struct json_document *doc,
-    int object_index,
-    LanternBlock *block) {
-    if (!doc || !block) {
-        return -1;
-    }
-    memset(block, 0, sizeof(*block));
-    lantern_block_body_init(&block->body);
-
-    int idx = json_object_get_field(doc, object_index, "slot");
-    if (json_token_to_uint64(doc, idx, &block->slot) != 0) {
-        return -1;
-    }
-
-    idx = json_object_get_field(doc, object_index, "proposer_index");
-    if (idx < 0) {
-        idx = json_object_get_field(doc, object_index, "proposerIndex");
-    }
-    if (json_token_to_uint64(doc, idx, &block->proposer_index) != 0) {
-        return -1;
-    }
-
-    idx = json_object_get_field(doc, object_index, "parent_root");
-    if (idx < 0) {
-        idx = json_object_get_field(doc, object_index, "parentRoot");
-    }
-    if (json_token_to_root(doc, idx, &block->parent_root) != 0) {
-        return -1;
-    }
-
-    idx = json_object_get_field(doc, object_index, "state_root");
-    if (idx < 0) {
-        idx = json_object_get_field(doc, object_index, "stateRoot");
-    }
-    if (json_token_to_root(doc, idx, &block->state_root) != 0) {
-        return -1;
-    }
-
-    int body_idx = json_object_get_field(doc, object_index, "body");
-    if (body_idx >= 0) {
-        if (parse_attestations(doc, body_idx, &block->body) != 0) {
-            return -1;
-        }
-    }
-
-    return 0;
-}
-
 static void reset_block(LanternBlock *block) {
     if (!block) {
         return;
     }
     lantern_block_body_reset(&block->body);
-}
-
-static int parse_signed_block(
-    const struct json_document *doc,
-    int block_idx,
-    LanternSignedBlock *out_block) {
-    if (!out_block) {
-        return -1;
-    }
-    if (parse_block(doc, block_idx, &out_block->message) != 0) {
-        return -1;
-    }
-    memset(out_block->signature.bytes, 0, sizeof(out_block->signature.bytes));
-    return 0;
-}
-
-static int load_text_file(const char *path, char **out_buf) {
-    if (!path || !out_buf) {
-        return -1;
-    }
-    FILE *file = fopen(path, "rb");
-    if (!file) {
-        perror("fopen");
-        return -1;
-    }
-    if (fseek(file, 0, SEEK_END) != 0) {
-        fclose(file);
-        return -1;
-    }
-    long size = ftell(file);
-    if (size < 0) {
-        fclose(file);
-        return -1;
-    }
-    if (fseek(file, 0, SEEK_SET) != 0) {
-        fclose(file);
-        return -1;
-    }
-    char *buffer = (char *)malloc((size_t)size + 1u);
-    if (!buffer) {
-        fclose(file);
-        return -1;
-    }
-    size_t read_len = fread(buffer, 1u, (size_t)size, file);
-    fclose(file);
-    if (read_len != (size_t)size) {
-        free(buffer);
-        return -1;
-    }
-    buffer[size] = '\0';
-    *out_buf = buffer;
-    return 0;
 }
 
 static int run_state_transition_fixture(const char *path);
@@ -1097,31 +457,31 @@ static int for_each_json(
 
 static int run_state_transition_fixture(const char *path) {
     char *text = NULL;
-    if (load_text_file(path, &text) != 0) {
+    if (lantern_fixture_read_text_file(path, &text) != 0) {
         fprintf(stderr, "failed to read %s\n", path);
         return -1;
     }
 
-    struct json_document doc;
-    if (json_document_init(&doc, text) != 0) {
+    struct lantern_fixture_document doc;
+    if (lantern_fixture_document_init(&doc, text) != 0) {
         fprintf(stderr, "failed to parse %s\n", path);
         return -1;
     }
     if (doc.token_count <= 0) {
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         return -1;
     }
 
     int root_idx = 0;
-    int case_idx = json_object_get_value_at(&doc, root_idx, 0);
+    int case_idx = lantern_fixture_object_get_value_at(&doc, root_idx, 0);
     if (case_idx < 0) {
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         return -1;
     }
 
     const char *fixture_filter = getenv("LANTERN_STATE_FIXTURE");
     if (fixture_filter && strstr(path, fixture_filter) == NULL) {
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         return 0;
     }
 
@@ -1130,10 +490,10 @@ static int run_state_transition_fixture(const char *path) {
         fprintf(stderr, "fixture: %s\n", path);
     }
 
-    int pre_idx = json_object_get_field(&doc, case_idx, "pre");
-    int blocks_idx = json_object_get_field(&doc, case_idx, "blocks");
-    int post_idx = json_object_get_field(&doc, case_idx, "post");
-    int expect_exception_idx = json_object_get_field(&doc, case_idx, "expectException");
+    int pre_idx = lantern_fixture_object_get_field(&doc, case_idx, "pre");
+    int blocks_idx = lantern_fixture_object_get_field(&doc, case_idx, "blocks");
+    int post_idx = lantern_fixture_object_get_field(&doc, case_idx, "post");
+    int expect_exception_idx = lantern_fixture_object_get_field(&doc, case_idx, "expectException");
     bool expect_failure = expect_exception_idx >= 0;
 
     LanternState state;
@@ -1141,7 +501,7 @@ static int run_state_transition_fixture(const char *path) {
     LanternCheckpoint latest_finalized;
     uint64_t genesis_time = 0;
     uint64_t validator_count = 0;
-    if (parse_anchor_state(
+    if (lantern_fixture_parse_anchor_state(
             &doc,
             pre_idx,
             &state,
@@ -1150,33 +510,33 @@ static int run_state_transition_fixture(const char *path) {
             &genesis_time,
             &validator_count)
         != 0) {
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         return -1;
     }
 
     bool observed_failure = false;
     int block_count = 0;
     if (blocks_idx >= 0) {
-        block_count = json_array_get_length(&doc, blocks_idx);
+        block_count = lantern_fixture_array_get_length(&doc, blocks_idx);
         if (block_count < 0) {
             lantern_state_reset(&state);
-            json_document_reset(&doc);
+            lantern_fixture_document_reset(&doc);
             return -1;
         }
     }
 
     for (int i = 0; i < block_count; ++i) {
-        int block_idx = json_array_get_element(&doc, blocks_idx, i);
+        int block_idx = lantern_fixture_array_get_element(&doc, blocks_idx, i);
         if (block_idx < 0) {
             lantern_state_reset(&state);
-            json_document_reset(&doc);
+            lantern_fixture_document_reset(&doc);
             return -1;
         }
 
         LanternSignedBlock signed_block;
-        if (parse_signed_block(&doc, block_idx, &signed_block) != 0) {
+        if (lantern_fixture_parse_signed_block(&doc, block_idx, &signed_block) != 0) {
             lantern_state_reset(&state);
-            json_document_reset(&doc);
+            lantern_fixture_document_reset(&doc);
             return -1;
         }
 
@@ -1203,10 +563,10 @@ static int run_state_transition_fixture(const char *path) {
             fprintf(stderr, "missing post state in %s\n", path);
             result = -1;
         } else {
-            int field_idx = json_object_get_field(&doc, post_idx, "slot");
+            int field_idx = lantern_fixture_object_get_field(&doc, post_idx, "slot");
             if (field_idx >= 0) {
                 uint64_t expected_slot = 0;
-                if (json_token_to_uint64(&doc, field_idx, &expected_slot) != 0 || state.slot != expected_slot) {
+                if (lantern_fixture_token_to_uint64(&doc, field_idx, &expected_slot) != 0 || state.slot != expected_slot) {
                     fprintf(
                         stderr,
                         "post slot mismatch in %s: expected %" PRIu64 " got %" PRIu64 "\n",
@@ -1218,10 +578,10 @@ static int run_state_transition_fixture(const char *path) {
             }
 
             if (result == 0) {
-                field_idx = json_object_get_field(&doc, post_idx, "validatorCount");
+                field_idx = lantern_fixture_object_get_field(&doc, post_idx, "validatorCount");
                 if (field_idx >= 0) {
                     uint64_t expected_count = 0;
-                    if (json_token_to_uint64(&doc, field_idx, &expected_count) != 0
+                    if (lantern_fixture_token_to_uint64(&doc, field_idx, &expected_count) != 0
                         || state.config.num_validators != expected_count) {
                         fprintf(
                             stderr,
@@ -1237,7 +597,7 @@ static int run_state_transition_fixture(const char *path) {
     }
 
     lantern_state_reset(&state);
-    json_document_reset(&doc);
+    lantern_fixture_document_reset(&doc);
     return result;
 }
 
@@ -1246,34 +606,34 @@ static int run_fork_choice_fixture(const char *path) {
     struct stored_state_entry *stored_states = NULL;
     size_t stored_states_count = 0;
     size_t stored_states_cap = 0;
-    if (load_text_file(path, &text) != 0) {
+    if (lantern_fixture_read_text_file(path, &text) != 0) {
         fprintf(stderr, "failed to read %s\n", path);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         return -1;
     }
 
-    struct json_document doc;
-    if (json_document_init(&doc, text) != 0) {
+    struct lantern_fixture_document doc;
+    if (lantern_fixture_document_init(&doc, text) != 0) {
         fprintf(stderr, "failed to parse %s\n", path);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         return -1;
     }
     if (doc.token_count <= 0) {
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         return -1;
     }
 
     int root_idx = 0;
-    int case_idx = json_object_get_value_at(&doc, root_idx, 0);
+    int case_idx = lantern_fixture_object_get_value_at(&doc, root_idx, 0);
     if (case_idx < 0) {
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         return -1;
     }
 
     const char *fixture_filter = getenv("LANTERN_FORK_CHOICE_FIXTURE");
     if (fixture_filter && strstr(path, fixture_filter) == NULL) {
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         return 0;
     }
@@ -1283,11 +643,11 @@ static int run_fork_choice_fixture(const char *path) {
         fprintf(stderr, "fork fixture: %s\n", path);
     }
 
-    int anchor_state_idx = json_object_get_field(&doc, case_idx, "anchorState");
-    int anchor_block_idx = json_object_get_field(&doc, case_idx, "anchorBlock");
-    int steps_idx = json_object_get_field(&doc, case_idx, "steps");
+    int anchor_state_idx = lantern_fixture_object_get_field(&doc, case_idx, "anchorState");
+    int anchor_block_idx = lantern_fixture_object_get_field(&doc, case_idx, "anchorBlock");
+    int steps_idx = lantern_fixture_object_get_field(&doc, case_idx, "steps");
     if (anchor_state_idx < 0 || anchor_block_idx < 0 || steps_idx < 0) {
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         return -1;
     }
@@ -1297,7 +657,7 @@ static int run_fork_choice_fixture(const char *path) {
     LanternCheckpoint latest_finalized;
     uint64_t genesis_time = 0;
     uint64_t validator_count = 0;
-    if (parse_anchor_state(
+    if (lantern_fixture_parse_anchor_state(
             &doc,
             anchor_state_idx,
             &state,
@@ -1306,15 +666,15 @@ static int run_fork_choice_fixture(const char *path) {
             &genesis_time,
             &validator_count)
         != 0) {
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         return -1;
     }
 
     LanternBlock anchor_block;
-    if (parse_block(&doc, anchor_block_idx, &anchor_block) != 0) {
+    if (lantern_fixture_parse_block(&doc, anchor_block_idx, &anchor_block) != 0) {
         lantern_state_reset(&state);
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         return -1;
     }
@@ -1322,7 +682,7 @@ static int run_fork_choice_fixture(const char *path) {
     if (lantern_hash_tree_root_block_body(&anchor_block.body, &anchor_body_root) != 0) {
         reset_block(&anchor_block);
         lantern_state_reset(&state);
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         return -1;
     }
@@ -1342,7 +702,7 @@ static int run_fork_choice_fixture(const char *path) {
     if (lantern_fork_choice_configure(&store, &config) != 0) {
         reset_block(&anchor_block);
         lantern_state_reset(&state);
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         return -1;
     }
@@ -1352,7 +712,7 @@ static int run_fork_choice_fixture(const char *path) {
         reset_block(&anchor_block);
         lantern_fork_choice_reset(&store);
         lantern_state_reset(&state);
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         return -1;
     }
@@ -1361,7 +721,7 @@ static int run_fork_choice_fixture(const char *path) {
         reset_block(&anchor_block);
         lantern_fork_choice_reset(&store);
         lantern_state_reset(&state);
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         return -1;
     }
@@ -1372,7 +732,7 @@ static int run_fork_choice_fixture(const char *path) {
         reset_block(&anchor_block);
         lantern_fork_choice_reset(&store);
         lantern_state_reset(&state);
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         return -1;
     }
@@ -1381,38 +741,38 @@ static int run_fork_choice_fixture(const char *path) {
     struct label_registry labels;
     label_registry_init(&labels);
 
-    int step_count = json_array_get_length(&doc, steps_idx);
+    int step_count = lantern_fixture_array_get_length(&doc, steps_idx);
     if (step_count < 0) {
         reset_block(&anchor_block);
         lantern_fork_choice_reset(&store);
         lantern_state_reset(&state);
-        json_document_reset(&doc);
+        lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         return -1;
     }
 
     for (int i = 0; i < step_count; ++i) {
-        int step_idx = json_array_get_element(&doc, steps_idx, i);
+        int step_idx = lantern_fixture_array_get_element(&doc, steps_idx, i);
         if (step_idx < 0) {
             reset_block(&anchor_block);
             lantern_fork_choice_reset(&store);
             lantern_state_reset(&state);
-            json_document_reset(&doc);
+            lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
             return -1;
         }
 
-        int block_idx = json_object_get_field(&doc, step_idx, "block");
+        int block_idx = lantern_fixture_object_get_field(&doc, step_idx, "block");
         if (block_idx < 0) {
             continue;
         }
 
         LanternSignedBlock signed_block;
-        if (parse_signed_block(&doc, block_idx, &signed_block) != 0) {
+        if (lantern_fixture_parse_signed_block(&doc, block_idx, &signed_block) != 0) {
             reset_block(&anchor_block);
             lantern_fork_choice_reset(&store);
             lantern_state_reset(&state);
-            json_document_reset(&doc);
+            lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
             return -1;
         }
@@ -1423,7 +783,7 @@ static int run_fork_choice_fixture(const char *path) {
             reset_block(&anchor_block);
             lantern_fork_choice_reset(&store);
             lantern_state_reset(&state);
-            json_document_reset(&doc);
+            lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
             return -1;
         }
@@ -1434,7 +794,7 @@ static int run_fork_choice_fixture(const char *path) {
             reset_block(&anchor_block);
             lantern_fork_choice_reset(&store);
             lantern_state_reset(&state);
-            json_document_reset(&doc);
+            lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
             return -1;
         }
@@ -1456,7 +816,7 @@ static int run_fork_choice_fixture(const char *path) {
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
                     lantern_state_reset(&state);
-                    json_document_reset(&doc);
+                    lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                     return -1;
                 }
@@ -1491,7 +851,7 @@ static int run_fork_choice_fixture(const char *path) {
                 reset_block(&anchor_block);
                 lantern_fork_choice_reset(&store);
                 lantern_state_reset(&state);
-                json_document_reset(&doc);
+                lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                 return -1;
             }
@@ -1503,7 +863,7 @@ static int run_fork_choice_fixture(const char *path) {
                 reset_block(&anchor_block);
                 lantern_fork_choice_reset(&store);
                 lantern_state_reset(&state);
-                json_document_reset(&doc);
+                lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                 return -1;
             }
@@ -1514,7 +874,7 @@ static int run_fork_choice_fixture(const char *path) {
                 reset_block(&anchor_block);
                 lantern_fork_choice_reset(&store);
                 lantern_state_reset(&state);
-                json_document_reset(&doc);
+                lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                 return -1;
             }
@@ -1540,7 +900,7 @@ static int run_fork_choice_fixture(const char *path) {
                 reset_block(&anchor_block);
                 lantern_fork_choice_reset(&store);
                 lantern_state_reset(&state);
-                json_document_reset(&doc);
+                lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                 return -1;
             }
@@ -1596,7 +956,7 @@ static int run_fork_choice_fixture(const char *path) {
                 reset_block(&anchor_block);
                 lantern_fork_choice_reset(&store);
                 lantern_state_reset(&state);
-                json_document_reset(&doc);
+                lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                 return -1;
             }
@@ -1623,7 +983,7 @@ static int run_fork_choice_fixture(const char *path) {
                 reset_block(&anchor_block);
                 lantern_fork_choice_reset(&store);
                 lantern_state_reset(&state);
-                json_document_reset(&doc);
+                lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                 return -1;
             }
@@ -1636,7 +996,7 @@ static int run_fork_choice_fixture(const char *path) {
                 reset_block(&anchor_block);
                 lantern_fork_choice_reset(&store);
                 lantern_state_reset(&state);
-                json_document_reset(&doc);
+                lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                 return -1;
             }
@@ -1652,7 +1012,7 @@ static int run_fork_choice_fixture(const char *path) {
             reset_block(&anchor_block);
             lantern_fork_choice_reset(&store);
             lantern_state_reset(&state);
-            json_document_reset(&doc);
+            lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
             return -1;
         }
@@ -1668,7 +1028,7 @@ static int run_fork_choice_fixture(const char *path) {
             reset_block(&anchor_block);
             lantern_fork_choice_reset(&store);
             lantern_state_reset(&state);
-            json_document_reset(&doc);
+            lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
             return -1;
         }
@@ -1685,7 +1045,7 @@ static int run_fork_choice_fixture(const char *path) {
             reset_block(&anchor_block);
             lantern_fork_choice_reset(&store);
             lantern_state_reset(&state);
-            json_document_reset(&doc);
+            lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
             return -1;
         }
@@ -1694,7 +1054,7 @@ static int run_fork_choice_fixture(const char *path) {
             lantern_state_reset(&branch_state);
         }
 
-        int checks_idx = json_object_get_field(&doc, step_idx, "checks");
+        int checks_idx = lantern_fixture_object_get_field(&doc, step_idx, "checks");
         if (checks_idx >= 0) {
             LanternRoot head_root;
             if (lantern_fork_choice_current_head(&store, &head_root) != 0) {
@@ -1702,20 +1062,20 @@ static int run_fork_choice_fixture(const char *path) {
                 reset_block(&anchor_block);
                 lantern_fork_choice_reset(&store);
                 lantern_state_reset(&state);
-                json_document_reset(&doc);
+                lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                 return -1;
             }
 
-            int head_slot_idx = json_object_get_field(&doc, checks_idx, "headSlot");
+            int head_slot_idx = lantern_fixture_object_get_field(&doc, checks_idx, "headSlot");
             if (head_slot_idx >= 0) {
                 uint64_t expected_slot = 0;
-                if (json_token_to_uint64(&doc, head_slot_idx, &expected_slot) != 0) {
+                if (lantern_fixture_token_to_uint64(&doc, head_slot_idx, &expected_slot) != 0) {
                     reset_block(&signed_block.message);
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
                     lantern_state_reset(&state);
-                    json_document_reset(&doc);
+                    lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                     return -1;
                 }
@@ -1725,7 +1085,7 @@ static int run_fork_choice_fixture(const char *path) {
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
                     lantern_state_reset(&state);
-                    json_document_reset(&doc);
+                    lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                     return -1;
                 }
@@ -1741,22 +1101,22 @@ static int run_fork_choice_fixture(const char *path) {
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
                     lantern_state_reset(&state);
-                    json_document_reset(&doc);
+                    lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                     return -1;
                 }
             }
 
-            int head_label_idx = json_object_get_field(&doc, checks_idx, "headRootLabel");
+            int head_label_idx = lantern_fixture_object_get_field(&doc, checks_idx, "headRootLabel");
             if (head_label_idx >= 0) {
                 size_t label_len = 0;
-                const char *label = json_token_string(&doc, head_label_idx, &label_len);
+                const char *label = lantern_fixture_token_string(&doc, head_label_idx, &label_len);
                 if (!label || label_len == 0) {
                     reset_block(&signed_block.message);
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
                     lantern_state_reset(&state);
-                    json_document_reset(&doc);
+                    lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                     return -1;
                 }
@@ -1771,21 +1131,21 @@ static int run_fork_choice_fixture(const char *path) {
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
                     lantern_state_reset(&state);
-                    json_document_reset(&doc);
+                    lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                     return -1;
                 }
             }
 
-            int att_target_idx = json_object_get_field(&doc, checks_idx, "attestationTargetSlot");
+            int att_target_idx = lantern_fixture_object_get_field(&doc, checks_idx, "attestationTargetSlot");
             if (att_target_idx >= 0) {
                 uint64_t expected_slot = 0;
-                if (json_token_to_uint64(&doc, att_target_idx, &expected_slot) != 0) {
+                if (lantern_fixture_token_to_uint64(&doc, att_target_idx, &expected_slot) != 0) {
                     reset_block(&signed_block.message);
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
                     lantern_state_reset(&state);
-                    json_document_reset(&doc);
+                    lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                     return -1;
                 }
@@ -1797,7 +1157,7 @@ static int run_fork_choice_fixture(const char *path) {
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
                     lantern_state_reset(&state);
-                    json_document_reset(&doc);
+                    lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                     return -1;
                 }
@@ -1813,44 +1173,44 @@ static int run_fork_choice_fixture(const char *path) {
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
                     lantern_state_reset(&state);
-                    json_document_reset(&doc);
+                    lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                     return -1;
                 }
             }
 
-            int att_checks_idx = json_object_get_field(&doc, checks_idx, "attestationChecks");
+            int att_checks_idx = lantern_fixture_object_get_field(&doc, checks_idx, "attestationChecks");
             if (att_checks_idx >= 0) {
-                int length = json_array_get_length(&doc, att_checks_idx);
+                int length = lantern_fixture_array_get_length(&doc, att_checks_idx);
                 if (length < 0) {
                     reset_block(&signed_block.message);
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
                     lantern_state_reset(&state);
-                    json_document_reset(&doc);
+                    lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                     return -1;
                 }
                 for (int entry = 0; entry < length; ++entry) {
-                    int check_idx = json_array_get_element(&doc, att_checks_idx, entry);
+                    int check_idx = lantern_fixture_array_get_element(&doc, att_checks_idx, entry);
                     if (check_idx < 0) {
                         reset_block(&signed_block.message);
                         reset_block(&anchor_block);
                         lantern_fork_choice_reset(&store);
                         lantern_state_reset(&state);
-                        json_document_reset(&doc);
+                        lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                         return -1;
                     }
 
                     uint64_t validator_id = 0;
-                    int validator_idx = json_object_get_field(&doc, check_idx, "validator");
-                    if (validator_idx < 0 || json_token_to_uint64(&doc, validator_idx, &validator_id) != 0) {
+                    int validator_idx = lantern_fixture_object_get_field(&doc, check_idx, "validator");
+                    if (validator_idx < 0 || lantern_fixture_token_to_uint64(&doc, validator_idx, &validator_id) != 0) {
                         reset_block(&signed_block.message);
                         reset_block(&anchor_block);
                         lantern_fork_choice_reset(&store);
                         lantern_state_reset(&state);
-                        json_document_reset(&doc);
+                        lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                         return -1;
                     }
@@ -1860,20 +1220,20 @@ static int run_fork_choice_fixture(const char *path) {
                         reset_block(&anchor_block);
                         lantern_fork_choice_reset(&store);
                         lantern_state_reset(&state);
-                        json_document_reset(&doc);
+                        lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                         return -1;
                     }
 
                     size_t location_len = 0;
-                    int location_idx = json_object_get_field(&doc, check_idx, "location");
-                    const char *location = json_token_string(&doc, location_idx, &location_len);
+                    int location_idx = lantern_fixture_object_get_field(&doc, check_idx, "location");
+                    const char *location = lantern_fixture_token_string(&doc, location_idx, &location_len);
                     if (!location) {
                         reset_block(&signed_block.message);
                         reset_block(&anchor_block);
                         lantern_fork_choice_reset(&store);
                         lantern_state_reset(&state);
-                        json_document_reset(&doc);
+                        lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                         return -1;
                     }
@@ -1890,7 +1250,7 @@ static int run_fork_choice_fixture(const char *path) {
                         reset_block(&anchor_block);
                         lantern_fork_choice_reset(&store);
                         lantern_state_reset(&state);
-                        json_document_reset(&doc);
+                        lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                         return -1;
                     }
@@ -1907,7 +1267,7 @@ static int run_fork_choice_fixture(const char *path) {
                         reset_block(&anchor_block);
                         lantern_fork_choice_reset(&store);
                         lantern_state_reset(&state);
-                        json_document_reset(&doc);
+                        lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                         return -1;
                     }
@@ -1918,7 +1278,7 @@ static int run_fork_choice_fixture(const char *path) {
                         reset_block(&anchor_block);
                         lantern_fork_choice_reset(&store);
                         lantern_state_reset(&state);
-                        json_document_reset(&doc);
+                        lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                         return -1;
                     }
@@ -1934,15 +1294,15 @@ static int run_fork_choice_fixture(const char *path) {
                         reset_block(&anchor_block);
                         lantern_fork_choice_reset(&store);
                         lantern_state_reset(&state);
-                        json_document_reset(&doc);
+                        lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                         return -1;
                     }
 
-                    int field_idx = json_object_get_field(&doc, check_idx, "attestationSlot");
+                    int field_idx = lantern_fixture_object_get_field(&doc, check_idx, "attestationSlot");
                     if (field_idx >= 0) {
                         uint64_t expected_slot = 0;
-                        if (json_token_to_uint64(&doc, field_idx, &expected_slot) != 0 || vote.slot != expected_slot) {
+                        if (lantern_fixture_token_to_uint64(&doc, field_idx, &expected_slot) != 0 || vote.slot != expected_slot) {
                             fprintf(
                                 stderr,
                                 "attestation slot mismatch in %s (step %d): validator %" PRIu64 "\n",
@@ -1953,16 +1313,16 @@ static int run_fork_choice_fixture(const char *path) {
                             reset_block(&anchor_block);
                             lantern_fork_choice_reset(&store);
                             lantern_state_reset(&state);
-                            json_document_reset(&doc);
+                            lantern_fixture_document_reset(&doc);
                             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                             return -1;
                         }
                     }
 
-                    field_idx = json_object_get_field(&doc, check_idx, "headSlot");
+                    field_idx = lantern_fixture_object_get_field(&doc, check_idx, "headSlot");
                     if (field_idx >= 0) {
                         uint64_t expected_slot = 0;
-                        if (json_token_to_uint64(&doc, field_idx, &expected_slot) != 0 || vote.head.slot != expected_slot) {
+                        if (lantern_fixture_token_to_uint64(&doc, field_idx, &expected_slot) != 0 || vote.head.slot != expected_slot) {
                             fprintf(
                                 stderr,
                                 "attestation head slot mismatch in %s (step %d): validator %" PRIu64 "\n",
@@ -1973,16 +1333,16 @@ static int run_fork_choice_fixture(const char *path) {
                             reset_block(&anchor_block);
                             lantern_fork_choice_reset(&store);
                             lantern_state_reset(&state);
-                            json_document_reset(&doc);
+                            lantern_fixture_document_reset(&doc);
                             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                             return -1;
                         }
                     }
 
-                    field_idx = json_object_get_field(&doc, check_idx, "sourceSlot");
+                    field_idx = lantern_fixture_object_get_field(&doc, check_idx, "sourceSlot");
                     if (field_idx >= 0) {
                         uint64_t expected_slot = 0;
-                        if (json_token_to_uint64(&doc, field_idx, &expected_slot) != 0 || vote.source.slot != expected_slot) {
+                        if (lantern_fixture_token_to_uint64(&doc, field_idx, &expected_slot) != 0 || vote.source.slot != expected_slot) {
                             fprintf(
                                 stderr,
                                 "attestation source slot mismatch in %s (step %d): validator %" PRIu64 "\n",
@@ -1993,16 +1353,16 @@ static int run_fork_choice_fixture(const char *path) {
                             reset_block(&anchor_block);
                             lantern_fork_choice_reset(&store);
                             lantern_state_reset(&state);
-                            json_document_reset(&doc);
+                            lantern_fixture_document_reset(&doc);
                             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                             return -1;
                         }
                     }
 
-                    field_idx = json_object_get_field(&doc, check_idx, "targetSlot");
+                    field_idx = lantern_fixture_object_get_field(&doc, check_idx, "targetSlot");
                     if (field_idx >= 0) {
                         uint64_t expected_slot = 0;
-                        if (json_token_to_uint64(&doc, field_idx, &expected_slot) != 0
+                        if (lantern_fixture_token_to_uint64(&doc, field_idx, &expected_slot) != 0
                             || vote_entry->checkpoint.slot != expected_slot) {
                             fprintf(
                                 stderr,
@@ -2014,7 +1374,7 @@ static int run_fork_choice_fixture(const char *path) {
                             reset_block(&anchor_block);
                             lantern_fork_choice_reset(&store);
                             lantern_state_reset(&state);
-                            json_document_reset(&doc);
+                            lantern_fixture_document_reset(&doc);
                             return -1;
                         }
                     }
@@ -2028,7 +1388,7 @@ static int run_fork_choice_fixture(const char *path) {
     reset_block(&anchor_block);
     lantern_fork_choice_reset(&store);
     lantern_state_reset(&state);
-    json_document_reset(&doc);
+    lantern_fixture_document_reset(&doc);
     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
     return 0;
 }
@@ -2038,7 +1398,7 @@ int main(void) {
     int written = snprintf(
         state_transition_root,
         sizeof(state_transition_root),
-        "%s/consensus/state_transition",
+        "%s/consensus/consensus/state_transition",
         LANTERN_TEST_FIXTURE_DIR);
     if (written <= 0 || written >= (int)sizeof(state_transition_root)) {
         fprintf(stderr, "fixture path too long\n");
@@ -2052,7 +1412,7 @@ int main(void) {
     written = snprintf(
         fork_choice_root,
         sizeof(fork_choice_root),
-        "%s/consensus/fork_choice",
+        "%s/consensus/consensus/fork_choice",
         LANTERN_TEST_FIXTURE_DIR);
     if (written <= 0 || written >= (int)sizeof(fork_choice_root)) {
         fprintf(stderr, "fixture path too long\n");

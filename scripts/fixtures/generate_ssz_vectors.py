@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-REPO_ROOT = Path(__file__).resolve().parents[3]
-LEAN_SPEC_SRC = REPO_ROOT / "leanSpec" / "src"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures"
+LEAN_SPEC_ROOT = REPO_ROOT / "tools" / "leanSpec"
+LEAN_SPEC_SRC = LEAN_SPEC_ROOT / "src"
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(LEAN_SPEC_ROOT))
 sys.path.insert(0, str(LEAN_SPEC_SRC))
 
 from lean_spec.subspecs.containers.block import Block, BlockBody, BlockHeader, SignedBlock
@@ -71,8 +74,7 @@ def format_u64_macro(name: str, value: int) -> str:
 
 
 def main() -> None:
-    root = Path(__file__).resolve().parent
-    header_path = root / "ssz_vectors.h"
+    header_path = FIXTURE_DIR / "ssz_vectors.h"
 
     # Deterministic consensus config.
     num_validators = Uint64(4)

@@ -360,13 +360,21 @@ int lantern_network_blocks_by_root_response_encode(
     if (capacity == container_prefix) {
         capacity += resp->length > 0 ? 256u : 0u;
     }
+    size_t minimum_payload = resp->length * (SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE);
+    if (minimum_payload > SIZE_MAX - (container_prefix + offsets_bytes)) {
+        return -1;
+    }
+    size_t minimum_capacity = container_prefix + offsets_bytes + minimum_payload;
+    if (capacity < minimum_capacity) {
+        capacity = minimum_capacity;
+    }
 
     uint8_t *buffer = NULL;
-    for (unsigned attempt = 0; attempt < 8; ++attempt) {
+    for (unsigned attempt = 0; attempt < 16; ++attempt) {
         if (capacity < container_prefix + offsets_bytes) {
             capacity = container_prefix + offsets_bytes;
         }
-        if (capacity > SIZE_MAX / 2 && attempt + 1 < 8) {
+        if (capacity > SIZE_MAX / 2 && attempt + 1 < 16) {
             free(buffer);
             return -1;
         }

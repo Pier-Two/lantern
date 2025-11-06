@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/hash.h"
@@ -13,6 +14,8 @@
 #include "lantern/networking/messages.h"
 #include "lantern/networking/gossip_payloads.h"
 #include "lantern/encoding/snappy.h"
+#include "lantern/support/strings.h"
+#include "tests/support/fixture_loader.h"
 #include "ssz_constants.h"
 
 #ifndef LANTERN_TEST_FIXTURE_DIR
@@ -113,12 +116,14 @@ static LanternSignedVote build_signed_vote(uint64_t validator_id, uint64_t slot,
     signed_vote.data.validator_id = validator_id;
     signed_vote.data.slot = slot;
     signed_vote.data.head = build_checkpoint(seed, slot);
-    signed_vote.data.target = build_checkpoint(seed + 1, slot + 1);
+    signed_vote.data.target = build_checkpoint(seed + 1, slot);
     signed_vote.data.source = build_checkpoint(seed + 2, slot > 0 ? slot - 1 : slot);
     return signed_vote;
 }
 
 static void populate_block(LanternSignedBlock *signed_block, uint8_t seed) {
+    memset(signed_block, 0, sizeof(*signed_block));
+    lantern_block_body_init(&signed_block->message.body);
     signed_block->message.slot = 100 + seed;
     signed_block->message.proposer_index = 3 + seed;
     fill_bytes(signed_block->message.parent_root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(0x10 + seed));
@@ -168,6 +173,84 @@ static int block_publish_hook(
     return 0;
 }
 
+enum block_fixture_kind {
+    BLOCK_FIXTURE_STATE_TRANSITION,
+    BLOCK_FIXTURE_FORK_CHOICE_STEP,
+};
+
+struct block_fixture_case {
+    const char *fixture;
+    enum block_fixture_kind kind;
+    size_t index;
+    uint64_t expected_slot;
+    uint64_t expected_proposer;
+    const char *expected_parent_root;
+    const char *expected_state_root;
+    const char *expected_block_root;
+    size_t expected_attestations;
+    uint64_t first_vote_slot;
+    uint64_t first_vote_head_slot;
+};
+
+static int load_signed_block_fixture(const struct block_fixture_case *spec, LanternSignedBlock *out_block) {
+    if (!spec || !out_block) {
+        return -1;
+    }
+    char path[PATH_MAX];
+    int written = snprintf(path, sizeof(path), "%s/%s", LANTERN_TEST_FIXTURE_DIR, spec->fixture);
+    if (written <= 0 || (size_t)written >= sizeof(path)) {
+        return -1;
+    }
+
+    struct lantern_fixture_document doc;
+    memset(&doc, 0, sizeof(doc));
+
+    char *text = NULL;
+    if (lantern_fixture_read_text_file(path, &text) != 0) {
+        return -1;
+    }
+    if (lantern_fixture_document_init(&doc, text) != 0) {
+        lantern_fixture_document_reset(&doc);
+        return -1;
+    }
+
+    int status = -1;
+    int case_idx = lantern_fixture_object_get_value_at(&doc, 0, 0);
+    if (case_idx < 0) {
+        goto cleanup;
+    }
+
+    int block_idx = -1;
+    if (spec->kind == BLOCK_FIXTURE_STATE_TRANSITION) {
+        int blocks_idx = lantern_fixture_object_get_field(&doc, case_idx, "blocks");
+        if (blocks_idx < 0) {
+            goto cleanup;
+        }
+        block_idx = lantern_fixture_array_get_element(&doc, blocks_idx, (int)spec->index);
+    } else if (spec->kind == BLOCK_FIXTURE_FORK_CHOICE_STEP) {
+        int steps_idx = lantern_fixture_object_get_field(&doc, case_idx, "steps");
+        if (steps_idx < 0) {
+            goto cleanup;
+        }
+        int step_idx = lantern_fixture_array_get_element(&doc, steps_idx, (int)spec->index);
+        if (step_idx < 0) {
+            goto cleanup;
+        }
+        block_idx = lantern_fixture_object_get_field(&doc, step_idx, "block");
+    }
+
+    if (block_idx < 0) {
+        goto cleanup;
+    }
+
+    memset(out_block, 0, sizeof(*out_block));
+    status = lantern_fixture_parse_signed_block(&doc, block_idx, out_block);
+
+cleanup:
+    lantern_fixture_document_reset(&doc);
+    return status;
+}
+
 static int parse_hex_bytes(const char *hex, uint8_t *out, size_t expected_len) {
     if (!hex || !out) {
         return -1;
@@ -194,120 +277,83 @@ static int parse_hex_bytes(const char *hex, uint8_t *out, size_t expected_len) {
     return 0;
 }
 
-static int load_fixture_file(const char *relative, uint8_t **out_buf, size_t *out_len) {
-    if (!relative || !out_buf || !out_len) {
-        return -1;
-    }
-    char path[512];
-    int written = snprintf(path, sizeof(path), "%s/%s", LANTERN_TEST_FIXTURE_DIR, relative);
-    if (written <= 0 || (size_t)written >= sizeof(path)) {
-        return -1;
-    }
-    FILE *file = fopen(path, "rb");
-    if (!file) {
-        perror("fopen");
-        return -1;
-    }
-    if (fseek(file, 0, SEEK_END) != 0) {
-        fclose(file);
-        return -1;
-    }
-    long size = ftell(file);
-    if (size < 0) {
-        fclose(file);
-        return -1;
-    }
-    if (fseek(file, 0, SEEK_SET) != 0) {
-        fclose(file);
-        return -1;
-    }
-    uint8_t *buffer = (uint8_t *)malloc((size_t)size);
-    if (!buffer) {
-        fclose(file);
-        return -1;
-    }
-    size_t read_len = fread(buffer, 1u, (size_t)size, file);
-    fclose(file);
-    if (read_len != (size_t)size) {
-        free(buffer);
-        return -1;
-    }
-    *out_buf = buffer;
-    *out_len = read_len;
-    return 0;
-}
-
 static void test_replay_devnet_block_payloads(void) {
-    struct devnet_block_case {
-        const char *fixture;
-        uint64_t expected_slot;
-        uint64_t expected_proposer;
-        const char *expected_parent_root;
-        const char *expected_state_root;
-        const char *expected_block_root;
-        size_t expected_attestations;
-        uint64_t first_vote_slot;
-        uint64_t first_vote_head_slot;
-    } cases[] = {
+    struct block_fixture_case cases[] = {
         {
-            .fixture = "devnet0/block_slot6.ssz_snappy",
-            .expected_slot = 6,
-            .expected_proposer = 0,
-            .expected_parent_root = "0xb4e0f2473e0819b1dbdec17adc011c61ebec46121f8c2642dabc43745df2f1a6",
-            .expected_state_root = "0x9d3ba02c972d48b943861189154fef8378426b40052a0c9a9a7e707900c6cb89",
-            .expected_block_root = "0x51b0d0b0737bdd173b4c5ba46493b0c04a732eaaef38d27512dac7124e6e2ff7",
+            .fixture =
+                "consensus/consensus/fork_choice/devnet/fc/test_fork_choice_reorgs/test_reorg_on_newly_justified_slot.json",
+            .kind = BLOCK_FIXTURE_FORK_CHOICE_STEP,
+            .index = 5,
+            .expected_slot = 5,
+            .expected_proposer = 1,
+            .expected_parent_root =
+                "0xc16a6e89f0234398fa0bf52b63987b4d634860682eeee798cee30bf2a29db7e2",
+            .expected_state_root =
+                "0xcca47f8109fb3ec6c2aa7e26c92696fd232dcd6c81431b4ae6c2b5555780fab1",
+            .expected_block_root = "0x247a03f401756436c267a398a5ac4fe2ab298701a8403352d1c535c63f31e9a0",
             .expected_attestations = 2,
-            .first_vote_slot = 5,
-            .first_vote_head_slot = 1,
+            .first_vote_slot = 4,
+            .first_vote_head_slot = 2,
         },
         {
-            .fixture = "devnet0/block_slot7.ssz_snappy",
-            .expected_slot = 7,
-            .expected_proposer = 1,
-            .expected_parent_root = "0xaff22c5edbda1ace79d20617204a02261de3dc1b97277d79992eba175f334f92",
-            .expected_state_root = "0x32aa99576ae2294491d86eeca8310f94eee6d28f8cb3d8fc9ecc086a8ea49b2e",
-            .expected_block_root = "0x2a7c152001a6b8712d66850d20e11faee62fcc373d51a8e305d0a3cd9ea22c05",
-            .expected_attestations = 2,
-            .first_vote_slot = 6,
-            .first_vote_head_slot = 6,
+            .fixture =
+                "consensus/consensus/state_transition/devnet/state_transition/test_block_processing/test_linear_chain_multiple_blocks.json",
+            .kind = BLOCK_FIXTURE_STATE_TRANSITION,
+            .index = 1,
+            .expected_slot = 2,
+            .expected_proposer = 2,
+            .expected_parent_root =
+                "0xad26b6bd334c3210c3776ae2cb5ca6f27c89fdd7d1f9e9e08324f4c584b87134",
+            .expected_state_root =
+                "0xb229cd5597a4c28c8895b60113d6a6b86602d19aa364f1bdeb6ecd5f51ae0756",
+            .expected_block_root = "0x60097245852f36359a7246aed4600ebbaf98fd62dc101cdc4a12f9089d858f05",
+            .expected_attestations = 0,
+            .first_vote_slot = 0,
+            .first_vote_head_slot = 0,
         },
     };
 
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-        uint8_t *compressed = NULL;
-        size_t compressed_len = 0;
-        CHECK(load_fixture_file(cases[i].fixture, &compressed, &compressed_len) == 0);
-        CHECK(compressed_len > 0);
+        LanternSignedBlock original;
+        memset(&original, 0, sizeof(original));
+        CHECK(load_signed_block_fixture(&cases[i], &original) == 0);
 
-        size_t raw_len = 0;
-        CHECK(lantern_snappy_uncompressed_length(compressed, compressed_len, &raw_len) == LANTERN_SNAPPY_OK);
-        CHECK(raw_len > 0);
+        size_t ssz_capacity = signed_block_min_capacity_for_test(&original);
+        CHECK(ssz_capacity > 0);
+        uint8_t *ssz_encoded = (uint8_t *)malloc(ssz_capacity);
+        CHECK(ssz_encoded != NULL);
+        size_t ssz_written = ssz_capacity;
+        CHECK(lantern_ssz_encode_signed_block(&original, ssz_encoded, ssz_capacity, &ssz_written) == 0);
+
+        size_t max_compressed = 0;
+        CHECK(lantern_snappy_max_compressed_size(ssz_written, &max_compressed) == LANTERN_SNAPPY_OK);
+        uint8_t *compressed = (uint8_t *)malloc(max_compressed);
+        CHECK(compressed != NULL);
+        size_t compressed_len = max_compressed;
+        CHECK(lantern_gossip_encode_signed_block_snappy(&original, compressed, max_compressed, &compressed_len) == 0);
 
         LanternSignedBlock decoded;
         memset(&decoded, 0, sizeof(decoded));
         lantern_block_body_init(&decoded.message.body);
         CHECK(lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len) == 0);
 
-        uint8_t expected_parent[LANTERN_ROOT_SIZE];
-        uint8_t expected_state[LANTERN_ROOT_SIZE];
-        uint8_t expected_block[LANTERN_ROOT_SIZE];
-        CHECK(parse_hex_bytes(cases[i].expected_parent_root, expected_parent, sizeof(expected_parent)) == 0);
-        CHECK(parse_hex_bytes(cases[i].expected_state_root, expected_state, sizeof(expected_state)) == 0);
-        CHECK(parse_hex_bytes(cases[i].expected_block_root, expected_block, sizeof(expected_block)) == 0);
-
         CHECK(decoded.message.slot == cases[i].expected_slot);
         CHECK(decoded.message.proposer_index == cases[i].expected_proposer);
+
+        uint8_t expected_parent[LANTERN_ROOT_SIZE];
+        uint8_t expected_state[LANTERN_ROOT_SIZE];
+        CHECK(parse_hex_bytes(cases[i].expected_parent_root, expected_parent, sizeof(expected_parent)) == 0);
+        CHECK(parse_hex_bytes(cases[i].expected_state_root, expected_state, sizeof(expected_state)) == 0);
         CHECK(memcmp(decoded.message.parent_root.bytes, expected_parent, LANTERN_ROOT_SIZE) == 0);
         CHECK(memcmp(decoded.message.state_root.bytes, expected_state, LANTERN_ROOT_SIZE) == 0);
+
         CHECK(lantern_signature_is_zero(&decoded.signature));
         CHECK(decoded.message.body.attestations.length == cases[i].expected_attestations);
-
-        if (decoded.message.body.attestations.length > 0 && decoded.message.body.attestations.data) {
+        if (cases[i].expected_attestations > 0 && decoded.message.body.attestations.data) {
             const LanternSignedVote *vote = &decoded.message.body.attestations.data[0];
             CHECK(vote->data.slot == cases[i].first_vote_slot);
             CHECK(vote->data.head.slot == cases[i].first_vote_head_slot);
-            static const uint8_t zero_sig[LANTERN_SIGNATURE_SIZE] = {0};
-            CHECK(memcmp(vote->signature.bytes, zero_sig, LANTERN_SIGNATURE_SIZE) == 0);
+            CHECK(lantern_signature_is_zero(&vote->signature));
         }
         for (size_t att_idx = 0; att_idx < decoded.message.body.attestations.length; ++att_idx) {
             CHECK(lantern_signature_is_zero(&decoded.message.body.attestations.data[att_idx].signature));
@@ -316,41 +362,29 @@ static void test_replay_devnet_block_payloads(void) {
         LanternRoot computed_root;
         memset(&computed_root, 0, sizeof(computed_root));
         CHECK(lantern_hash_tree_root_block(&decoded.message, &computed_root) == 0);
+        uint8_t expected_block[LANTERN_ROOT_SIZE];
+        CHECK(parse_hex_bytes(cases[i].expected_block_root, expected_block, sizeof(expected_block)) == 0);
         CHECK(memcmp(computed_root.bytes, expected_block, LANTERN_ROOT_SIZE) == 0);
 
-        uint8_t *raw_fixture = (uint8_t *)malloc(raw_len);
-        CHECK(raw_fixture != NULL);
-        size_t raw_fixture_written = raw_len;
-        CHECK(lantern_snappy_decompress(compressed, compressed_len, raw_fixture, raw_len, &raw_fixture_written) == LANTERN_SNAPPY_OK);
+        uint8_t *roundtrip = (uint8_t *)malloc(ssz_written);
+        CHECK(roundtrip != NULL);
+        size_t roundtrip_written = ssz_written;
+        CHECK(
+            lantern_snappy_decompress(
+                compressed,
+                compressed_len,
+                roundtrip,
+                ssz_written,
+                &roundtrip_written)
+            == LANTERN_SNAPPY_OK);
+        CHECK(roundtrip_written == ssz_written);
+        CHECK(memcmp(roundtrip, ssz_encoded, ssz_written) == 0);
 
-        uint8_t raw_encoded[512];
-        size_t raw_encoded_written = sizeof(raw_encoded);
-        CHECK(lantern_ssz_encode_signed_block(&decoded, raw_encoded, sizeof(raw_encoded), &raw_encoded_written) == 0);
-        CHECK(raw_encoded_written == raw_fixture_written);
-        CHECK(memcmp(raw_encoded, raw_fixture, raw_fixture_written) == 0);
-
-        size_t max_compressed = 0;
-        CHECK(lantern_snappy_max_compressed_size(raw_encoded_written, &max_compressed) == LANTERN_SNAPPY_OK);
-        uint8_t *recompressed = (uint8_t *)malloc(max_compressed);
-        CHECK(recompressed != NULL);
-        size_t recompressed_len = max_compressed;
-        CHECK(lantern_gossip_encode_signed_block_snappy(&decoded, recompressed, max_compressed, &recompressed_len) == 0);
-
-        size_t recon_len = 0;
-        CHECK(lantern_snappy_uncompressed_length(recompressed, recompressed_len, &recon_len) == LANTERN_SNAPPY_OK);
-        CHECK(recon_len == raw_encoded_written);
-        uint8_t *recon_raw = (uint8_t *)malloc(recon_len);
-        CHECK(recon_raw != NULL);
-        size_t recon_written = recon_len;
-        CHECK(lantern_snappy_decompress(recompressed, recompressed_len, recon_raw, recon_len, &recon_written) == LANTERN_SNAPPY_OK);
-        CHECK(recon_written == raw_encoded_written);
-        CHECK(memcmp(recon_raw, raw_encoded, raw_encoded_written) == 0);
-
-        lantern_block_body_reset(&decoded.message.body);
-        free(recon_raw);
-        free(recompressed);
-        free(raw_fixture);
+        free(roundtrip);
         free(compressed);
+        free(ssz_encoded);
+        lantern_block_body_reset(&decoded.message.body);
+        lantern_block_body_reset(&original.message.body);
     }
 }
 
@@ -421,9 +455,18 @@ static void test_blocks_by_root_response(void) {
     populate_block(&resp.blocks[0], 1);
     populate_block(&resp.blocks[1], 2);
 
-    uint8_t encoded[8192];
+    size_t encoded_capacity = 1u << 20;
+    uint8_t *encoded = (uint8_t *)malloc(encoded_capacity);
+    CHECK(encoded != NULL);
+    for (size_t i = 0; i < resp.length; ++i) {
+        size_t tmp_written = 0;
+        CHECK(lantern_ssz_encode_signed_block(&resp.blocks[i], encoded, encoded_capacity, &tmp_written) == 0);
+        CHECK(tmp_written > 0);
+    }
     size_t written = 0;
-    check_zero(lantern_network_blocks_by_root_response_encode(&resp, encoded, sizeof(encoded), &written), "response encode");
+    check_zero(
+        lantern_network_blocks_by_root_response_encode(&resp, encoded, encoded_capacity, &written),
+        "response encode");
     CHECK(written > sizeof(uint32_t));
     uint32_t container_offset = (uint32_t)encoded[0]
         | ((uint32_t)encoded[1] << 8)
@@ -452,9 +495,14 @@ static void test_blocks_by_root_response(void) {
                  LANTERN_SIGNATURE_SIZE)
           == 0);
 
-    uint8_t compressed[16384];
+    size_t max_compressed = 0;
+    CHECK(lantern_snappy_max_compressed_size(written, &max_compressed) == LANTERN_SNAPPY_OK);
+    uint8_t *compressed = (uint8_t *)malloc(max_compressed);
+    CHECK(compressed != NULL);
     size_t compressed_len = 0;
-    check_zero(lantern_network_blocks_by_root_response_encode_snappy(&resp, compressed, sizeof(compressed), &compressed_len), "response encode snappy");
+    check_zero(
+        lantern_network_blocks_by_root_response_encode_snappy(&resp, compressed, max_compressed, &compressed_len),
+        "response encode snappy");
 
     LanternBlocksByRootResponse snappy_decoded;
     lantern_blocks_by_root_response_init(&snappy_decoded);
@@ -465,6 +513,8 @@ static void test_blocks_by_root_response(void) {
     lantern_blocks_by_root_response_reset(&resp);
     lantern_blocks_by_root_response_reset(&decoded);
     lantern_blocks_by_root_response_reset(&snappy_decoded);
+    free(encoded);
+    free(compressed);
 }
 
 static void test_gossip_helpers(void) {
@@ -528,8 +578,12 @@ static void test_gossip_helpers(void) {
 static void test_gossip_signed_vote_payload(void) {
     LanternSignedVote vote = build_signed_vote(3, 12, 0x44);
 
+    uint8_t raw_buf[8192];
+    size_t raw_written = 0;
+    CHECK(lantern_ssz_encode_signed_vote(&vote, raw_buf, sizeof(raw_buf), &raw_written) == 0);
+
     size_t max_compressed = 0;
-    CHECK(lantern_snappy_max_compressed_size(LANTERN_SIGNED_VOTE_SSZ_SIZE, &max_compressed) == LANTERN_SNAPPY_OK);
+    CHECK(lantern_snappy_max_compressed_size(raw_written, &max_compressed) == LANTERN_SNAPPY_OK);
     uint8_t *compressed = malloc(max_compressed);
     CHECK(compressed);
 
@@ -606,9 +660,11 @@ static void test_gossip_block_snappy_roundtrip_random(void) {
             vote.data.validator_id = rng_uniform(255);
             vote.data.slot = rng_uniform(original.message.slot);
             vote.data.source.slot = vote.data.slot > 0 ? rng_uniform(vote.data.slot) : 0;
-            uint64_t target_floor = vote.data.slot > vote.data.source.slot ? vote.data.slot : vote.data.source.slot;
-            vote.data.target.slot = target_floor + rng_uniform(3);
-            vote.data.head.slot = vote.data.target.slot + rng_uniform(2);
+            if (vote.data.source.slot > vote.data.slot) {
+                vote.data.source.slot = vote.data.slot;
+            }
+            vote.data.target.slot = vote.data.slot;
+            vote.data.head.slot = vote.data.slot;
             rng_fill_bytes(vote.data.head.root.bytes, LANTERN_ROOT_SIZE);
             rng_fill_bytes(vote.data.target.root.bytes, LANTERN_ROOT_SIZE);
             rng_fill_bytes(vote.data.source.root.bytes, LANTERN_ROOT_SIZE);

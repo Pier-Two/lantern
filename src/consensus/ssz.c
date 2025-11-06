@@ -835,6 +835,7 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
         return -1;
     }
 
+    size_t offsets_start = offset;
     size_t offsets[var_field_count];
     for (size_t i = 0; i < var_field_count; ++i) {
         uint32_t value = 0;
@@ -843,6 +844,42 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
         }
         offsets[i] = value;
         offset += SSZ_BYTE_SIZE_OF_UINT32;
+    }
+
+    size_t root_field_start = offsets_start - LANTERN_ROOT_SIZE;
+    if (offsets[0] < offset && root_field_start < data_len) {
+        uint32_t legacy_offsets[var_field_count];
+        bool legacy_layout = true;
+        size_t legacy_read_pos = root_field_start;
+        for (size_t i = 0; i < var_field_count; ++i) {
+            uint32_t value = 0;
+            if (legacy_read_pos >= data_len
+                || read_u32(data + legacy_read_pos, data_len - legacy_read_pos, &value) != 0) {
+                legacy_layout = false;
+                break;
+            }
+            legacy_offsets[i] = value;
+            legacy_read_pos += SSZ_BYTE_SIZE_OF_UINT32;
+        }
+        if (legacy_layout) {
+            size_t legacy_base = root_field_start + (var_field_count * SSZ_BYTE_SIZE_OF_UINT32);
+            size_t prev = 0;
+            for (size_t i = 0; i < var_field_count; ++i) {
+                size_t value = legacy_offsets[i];
+                if (value < legacy_base || value > data_len || (i > 0 && value < prev)) {
+                    legacy_layout = false;
+                    break;
+                }
+                prev = value;
+            }
+            if (legacy_layout) {
+                for (size_t i = 0; i < var_field_count; ++i) {
+                    offsets[i] = legacy_offsets[i];
+                }
+                memset(state->validators_root.bytes, 0, sizeof(state->validators_root.bytes));
+                offset = legacy_base;
+            }
+        }
     }
 
     size_t payload_start = offsets[0];

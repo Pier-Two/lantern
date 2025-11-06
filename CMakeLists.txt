@@ -128,8 +128,17 @@ if(LANTERN_BUILD_TESTS)
     target_link_libraries(lantern_snappy_test PRIVATE lantern)
     add_test(NAME lantern_snappy COMMAND lantern_snappy_test)
 
-    add_executable(lantern_networking_messages_test tests/unit/test_networking_messages.c)
+    add_executable(lantern_networking_messages_test
+        tests/unit/test_networking_messages.c
+        tests/support/fixture_loader.c
+    )
     target_link_libraries(lantern_networking_messages_test PRIVATE lantern)
+    target_include_directories(
+        lantern_networking_messages_test
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}
+            ${PROJECT_SOURCE_DIR}/external/jsmn
+    )
     target_compile_definitions(
         lantern_networking_messages_test
         PRIVATE
@@ -153,9 +162,17 @@ if(LANTERN_BUILD_TESTS)
     target_link_libraries(lantern_validator_duties_integration_test PRIVATE lantern)
     add_test(NAME lantern_validator_duties_integration COMMAND lantern_validator_duties_integration_test)
 
-    add_executable(lantern_consensus_vectors_test tests/integration/test_consensus_vectors.c)
+    add_executable(lantern_consensus_vectors_test
+        tests/integration/test_consensus_vectors.c
+        tests/support/fixture_loader.c
+    )
     target_link_libraries(lantern_consensus_vectors_test PRIVATE lantern)
-    target_include_directories(lantern_consensus_vectors_test PRIVATE ${PROJECT_SOURCE_DIR}/external/jsmn)
+    target_include_directories(
+        lantern_consensus_vectors_test
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}
+            ${PROJECT_SOURCE_DIR}/external/jsmn
+    )
     target_compile_definitions(
         lantern_consensus_vectors_test
         PRIVATE
