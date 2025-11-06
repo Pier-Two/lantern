@@ -15,8 +15,7 @@ ctest --test-dir build --output-on-failure
 
 ## Regenerating Fixtures
 
-The consensus JSON and SSZ fixtures live in `tests/fixtures`. To refresh them
-from LeanSpec, run:
+The consensus JSON and SSZ fixtures live in `tests/fixtures`. To refresh them from LeanSpec, run:
 
 ```sh
 ./scripts/fixtures/fill_consensus_fixtures.sh
