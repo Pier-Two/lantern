@@ -154,10 +154,6 @@ static void lantern_client_enqueue_pending_block(
 static void lantern_client_pending_remove_by_root(struct lantern_client *client, const LanternRoot *root);
 static void lantern_client_process_pending_children(struct lantern_client *client, const LanternRoot *parent_root);
 
-static bool lantern_client_is_gossip_only(const struct lantern_client *client) {
-    (void)client;
-    return false;
-}
 static int lantern_client_schedule_blocks_request(
     struct lantern_client *client,
     const char *peer_id_text,
@@ -330,11 +326,6 @@ static void connection_counter_update(
                 }
             }
         }
-        if (delta > 0 && !inbound) {
-            /* Devnet-0 peers do not serve status over req/resp; rely on gossip only. */
-            /* request_status_now(client, peer, label); */
-            /* (void)lantern_string_list_append(&client->pending_status_peer_ids, label); */
-        }
         total = client->connected_peers;
         pthread_mutex_unlock(&client->connection_lock);
     } else {
@@ -356,15 +347,6 @@ static void connection_counter_update(
 }
 
 static void request_status_now(struct lantern_client *client, const peer_id_t *peer, const char *peer_text) {
-    if (lantern_client_is_gossip_only(client)) {
-        (void)peer;
-        (void)peer_text;
-        lantern_log_trace(
-            "reqresp",
-            &(const struct lantern_log_metadata){.validator = client ? client->node_id : NULL, .peer = peer_text},
-            "devnet0 gossip-only mode: skipping status request");
-        return;
-    }
     if (!client || !client->reqresp_running) {
         return;
     }
@@ -589,38 +571,36 @@ static void peer_dialer_attempt(struct lantern_client *client) {
 
     /* drain_pending_status_requests(client); */
 
-    if (!lantern_client_is_gossip_only(client)) {
-        struct lantern_string_list stale_status_peers;
-        lantern_string_list_init(&stale_status_peers);
-        if (client->status_lock_initialized) {
-            if (pthread_mutex_lock(&client->status_lock) == 0) {
-                uint64_t now_ms = monotonic_millis();
-                for (size_t i = 0; i < client->peer_status_count; ++i) {
-                    struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
-                    if (!entry || entry->peer_id[0] == '\0') {
-                        continue;
-                    }
-                    uint64_t last_ms = entry->last_status_request_ms;
-                    if (last_ms == 0 || now_ms >= last_ms + LANTERN_STATUS_POLL_INTERVAL_MS) {
-                        (void)lantern_string_list_append(&stale_status_peers, entry->peer_id);
-                    }
+    struct lantern_string_list stale_status_peers;
+    lantern_string_list_init(&stale_status_peers);
+    if (client->status_lock_initialized) {
+        if (pthread_mutex_lock(&client->status_lock) == 0) {
+            uint64_t now_ms = monotonic_millis();
+            for (size_t i = 0; i < client->peer_status_count; ++i) {
+                struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
+                if (!entry || entry->peer_id[0] == '\0') {
+                    continue;
                 }
-                pthread_mutex_unlock(&client->status_lock);
+                uint64_t last_ms = entry->last_status_request_ms;
+                if (last_ms == 0 || now_ms >= last_ms + LANTERN_STATUS_POLL_INTERVAL_MS) {
+                    (void)lantern_string_list_append(&stale_status_peers, entry->peer_id);
+                }
             }
+            pthread_mutex_unlock(&client->status_lock);
         }
-        for (size_t i = 0; stale_status_peers.len > 0 && i < stale_status_peers.len; ++i) {
-            const char *peer_text = stale_status_peers.items[i];
-            if (!peer_text) {
-                continue;
-            }
-            peer_id_t parsed = {0};
-            if (peer_id_create_from_string(peer_text, &parsed) == PEER_ID_SUCCESS) {
-                request_status_now(client, &parsed, peer_text);
-                peer_id_destroy(&parsed);
-            }
-        }
-        lantern_string_list_reset(&stale_status_peers);
     }
+    for (size_t i = 0; stale_status_peers.len > 0 && i < stale_status_peers.len; ++i) {
+        const char *status_peer = stale_status_peers.items[i];
+        if (!status_peer) {
+            continue;
+        }
+        peer_id_t parsed = {0};
+        if (peer_id_create_from_string(status_peer, &parsed) == PEER_ID_SUCCESS) {
+            request_status_now(client, &parsed, status_peer);
+            peer_id_destroy(&parsed);
+        }
+    }
+    lantern_string_list_reset(&stale_status_peers);
 
     const struct lantern_enr_record_list *enrs = &client->genesis.enrs;
     if (!enrs || enrs->count == 0) {
@@ -1879,13 +1859,6 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
         goto error;
     }
     client->reqresp_running = true;
-    if (lantern_client_is_gossip_only(client)) {
-        lantern_log_debug(
-            "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "gossip-only mode: request/response service running inbound-only");
-    }
-
     if (append_genesis_bootnodes(client) != 0) {
         lantern_log_error(
             "client",
@@ -4147,12 +4120,6 @@ static int lantern_client_schedule_blocks_request(
     const char *peer_id_text,
     const LanternRoot *root,
     bool use_legacy) {
-    if (lantern_client_is_gossip_only(client)) {
-        (void)peer_id_text;
-        (void)root;
-        (void)use_legacy;
-        return -1;
-    }
     if (!client || !peer_id_text || !root || !client->network.host) {
         return -1;
     }

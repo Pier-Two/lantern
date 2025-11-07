@@ -519,8 +519,8 @@ static void test_blocks_by_root_response(void) {
 
 static void test_gossip_helpers(void) {
     char topic[128];
-    check_zero(lantern_gossip_topic_format(LANTERN_GOSSIP_TOPIC_BLOCK, "devnet0", topic, sizeof(topic)), "topic format");
-    CHECK(strcmp(topic, "/leanconsensus/devnet0/block/ssz_snappy") == 0);
+    check_zero(lantern_gossip_topic_format(LANTERN_GOSSIP_TOPIC_BLOCK, "devnet", topic, sizeof(topic)), "topic format");
+    CHECK(strcmp(topic, "/leanconsensus/devnet/block/ssz_snappy") == 0);
 
     uint8_t payload[64];
     fill_bytes(payload, sizeof(payload), 0x5A);
@@ -746,7 +746,7 @@ static void test_client_publish_block_loopback(void) {
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
     lantern_gossipsub_service_init(&client.gossip);
-    snprintf(client.gossip.block_topic, sizeof(client.gossip.block_topic), "/leanconsensus/devnet0/block/ssz_snappy");
+    snprintf(client.gossip.block_topic, sizeof(client.gossip.block_topic), "/leanconsensus/devnet/block/ssz_snappy");
     lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
 
     LanternSignedBlock block;

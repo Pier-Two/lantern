@@ -207,7 +207,7 @@ int main(int argc, char **argv) {
     }
 
     if (show_version) {
-        printf("lantern devnet0 preview\n");
+        printf("lantern preview\n");
         goto cleanup;
     }
 

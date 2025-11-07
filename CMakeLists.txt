@@ -85,7 +85,7 @@ target_compile_definitions(lantern_cli
         _POSIX_C_SOURCE=200809L
 )
 
-add_executable(lantern_repro_transition tools/repro_transition.c)
+add_executable(lantern_repro_transition tools/debug/repro_transition.c)
 target_link_libraries(lantern_repro_transition PRIVATE lantern)
 
 option(LANTERN_BUILD_TESTS "Build lantern unit tests" ON)
