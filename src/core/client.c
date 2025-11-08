@@ -3463,11 +3463,16 @@ int lantern_reqresp_read_response_chunk(
             &meta,
             "legacy response missing code, treating first byte as header (0x%02x)",
             (unsigned)response_code);
+        lantern_log_info(
+            "reqresp",
+            &meta,
+            "response legacy framing first_byte=0x%02x",
+            (unsigned)response_code);
     } else {
         if (out_response_code) {
             *out_response_code = response_code;
         }
-        lantern_log_trace(
+        lantern_log_info(
             "reqresp",
             &meta,
             "response code=%u",
@@ -3566,7 +3571,7 @@ static int read_varint_payload_chunk(
         if (out_err) {
             *out_err = n == 0 ? (ssize_t)LIBP2P_ERR_EOF : n;
         }
-        lantern_log_trace(
+        lantern_log_warn(
             "reqresp",
             meta,
             "%s header read failed err=%zd",
@@ -3582,7 +3587,7 @@ static int read_varint_payload_chunk(
         header_hex[0] = '\0';
     }
 
-    lantern_log_trace(
+    lantern_log_info(
         "reqresp",
         meta,
         "%s payload_len=%" PRIu64 " header_hex=%s",
@@ -3645,19 +3650,19 @@ static int read_varint_payload_chunk(
             if (lantern_bytes_to_hex(buffer, preview_len, partial_hex, sizeof(partial_hex), 0) != 0) {
                 partial_hex[0] = '\0';
             }
-            lantern_log_trace(
-                "reqresp",
-                meta,
-                "%s payload partial hex=%s%s",
-                label ? label : "chunk",
-                partial_hex[0] ? partial_hex : "-",
-                (collected > preview_len) ? "..." : "");
+        lantern_log_trace(
+            "reqresp",
+            meta,
+            "%s payload partial hex=%s%s",
+            label ? label : "chunk",
+            partial_hex[0] ? partial_hex : "-",
+            (collected > preview_len) ? "..." : "");
         }
         free(buffer);
         if (out_err) {
             *out_err = n == 0 ? (ssize_t)LIBP2P_ERR_EOF : n;
         }
-        lantern_log_trace(
+        lantern_log_warn(
             "reqresp",
             meta,
             "%s payload read failed err=%zd collected=%zu/%zu",
@@ -3681,7 +3686,7 @@ static int read_varint_payload_chunk(
         && lantern_bytes_to_hex(buffer, preview, payload_hex, sizeof(payload_hex), 0) != 0) {
         payload_hex[0] = '\0';
     }
-    lantern_log_trace(
+    lantern_log_info(
         "reqresp",
         meta,
         "%s payload read complete bytes=%zu%s%s",
@@ -3767,7 +3772,7 @@ static void *block_request_worker(void *arg) {
     }
 
     size_t payload_len = 0;
-    if (lantern_network_blocks_by_root_request_encode_snappy(&request, payload, max_payload, &payload_len) != 0
+    if (lantern_network_blocks_by_root_request_encode_snappy(&request, payload, max_payload, &payload_len, NULL) != 0
         || payload_len == 0) {
         lantern_log_error(
             "reqresp",

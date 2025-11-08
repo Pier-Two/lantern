@@ -140,30 +140,35 @@ static void test_framed_compressed_chunks(void) {
     uint8_t *compressed = malloc(max_comp);
     CHECK(compressed != NULL);
     size_t compressed_len = 0;
-    check_zero(lantern_snappy_compress(source, sizeof(source), compressed, max_comp, &compressed_len), "framed compressed encode");
+    check_zero(
+        lantern_snappy_compress(source, sizeof(source), compressed, max_comp, &compressed_len),
+        "framed compressed encode");
 
-    size_t chunk_payload_len = 4u + compressed_len;
-    uint8_t *chunk_payload = malloc(chunk_payload_len);
-    CHECK(chunk_payload != NULL);
-    memset(chunk_payload, 0, 4u);
-    memcpy(chunk_payload + 4u, compressed, compressed_len);
+    const size_t stream_header_bytes = 4u + 6u;
+    const size_t chunk_header_bytes = 4u;
+    CHECK(compressed_len > (stream_header_bytes + chunk_header_bytes + 4u));
+    CHECK(compressed[0] == TEST_CHUNK_STREAM_IDENTIFIER);
+    uint32_t ident_len = (uint32_t)compressed[1]
+        | ((uint32_t)compressed[2] << 8u)
+        | ((uint32_t)compressed[3] << 16u);
+    CHECK(ident_len == 6u);
+    CHECK(memcmp(compressed + 4, "sNaPpY", 6) == 0);
 
-    uint8_t frame[256];
-    size_t used = 0;
-    used += append_stream_identifier(frame + used);
-    used += append_chunk(TEST_CHUNK_COMPRESSED, chunk_payload, chunk_payload_len, frame + used);
-
-    size_t expected = 0;
-    check_zero(lantern_snappy_uncompressed_length(frame, used, &expected), "framed compressed length");
-    CHECK(expected == sizeof(source));
+    size_t offset = stream_header_bytes;
+    CHECK(compressed[offset] == TEST_CHUNK_COMPRESSED);
+    uint32_t chunk_len = (uint32_t)compressed[offset + 1]
+        | ((uint32_t)compressed[offset + 2] << 8u)
+        | ((uint32_t)compressed[offset + 3] << 16u);
+    CHECK(offset + chunk_header_bytes + chunk_len == compressed_len);
 
     uint8_t decoded[sizeof(source)];
     size_t written = sizeof(decoded);
-    check_zero(lantern_snappy_decompress(frame, used, decoded, sizeof(decoded), &written), "framed compressed decode");
+    check_zero(
+        lantern_snappy_decompress(compressed, compressed_len, decoded, sizeof(decoded), &written),
+        "framed compressed decode");
     CHECK(written == sizeof(source));
     CHECK(memcmp(decoded, source, sizeof(source)) == 0);
 
-    free(chunk_payload);
     free(compressed);
 }
 

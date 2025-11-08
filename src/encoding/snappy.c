@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "snappy.h"
@@ -15,6 +16,13 @@ enum {
     LANTERN_SNAPPY_CHUNK_RESERVED_START = 0x80,
     LANTERN_SNAPPY_CHUNK_RESERVED_END = 0xfe,
     LANTERN_SNAPPY_CHUNK_STREAM_IDENTIFIER = 0xff,
+};
+
+enum {
+    LANTERN_SNAPPY_STREAM_IDENTIFIER_LEN = 6,
+    LANTERN_SNAPPY_STREAM_HEADER_BYTES = 4 + LANTERN_SNAPPY_STREAM_IDENTIFIER_LEN,
+    LANTERN_SNAPPY_CHUNK_HEADER_BYTES = 4,
+    LANTERN_SNAPPY_CHUNK_CRC_BYTES = 4,
 };
 
 static uint32_t lantern_snappy_read_le24(const uint8_t *data) {
@@ -35,11 +43,26 @@ static int lantern_snappy_decompress_framed(
     size_t output_len,
     size_t *written);
 
+
+static uint32_t lantern_snappy_crc32c(const uint8_t *data, size_t len);
+static uint32_t lantern_snappy_mask_crc32c(uint32_t crc);
+static void lantern_snappy_write_chunk_header(
+    uint8_t chunk_type,
+    uint32_t chunk_len,
+    uint8_t header[4]);
+
 int lantern_snappy_max_compressed_size(size_t input_len, size_t *max_size) {
     if (!max_size) {
         return LANTERN_SNAPPY_ERROR_INVALID_INPUT;
     }
-    *max_size = snappy_max_compressed_length(input_len);
+    size_t raw_max = snappy_max_compressed_length(input_len);
+    size_t overhead = LANTERN_SNAPPY_STREAM_HEADER_BYTES
+        + LANTERN_SNAPPY_CHUNK_HEADER_BYTES
+        + LANTERN_SNAPPY_CHUNK_CRC_BYTES;
+    if (SIZE_MAX - raw_max < overhead) {
+        return LANTERN_SNAPPY_ERROR_INVALID_INPUT;
+    }
+    *max_size = raw_max + overhead;
     return LANTERN_SNAPPY_OK;
 }
 
@@ -53,14 +76,27 @@ int lantern_snappy_compress(
         return LANTERN_SNAPPY_ERROR_INVALID_INPUT;
     }
 
-    size_t required = snappy_max_compressed_length(input_len);
+    size_t raw_max = snappy_max_compressed_length(input_len);
+    size_t overhead = LANTERN_SNAPPY_STREAM_HEADER_BYTES
+        + LANTERN_SNAPPY_CHUNK_HEADER_BYTES
+        + LANTERN_SNAPPY_CHUNK_CRC_BYTES;
+    if (SIZE_MAX - raw_max < overhead) {
+        return LANTERN_SNAPPY_ERROR_INVALID_INPUT;
+    }
+    size_t required = raw_max + overhead;
     if (output_len < required) {
         *written = required;
         return LANTERN_SNAPPY_ERROR_BUFFER_TOO_SMALL;
     }
 
+    uint8_t *compressed = (uint8_t *)malloc(raw_max);
+    if (!compressed) {
+        return LANTERN_SNAPPY_ERROR_INVALID_INPUT;
+    }
+
     struct snappy_env env;
     if (snappy_init_env(&env) != 0) {
+        free(compressed);
         return LANTERN_SNAPPY_ERROR_UNSUPPORTED;
     }
 
@@ -68,14 +104,47 @@ int lantern_snappy_compress(
     int rc = snappy_compress(&env,
                              (const char *)input,
                              input_len,
-                             (char *)output,
+                             (char *)compressed,
                              &compressed_len);
     snappy_free_env(&env);
     if (rc != 0) {
+        free(compressed);
         return LANTERN_SNAPPY_ERROR_INVALID_INPUT;
     }
 
-    *written = compressed_len;
+    size_t pos = 0;
+    uint8_t header[4];
+    lantern_snappy_write_chunk_header(
+        LANTERN_SNAPPY_CHUNK_STREAM_IDENTIFIER,
+        LANTERN_SNAPPY_STREAM_IDENTIFIER_LEN,
+        header);
+    memcpy(output + pos, header, sizeof(header));
+    pos += sizeof(header);
+    memcpy(output + pos, "sNaPpY", LANTERN_SNAPPY_STREAM_IDENTIFIER_LEN);
+    pos += LANTERN_SNAPPY_STREAM_IDENTIFIER_LEN;
+
+    uint32_t chunk_len = (uint32_t)(compressed_len + LANTERN_SNAPPY_CHUNK_CRC_BYTES);
+    if (chunk_len > 0x00ffffffu) {
+        free(compressed);
+        return LANTERN_SNAPPY_ERROR_INVALID_INPUT;
+    }
+    lantern_snappy_write_chunk_header(LANTERN_SNAPPY_CHUNK_COMPRESSED, chunk_len, header);
+    memcpy(output + pos, header, sizeof(header));
+    pos += sizeof(header);
+
+    uint32_t crc = lantern_snappy_crc32c(input, input_len);
+    uint32_t masked_crc = lantern_snappy_mask_crc32c(crc);
+    output[pos + 0] = (uint8_t)(masked_crc & 0xffu);
+    output[pos + 1] = (uint8_t)((masked_crc >> 8u) & 0xffu);
+    output[pos + 2] = (uint8_t)((masked_crc >> 16u) & 0xffu);
+    output[pos + 3] = (uint8_t)((masked_crc >> 24u) & 0xffu);
+    pos += LANTERN_SNAPPY_CHUNK_CRC_BYTES;
+
+    memcpy(output + pos, compressed, compressed_len);
+    pos += compressed_len;
+
+    free(compressed);
+    *written = pos;
     return LANTERN_SNAPPY_OK;
 }
 
@@ -271,4 +340,30 @@ static int lantern_snappy_decompress_framed(
 
     *written = produced;
     return LANTERN_SNAPPY_OK;
+}
+
+static uint32_t lantern_snappy_crc32c(const uint8_t *data, size_t len) {
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < len; ++i) {
+        crc ^= data[i];
+        for (int bit = 0; bit < 8; ++bit) {
+            uint32_t mask = (uint32_t)-(int32_t)(crc & 1u);
+            crc = (crc >> 1) ^ (0x82F63B78u & mask);
+        }
+    }
+    return ~crc;
+}
+
+static uint32_t lantern_snappy_mask_crc32c(uint32_t crc) {
+    return ((crc >> 15) | (crc << 17)) + 0xA282EAD8u;
+}
+
+static void lantern_snappy_write_chunk_header(
+    uint8_t chunk_type,
+    uint32_t chunk_len,
+    uint8_t header[4]) {
+    header[0] = chunk_type;
+    header[1] = (uint8_t)(chunk_len & 0xffu);
+    header[2] = (uint8_t)((chunk_len >> 8u) & 0xffu);
+    header[3] = (uint8_t)((chunk_len >> 16u) & 0xffu);
 }

@@ -163,26 +163,38 @@ int lantern_network_status_decode(
     LanternStatusMessage *status,
     const uint8_t *data,
     size_t data_len) {
-    if (!status || !data) {
+    if (!status || (!data && data_len > 0)) {
         return -1;
     }
-    if (data_len != 2u * LANTERN_CHECKPOINT_SSZ_SIZE) {
-        return -1;
+    if (data_len == 2u * LANTERN_CHECKPOINT_SSZ_SIZE) {
+        if (lantern_ssz_decode_checkpoint(&status->finalized, data, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
+            return -1;
+        }
+        if (lantern_ssz_decode_checkpoint(
+                &status->head,
+                data + LANTERN_CHECKPOINT_SSZ_SIZE,
+                LANTERN_CHECKPOINT_SSZ_SIZE)
+            != 0) {
+            return -1;
+        }
+        return 0;
     }
-    if (lantern_ssz_decode_checkpoint(&status->finalized, data, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
-        return -1;
+    if (data_len == LANTERN_CHECKPOINT_SSZ_SIZE) {
+        if (lantern_ssz_decode_checkpoint(&status->head, data, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
+            return -1;
+        }
+        status->finalized = status->head;
+        return 0;
     }
-    if (lantern_ssz_decode_checkpoint(&status->head, data + LANTERN_CHECKPOINT_SSZ_SIZE, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
-        return -1;
-    }
-    return 0;
+    return -1;
 }
 
 int lantern_network_status_encode_snappy(
     const LanternStatusMessage *status,
     uint8_t *out,
     size_t out_len,
-    size_t *written) {
+    size_t *written,
+    size_t *raw_len) {
     if (!status || !out || !written) {
         return -1;
     }
@@ -190,6 +202,9 @@ int lantern_network_status_encode_snappy(
     size_t raw_written = sizeof(raw);
     if (encode_status_raw(status, raw, sizeof(raw), &raw_written) != 0) {
         return -1;
+    }
+    if (raw_len) {
+        *raw_len = raw_written;
     }
     int rc = lantern_snappy_compress(raw, raw_written, out, out_len, written);
     return rc == LANTERN_SNAPPY_OK ? 0 : -1;
@@ -289,7 +304,8 @@ int lantern_network_blocks_by_root_request_encode_snappy(
     const LanternBlocksByRootRequest *req,
     uint8_t *out,
     size_t out_len,
-    size_t *written) {
+    size_t *written,
+    size_t *raw_len) {
     if (!req || !out || !written) {
         return -1;
     }
@@ -306,6 +322,9 @@ int lantern_network_blocks_by_root_request_encode_snappy(
     size_t raw_written = raw_size;
     int result = -1;
     if (lantern_network_blocks_by_root_request_encode(req, raw, raw_size, &raw_written) == 0) {
+        if (raw_len) {
+            *raw_len = raw_written;
+        }
         int rc = lantern_snappy_compress(raw, raw_written, out, out_len, written);
         result = (rc == LANTERN_SNAPPY_OK) ? 0 : -1;
     }
@@ -561,7 +580,8 @@ int lantern_network_blocks_by_root_response_encode_snappy(
     const LanternBlocksByRootResponse *resp,
     uint8_t *out,
     size_t out_len,
-    size_t *written) {
+    size_t *written,
+    size_t *raw_len) {
     if (!resp || !out || !written) {
         return -1;
     }
@@ -574,6 +594,9 @@ int lantern_network_blocks_by_root_response_encode_snappy(
         size_t raw_written = capacity;
         int rc = lantern_network_blocks_by_root_response_encode(resp, raw, capacity, &raw_written);
         if (rc == 0) {
+            if (raw_len) {
+                *raw_len = raw_written;
+            }
             int snappy_rc = lantern_snappy_compress(raw, raw_written, out, out_len, written);
             free(raw);
             return snappy_rc == LANTERN_SNAPPY_OK ? 0 : -1;

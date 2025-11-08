@@ -405,7 +405,11 @@ static void test_status_snappy(void) {
 
     uint8_t compressed[256];
     size_t compressed_len = 0;
-    check_zero(lantern_network_status_encode_snappy(&status, compressed, sizeof(compressed), &compressed_len), "status encode snappy");
+    size_t status_raw_len = 0;
+    check_zero(
+        lantern_network_status_encode_snappy(&status, compressed, sizeof(compressed), &compressed_len, &status_raw_len),
+        "status encode snappy");
+    CHECK(status_raw_len == 2u * LANTERN_CHECKPOINT_SSZ_SIZE);
 
     LanternStatusMessage snappy_decoded = {0};
     check_zero(lantern_network_status_decode_snappy(&snappy_decoded, compressed, compressed_len), "status decode snappy");
@@ -434,7 +438,16 @@ static void test_blocks_by_root_request(void) {
 
     uint8_t compressed[256];
     size_t compressed_len = 0;
-    check_zero(lantern_network_blocks_by_root_request_encode_snappy(&req, compressed, sizeof(compressed), &compressed_len), "request encode snappy");
+    size_t request_raw_len = 0;
+    check_zero(
+        lantern_network_blocks_by_root_request_encode_snappy(
+            &req,
+            compressed,
+            sizeof(compressed),
+            &compressed_len,
+            &request_raw_len),
+        "request encode snappy");
+    CHECK(request_raw_len == expected_written);
 
     LanternBlocksByRootRequest snappy_decoded;
     lantern_blocks_by_root_request_init(&snappy_decoded);
@@ -499,9 +512,16 @@ static void test_blocks_by_root_response(void) {
     uint8_t *compressed = (uint8_t *)malloc(max_compressed);
     CHECK(compressed != NULL);
     size_t compressed_len = 0;
+    size_t response_raw_len = 0;
     check_zero(
-        lantern_network_blocks_by_root_response_encode_snappy(&resp, compressed, max_compressed, &compressed_len),
+        lantern_network_blocks_by_root_response_encode_snappy(
+            &resp,
+            compressed,
+            max_compressed,
+            &compressed_len,
+            &response_raw_len),
         "response encode snappy");
+    CHECK(response_raw_len == written);
 
     LanternBlocksByRootResponse snappy_decoded;
     lantern_blocks_by_root_response_init(&snappy_decoded);
