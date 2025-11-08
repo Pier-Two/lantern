@@ -29,6 +29,7 @@ enum {
     OPT_BOOTNODE_FILE,
     OPT_DEVNET,
     OPT_LOG_LEVEL,
+    OPT_ENABLE_PING_SERVICE,
 };
 
 static void print_usage(const char *prog);
@@ -85,6 +86,7 @@ int main(int argc, char **argv) {
         {"bootnodes-file", required_argument, NULL, OPT_BOOTNODE_FILE},
         {"devnet", required_argument, NULL, OPT_DEVNET},
         {"log-level", required_argument, NULL, OPT_LOG_LEVEL},
+        {"enable-ping-service", no_argument, NULL, OPT_ENABLE_PING_SERVICE},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'v'},
         {0, 0, 0, 0},
@@ -172,6 +174,9 @@ int main(int argc, char **argv) {
                     optarg);
                 goto error;
             }
+            break;
+        case OPT_ENABLE_PING_SERVICE:
+            options.enable_ping_service = true;
             break;
         case OPT_BOOTNODES:
             if (add_bootnodes_argument(&options, optarg) != 0) {
@@ -282,6 +287,7 @@ static void print_usage(const char *prog) {
         "  --listen-address ADDR        QUIC listen multiaddr\n"
         "  --http-port PORT             HTTP API port\n"
         "  --metrics-port PORT          Metrics port\n"
+        "  --enable-ping-service        Enable libp2p ping server (experimental)\n"
         "  --bootnode ENR               Add a bootnode enr\n"
         "  --bootnodes VALUE            ENR or path to YAML/List file of ENRs\n"
         "  --bootnodes-file PATH        File with newline-delimited ENRs\n"

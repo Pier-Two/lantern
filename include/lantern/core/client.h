@@ -48,6 +48,7 @@ struct lantern_client_options {
     uint16_t http_port;
     uint16_t metrics_port;
     const char *devnet;
+    bool enable_ping_service;
     struct lantern_string_list bootnodes;
 };
 
@@ -83,6 +84,7 @@ struct lantern_client {
     uint16_t http_port;
     uint16_t metrics_port;
     char *devnet;
+    bool enable_ping_service;
     struct lantern_string_list bootnodes;
     struct lantern_genesis_paths genesis_paths;
     struct lantern_genesis_artifacts genesis;
