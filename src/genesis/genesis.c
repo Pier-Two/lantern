@@ -2,7 +2,9 @@
 
 #include "lantern/support/strings.h"
 #include "lantern/support/secure_mem.h"
+#include "lantern/networking/libp2p.h"
 #include "internal/yaml_parser.h"
+#include "peer_id/peer_id.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -27,6 +29,8 @@ static uint64_t parse_u64(const char *value, int *ok);
 static char *dup_trimmed(const char *value);
 static const char *yaml_object_value(const LanternYamlObject *object, const char *key);
 static int read_scalar_value(const char *path, const char *key, char **out_value);
+static enum lantern_validator_client_kind classify_validator_client(const char *name);
+static int derive_peer_id_from_privkey_hex(const char *hex, char **out_peer_id);
 
 void lantern_genesis_artifacts_init(struct lantern_genesis_artifacts *artifacts) {
     if (!artifacts) {
@@ -160,6 +164,9 @@ static void free_validator_config_entry(struct lantern_validator_config_entry *e
         free(entry->privkey_hex);
     }
     entry->privkey_hex = NULL;
+    free(entry->peer_id_text);
+    entry->peer_id_text = NULL;
+    entry->client_kind = LANTERN_VALIDATOR_CLIENT_UNKNOWN;
     free(entry->enr.ip);
     entry->enr.ip = NULL;
     entry->enr.quic_port = 0;
@@ -177,6 +184,60 @@ static char *trim_whitespace(char *value) {
     }
     *end = '\0';
     return value;
+}
+
+static enum lantern_validator_client_kind classify_validator_client(const char *name) {
+    if (!name) {
+        return LANTERN_VALIDATOR_CLIENT_UNKNOWN;
+    }
+    if (strncmp(name, "lantern", 7) == 0) {
+        return LANTERN_VALIDATOR_CLIENT_LANTERN;
+    }
+    if (strncmp(name, "qlean", 5) == 0) {
+        return LANTERN_VALIDATOR_CLIENT_QLEAN;
+    }
+    if (strncmp(name, "ream", 4) == 0) {
+        return LANTERN_VALIDATOR_CLIENT_REAM;
+    }
+    if (strncmp(name, "zeam", 4) == 0) {
+        return LANTERN_VALIDATOR_CLIENT_ZEAM;
+    }
+    return LANTERN_VALIDATOR_CLIENT_UNKNOWN;
+}
+
+static int derive_peer_id_from_privkey_hex(const char *hex, char **out_peer_id) {
+    if (!hex || !out_peer_id) {
+        return -1;
+    }
+    uint8_t secret[32];
+    if (lantern_hex_decode(hex, secret, sizeof(secret)) != 0) {
+        return -1;
+    }
+    uint8_t *encoded = NULL;
+    size_t encoded_len = 0;
+    if (lantern_libp2p_encode_secp256k1_private_key_proto(secret, sizeof(secret), &encoded, &encoded_len) != 0) {
+        lantern_secure_zero(secret, sizeof(secret));
+        return -1;
+    }
+    lantern_secure_zero(secret, sizeof(secret));
+    peer_id_t peer_id = {0};
+    peer_id_error_t perr = peer_id_create_from_private_key(encoded, encoded_len, &peer_id);
+    free(encoded);
+    if (perr != PEER_ID_SUCCESS) {
+        return -1;
+    }
+    char buffer[128];
+    if (peer_id_to_string(&peer_id, PEER_ID_FMT_BASE58_LEGACY, buffer, sizeof(buffer)) < 0) {
+        peer_id_destroy(&peer_id);
+        return -1;
+    }
+    peer_id_destroy(&peer_id);
+    char *dup = lantern_string_duplicate(buffer);
+    if (!dup) {
+        return -1;
+    }
+    *out_peer_id = dup;
+    return 0;
 }
 
 static int parse_chain_config(const char *path, struct lantern_chain_config *config) {
@@ -458,6 +519,14 @@ static int parse_validator_config(const char *path, struct lantern_validator_con
 
         entries[i].name = dup_trimmed(name_val);
         entries[i].privkey_hex = dup_trimmed(priv_val);
+        entries[i].client_kind = classify_validator_client(entries[i].name);
+        if (!entries[i].privkey_hex
+            || derive_peer_id_from_privkey_hex(entries[i].privkey_hex, &entries[i].peer_id_text) != 0) {
+            lantern_yaml_free_objects(objects, count);
+            free_validator_config_entry(&entries[i]);
+            free(entries);
+            return -1;
+        }
 
         int ok = 0;
         entries[i].count = parse_u64(count_val, &ok);

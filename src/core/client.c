@@ -118,6 +118,7 @@ static void adopt_validator_listen_address(struct lantern_client *client);
 static void identify_dial_multiaddr(struct lantern_client *client, const char *multiaddr, const char *peer_label);
 static int initialize_fork_choice(struct lantern_client *client);
 static int restore_persisted_blocks(struct lantern_client *client);
+static void lantern_client_seed_reqresp_peer_modes(struct lantern_client *client);
 static void connection_events_cb(const libp2p_event_t *evt, void *user_data);
 static const char *connection_reason_text(int reason);
 static void connection_counter_update(
@@ -524,6 +525,24 @@ static void request_status_from_bootnodes(struct lantern_client *client) {
     if (local_peer) {
         peer_id_destroy(local_peer);
         free(local_peer);
+    }
+}
+
+static void lantern_client_seed_reqresp_peer_modes(struct lantern_client *client) {
+    if (!client) {
+        return;
+    }
+    const struct lantern_validator_config *config = &client->genesis.validator_config;
+    if (!config || !config->entries) {
+        return;
+    }
+    for (size_t i = 0; i < config->count; ++i) {
+        const struct lantern_validator_config_entry *entry = &config->entries[i];
+        if (!entry->peer_id_text || !entry->peer_id_text[0]) {
+            continue;
+        }
+        int legacy = (entry->client_kind == LANTERN_VALIDATOR_CLIENT_QLEAN);
+        lantern_reqresp_service_hint_peer_legacy(&client->reqresp, entry->peer_id_text, legacy);
     }
 }
 
@@ -1959,6 +1978,7 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
         goto error;
     }
     client->reqresp_running = true;
+    lantern_client_seed_reqresp_peer_modes(client);
     if (append_genesis_bootnodes(client) != 0) {
         lantern_log_error(
             "client",
@@ -3403,7 +3423,9 @@ static int discard_stream_bytes(
 }
 
 int lantern_reqresp_read_response_chunk(
+    struct lantern_reqresp_service *service,
     libp2p_stream_t *stream,
+    int expect_response_code,
     uint8_t **out_data,
     size_t *out_len,
     ssize_t *out_err,
@@ -3429,58 +3451,71 @@ int lantern_reqresp_read_response_chunk(
     (void)libp2p_stream_set_read_interest(stream, true);
 
     uint8_t response_code = 0;
-    bool legacy_no_code = false;
+    bool expect_code = expect_response_code != 0;
+    bool legacy_no_code = !expect_code;
     ssize_t last_err = 0;
-    while (true) {
-        (void)libp2p_stream_set_deadline(stream, LANTERN_REQRESP_STALL_TIMEOUT_MS);
-        ssize_t n = libp2p_stream_read(stream, &response_code, 1);
-        if (n == 1) {
-            break;
-        }
-        if (n == (ssize_t)LIBP2P_ERR_AGAIN) {
-            continue;
+    if (expect_code) {
+        while (true) {
+            (void)libp2p_stream_set_deadline(stream, LANTERN_REQRESP_STALL_TIMEOUT_MS);
+            ssize_t n = libp2p_stream_read(stream, &response_code, 1);
+            if (n == 1) {
+                break;
+            }
+            if (n == (ssize_t)LIBP2P_ERR_AGAIN) {
+                continue;
+            }
+            (void)libp2p_stream_set_deadline(stream, 0);
+            last_err = n == 0 ? (ssize_t)LIBP2P_ERR_EOF : n;
+            if (out_err) {
+                *out_err = last_err;
+            }
+            lantern_log_trace(
+                "reqresp",
+                &meta,
+                "response code read failed err=%zd",
+                last_err);
+            return -1;
         }
         (void)libp2p_stream_set_deadline(stream, 0);
-        last_err = n == 0 ? (ssize_t)LIBP2P_ERR_EOF : n;
-        if (out_err) {
-            *out_err = last_err;
+        if (response_code > LANTERN_REQRESP_RESPONSE_SERVER_ERROR) {
+            legacy_no_code = true;
+            if (out_response_code) {
+                *out_response_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
+            }
+            lantern_log_trace(
+                "reqresp",
+                &meta,
+                "legacy response missing code, treating first byte as header (0x%02x)",
+                (unsigned)response_code);
+            lantern_log_info(
+                "reqresp",
+                &meta,
+                "response legacy framing first_byte=0x%02x",
+                (unsigned)response_code);
+            if (service && peer_text[0] != '\0') {
+                lantern_reqresp_service_hint_peer_legacy(service, peer_text, 1);
+            }
+        } else {
+            if (out_response_code) {
+                *out_response_code = response_code;
+            }
+            lantern_log_info(
+                "reqresp",
+                &meta,
+                "response code=%u",
+                (unsigned)response_code);
+            if (service && peer_text[0] != '\0') {
+                lantern_reqresp_service_hint_peer_legacy(service, peer_text, 0);
+            }
         }
-        lantern_log_trace(
-            "reqresp",
-            &meta,
-            "response code read failed err=%zd",
-            last_err);
-        return -1;
-    }
-    (void)libp2p_stream_set_deadline(stream, 0);
-    if (response_code > LANTERN_REQRESP_RESPONSE_SERVER_ERROR) {
-        legacy_no_code = true;
+    } else {
         if (out_response_code) {
             *out_response_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
         }
-        lantern_log_trace(
-            "reqresp",
-            &meta,
-            "legacy response missing code, treating first byte as header (0x%02x)",
-            (unsigned)response_code);
-        lantern_log_info(
-            "reqresp",
-            &meta,
-            "response legacy framing first_byte=0x%02x",
-            (unsigned)response_code);
-    } else {
-        if (out_response_code) {
-            *out_response_code = response_code;
-        }
-        lantern_log_info(
-            "reqresp",
-            &meta,
-            "response code=%u",
-            (unsigned)response_code);
     }
 
     uint8_t header_first_byte = 0;
-    if (legacy_no_code) {
+    if (legacy_no_code && expect_code) {
         header_first_byte = response_code;
     } else {
         while (true) {
@@ -3862,7 +3897,17 @@ static void *block_request_worker(void *arg) {
     size_t response_len = 0;
     ssize_t read_err = 0;
     uint8_t response_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
-    if (lantern_reqresp_read_response_chunk(stream, &response, &response_len, &read_err, &response_code) != 0) {
+    struct lantern_reqresp_service *service = ctx->client ? &ctx->client->reqresp : NULL;
+    int expect_response_code = ctx->using_legacy ? 0 : 1;
+    if (lantern_reqresp_read_response_chunk(
+            service,
+            stream,
+            expect_response_code,
+            &response,
+            &response_len,
+            &read_err,
+            &response_code)
+        != 0) {
         lantern_log_error(
             "reqresp",
             &meta,
@@ -4177,10 +4222,16 @@ static int lantern_client_schedule_blocks_request(
     }
     ctx->client = client;
     ctx->root = *root;
-    ctx->protocol_id = use_legacy ? LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY : LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
-    ctx->using_legacy = use_legacy;
     strncpy(ctx->peer_text, peer_id_text, sizeof(ctx->peer_text) - 1);
     ctx->peer_text[sizeof(ctx->peer_text) - 1] = '\0';
+    bool prefer_legacy = false;
+    if (!use_legacy && ctx->peer_text[0] != '\0') {
+        prefer_legacy = lantern_reqresp_service_peer_prefers_legacy(&client->reqresp, ctx->peer_text) != 0;
+    }
+    bool effective_legacy = use_legacy || prefer_legacy;
+    ctx->protocol_id =
+        effective_legacy ? LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY : LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
+    ctx->using_legacy = effective_legacy;
 
     if (peer_id_create_from_string(peer_id_text, &ctx->peer_id) != PEER_ID_SUCCESS) {
         lantern_log_warn(

@@ -41,9 +41,19 @@ struct lantern_validator_config_enr {
     uint64_t sequence;
 };
 
+enum lantern_validator_client_kind {
+    LANTERN_VALIDATOR_CLIENT_UNKNOWN = 0,
+    LANTERN_VALIDATOR_CLIENT_LANTERN,
+    LANTERN_VALIDATOR_CLIENT_QLEAN,
+    LANTERN_VALIDATOR_CLIENT_REAM,
+    LANTERN_VALIDATOR_CLIENT_ZEAM,
+};
+
 struct lantern_validator_config_entry {
     char *name;
     char *privkey_hex;
+    char *peer_id_text;
+    enum lantern_validator_client_kind client_kind;
     struct lantern_validator_config_enr enr;
     uint64_t count;
 };

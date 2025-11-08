@@ -27,7 +27,11 @@
 
 #define LANTERN_LIBP2P_KEY_TYPE_SECP256K1 2u
 
-static int encode_secp256k1_private_key_proto(const uint8_t *secret, size_t secret_len, uint8_t **out, size_t *out_len) {
+int lantern_libp2p_encode_secp256k1_private_key_proto(
+    const uint8_t *secret,
+    size_t secret_len,
+    uint8_t **out,
+    size_t *out_len) {
     if (!secret || secret_len != 32 || !out || !out_len) {
         return -1;
     }
@@ -254,7 +258,12 @@ int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct la
 
     uint8_t *identity_pb = NULL;
     size_t identity_len = 0;
-    if (encode_secp256k1_private_key_proto(config->secp256k1_secret, config->secret_len, &identity_pb, &identity_len) != 0) {
+    if (lantern_libp2p_encode_secp256k1_private_key_proto(
+            config->secp256k1_secret,
+            config->secret_len,
+            &identity_pb,
+            &identity_len)
+        != 0) {
         libp2p_host_free(host);
         return -1;
     }
