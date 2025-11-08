@@ -630,7 +630,6 @@ static void identify_dial_multiaddr(struct lantern_client *client, const char *m
         &stream);
 
     if (rc == 0 && stream) {
-        libp2p_stream_close(stream);
         libp2p_stream_free(stream);
         lantern_log_debug(
             "network",
@@ -643,7 +642,6 @@ static void identify_dial_multiaddr(struct lantern_client *client, const char *m
     }
 
     if (stream) {
-        libp2p_stream_close(stream);
         libp2p_stream_free(stream);
     }
 
@@ -3712,7 +3710,6 @@ static void *block_request_worker(void *arg) {
     free(worker);
     if (!ctx || !stream) {
         if (stream) {
-            libp2p_stream_close(stream);
             libp2p_stream_free(stream);
         }
         block_request_ctx_free(ctx);
@@ -4011,9 +4008,7 @@ cleanup:
     free(response);
     free(payload);
     lantern_blocks_by_root_request_reset(&request);
-    libp2p_stream_close(stream);
     libp2p_stream_free(stream);
-
     if (!request_success) {
         /* Devnet-0: do not retry blocks_by_root fallbacks; rely on gossip. */
         if (ctx->client && ctx->using_legacy) {
@@ -4049,7 +4044,6 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
     struct block_request_ctx *ctx = (struct block_request_ctx *)user_data;
     if (!ctx) {
         if (stream) {
-            libp2p_stream_close(stream);
             libp2p_stream_free(stream);
         }
         return;
@@ -4085,7 +4079,6 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
                 &meta,
                 "retrying blocks_by_root with legacy protocol after dial failure");
             if (stream) {
-                libp2p_stream_close(stream);
                 libp2p_stream_free(stream);
             }
             block_request_ctx_free(ctx);
@@ -4107,7 +4100,6 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
                     LANTERN_BLOCKS_REQUEST_FAILED);
             }
             if (stream) {
-                libp2p_stream_close(stream);
                 libp2p_stream_free(stream);
             }
             block_request_ctx_free(ctx);
@@ -4122,7 +4114,6 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
             &meta,
             "failed to allocate worker for %s stream",
             ctx->protocol_id);
-        libp2p_stream_close(stream);
         libp2p_stream_free(stream);
         if (ctx->client) {
             lantern_client_on_blocks_request_complete(
@@ -4144,7 +4135,6 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
             &meta,
             "failed to spawn blocks_by_root worker");
         free(worker);
-        libp2p_stream_close(stream);
         libp2p_stream_free(stream);
         if (ctx->client) {
             lantern_client_on_blocks_request_complete(

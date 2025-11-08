@@ -514,7 +514,6 @@ static void close_stream(libp2p_stream_t *stream) {
     if (!stream) {
         return;
     }
-    libp2p_stream_close(stream);
     libp2p_stream_free(stream);
 }
 
@@ -686,7 +685,6 @@ static void *status_request_worker(void *arg) {
     free(worker);
     if (!ctx || !stream) {
         if (stream) {
-            libp2p_stream_close(stream);
             libp2p_stream_free(stream);
         }
         status_request_ctx_free(ctx);
@@ -878,7 +876,6 @@ static void *status_request_worker(void *arg) {
     failure_code = LIBP2P_ERR_OK;
 
 finish:
-    libp2p_stream_close(stream);
     libp2p_stream_free(stream);
     status_request_ctx_free(ctx);
     if (failure_code != LIBP2P_ERR_OK) {
@@ -899,7 +896,6 @@ static void status_request_on_open(libp2p_stream_t *stream, void *user_data, int
         err);
     if (!ctx) {
         if (stream) {
-            libp2p_stream_close(stream);
             libp2p_stream_free(stream);
         }
         return;
@@ -914,7 +910,6 @@ static void status_request_on_open(libp2p_stream_t *stream, void *user_data, int
             err);
         status_request_notify_failure(ctx->service, meta.peer, err != 0 ? err : LIBP2P_ERR_INTERNAL);
         if (stream) {
-            libp2p_stream_close(stream);
             libp2p_stream_free(stream);
         }
         status_request_ctx_free(ctx);
@@ -929,7 +924,6 @@ static void status_request_on_open(libp2p_stream_t *stream, void *user_data, int
             "failed to allocate worker for %s stream",
             LANTERN_STATUS_PROTOCOL_ID);
         status_request_notify_failure(ctx->service, meta.peer, LIBP2P_ERR_INTERNAL);
-        libp2p_stream_close(stream);
         libp2p_stream_free(stream);
         status_request_ctx_free(ctx);
         return;
@@ -945,7 +939,6 @@ static void status_request_on_open(libp2p_stream_t *stream, void *user_data, int
             "failed to spawn status request worker");
         free(worker);
         status_request_notify_failure(ctx->service, meta.peer, LIBP2P_ERR_INTERNAL);
-        libp2p_stream_close(stream);
         libp2p_stream_free(stream);
         status_request_ctx_free(ctx);
         return;
