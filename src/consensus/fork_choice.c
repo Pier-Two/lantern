@@ -457,7 +457,7 @@ int lantern_fork_choice_add_vote(
     if (!store || !vote || !store->initialized) {
         return -1;
     }
-    if (vote->data.validator_id >= store->validator_count) {
+    if (vote->validator_id >= store->validator_count) {
         return -1;
     }
     if (!is_signature_zero(&vote->signature)) {
@@ -473,7 +473,7 @@ int lantern_fork_choice_add_vote(
         return -1;
     }
 
-    size_t validator = (size_t)vote->data.validator_id;
+    size_t validator = (size_t)vote->validator_id;
     struct lantern_fork_choice_vote_entry *table = from_block ? store->known_votes : store->new_votes;
     struct lantern_fork_choice_vote_entry *entry = &table[validator];
     if (!entry->has_checkpoint || vote->data.slot > entry->checkpoint.slot) {

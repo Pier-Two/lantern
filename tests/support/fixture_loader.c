@@ -357,7 +357,7 @@ static int lantern_fixture_parse_attestations(
         if (validator_idx < 0) {
             return -1;
         }
-        if (lantern_fixture_token_to_uint64(doc, validator_idx, &vote.data.validator_id) != 0) {
+        if (lantern_fixture_token_to_uint64(doc, validator_idx, &vote.validator_id) != 0) {
             return -1;
         }
 
@@ -561,14 +561,6 @@ int lantern_fixture_parse_anchor_state(
         return -1;
     }
     if (lantern_state_prepare_validator_votes(state, *validator_count) != 0) {
-        free(validator_pubkeys);
-        return -1;
-    }
-    if (lantern_hash_tree_root_validators(
-            validator_pubkeys,
-            (size_t)count,
-            &state->validators_root)
-        != 0) {
         free(validator_pubkeys);
         return -1;
     }

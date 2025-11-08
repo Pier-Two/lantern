@@ -21,6 +21,7 @@
 #include "libp2p/protocol_dial.h"
 #include "libp2p/stream.h"
 #include "libp2p/host.h"
+#include "protocol/identify/protocol_identify.h"
 #include "protocol/gossipsub/gossipsub.h"
 #include "protocol/ping/protocol_ping.h"
 #include "peer_id/peer_id.h"
@@ -50,6 +51,7 @@
 #define LANTERN_BLOCKS_REQUEST_MIN_POLL_MS 2000u
 #define LANTERN_STATUS_POLL_INTERVAL_MS 6000u
 #define LANTERN_PENDING_BLOCK_LIMIT 256u
+#define LANTERN_PEER_DIAL_TIMEOUT_MS 4000
 
 enum lantern_blocks_request_outcome {
     LANTERN_BLOCKS_REQUEST_SUCCESS = 0,
@@ -113,6 +115,7 @@ static int reqresp_collect_blocks(
     LanternBlocksByRootResponse *out_blocks);
 static bool listen_address_is_unspecified(const char *addr);
 static void adopt_validator_listen_address(struct lantern_client *client);
+static void identify_dial_multiaddr(struct lantern_client *client, const char *multiaddr, const char *peer_label);
 static int initialize_fork_choice(struct lantern_client *client);
 static int restore_persisted_blocks(struct lantern_client *client);
 static void connection_events_cb(const libp2p_event_t *evt, void *user_data);
@@ -127,6 +130,8 @@ static void connection_counter_reset(struct lantern_client *client);
 static void request_status_now(struct lantern_client *client, const peer_id_t *peer, const char *peer_text);
 static inline void drain_pending_status_requests(struct lantern_client *client);
 static void request_status_from_bootnodes(struct lantern_client *client);
+static bool lantern_client_is_peer_connected(struct lantern_client *client, const char *peer_id);
+static void lantern_client_enqueue_status_peer(struct lantern_client *client, const char *peer_id);
 static int start_peer_dialer(struct lantern_client *client);
 static void stop_peer_dialer(struct lantern_client *client);
 static void *peer_dialer_thread(void *arg);
@@ -350,13 +355,33 @@ static void request_status_now(struct lantern_client *client, const peer_id_t *p
     if (!client || !client->reqresp_running) {
         return;
     }
-    const char *label = (peer_text && peer_text[0]) ? peer_text : NULL;
+    char peer_buffer[128];
+    peer_buffer[0] = '\0';
+    const char *status_peer = (peer_text && peer_text[0]) ? peer_text : NULL;
+    if ((!status_peer || status_peer[0] == '\0') && peer) {
+        if (peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_buffer, sizeof(peer_buffer)) == 0) {
+            status_peer = peer_buffer;
+        } else {
+            status_peer = NULL;
+        }
+    }
+    if (status_peer && !lantern_client_is_peer_connected(client, status_peer)) {
+        lantern_log_trace(
+            "reqresp",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = status_peer},
+            "deferring status request until peer is connected");
+        lantern_client_enqueue_status_peer(client, status_peer);
+        return;
+    }
+
     struct lantern_log_metadata meta = {
         .validator = client->node_id,
-        .peer = label,
+        .peer = status_peer,
     };
-    int status_rc = lantern_reqresp_service_request_status(&client->reqresp, peer, label);
-    if (label) {
+    int status_rc = lantern_reqresp_service_request_status(&client->reqresp, peer, status_peer);
+    if (status_peer) {
         lantern_log_trace(
             "reqresp",
             &meta,
@@ -374,30 +399,23 @@ static void request_status_now(struct lantern_client *client, const peer_id_t *p
                 .validator = client->node_id},
             "initiated status request to peer");
     }
-    if (client->status_lock_initialized) {
-        char peer_buffer[128];
-        const char *status_peer = label;
-        if (!status_peer || status_peer[0] == '\0') {
-            peer_buffer[0] = '\0';
-            if (peer && peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_buffer, sizeof(peer_buffer)) == 0) {
-                status_peer = peer_buffer;
-            }
-        }
-        if (status_peer && status_peer[0]) {
-            if (pthread_mutex_lock(&client->status_lock) == 0) {
-                for (size_t i = 0; i < client->peer_status_count; ++i) {
-                    struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
-                    if (strncmp(entry->peer_id, status_peer, sizeof(entry->peer_id)) == 0) {
-                        if (status_rc == 0) {
-                            entry->last_status_request_ms = monotonic_millis();
-                        } else {
-                            entry->last_status_request_ms = 0;
-                        }
-                        break;
+    if (status_rc != 0 && status_peer) {
+        lantern_client_enqueue_status_peer(client, status_peer);
+    }
+    if (client->status_lock_initialized && status_peer && status_peer[0]) {
+        if (pthread_mutex_lock(&client->status_lock) == 0) {
+            for (size_t i = 0; i < client->peer_status_count; ++i) {
+                struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
+                if (strncmp(entry->peer_id, status_peer, sizeof(entry->peer_id)) == 0) {
+                    if (status_rc == 0) {
+                        entry->last_status_request_ms = monotonic_millis();
+                    } else {
+                        entry->last_status_request_ms = 0;
                     }
+                    break;
                 }
-                pthread_mutex_unlock(&client->status_lock);
             }
+            pthread_mutex_unlock(&client->status_lock);
         }
     }
 }
@@ -435,6 +453,10 @@ static inline void drain_pending_status_requests(struct lantern_client *client) 
         if (!peer_text) {
             continue;
         }
+        if (!lantern_client_is_peer_connected(client, peer_text)) {
+            lantern_client_enqueue_status_peer(client, peer_text);
+            continue;
+        }
         peer_id_t parsed = {0};
         if (peer_id_create_from_string(peer_text, &parsed) != PEER_ID_SUCCESS) {
             lantern_log_trace(
@@ -443,6 +465,7 @@ static inline void drain_pending_status_requests(struct lantern_client *client) 
                     .validator = client->node_id,
                     .peer = peer_text},
                 "unable to parse peer id for deferred status request");
+            lantern_client_enqueue_status_peer(client, peer_text);
             continue;
         }
         request_status_now(client, &parsed, peer_text);
@@ -489,7 +512,12 @@ static void request_status_from_bootnodes(struct lantern_client *client) {
             if (peer_id_to_string(&peer_id, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text)) < 0) {
                 peer_text[0] = '\0';
             }
-            request_status_now(client, &peer_id, peer_text[0] ? peer_text : NULL);
+            const char *label = peer_text[0] ? peer_text : NULL;
+            if (label && !lantern_client_is_peer_connected(client, label)) {
+                lantern_client_enqueue_status_peer(client, label);
+            } else {
+                request_status_now(client, &peer_id, label);
+            }
         }
         peer_id_destroy(&peer_id);
     }
@@ -564,12 +592,77 @@ static void adopt_validator_listen_address(struct lantern_client *client) {
         client->listen_address);
 }
 
+static bool lantern_client_is_peer_connected(struct lantern_client *client, const char *peer_id) {
+    if (!client || !peer_id || !peer_id[0] || !client->connection_lock_initialized) {
+        return false;
+    }
+    bool connected = false;
+    if (pthread_mutex_lock(&client->connection_lock) == 0) {
+        connected = string_list_contains(&client->connected_peer_ids, peer_id);
+        pthread_mutex_unlock(&client->connection_lock);
+    }
+    return connected;
+}
+
+static void lantern_client_enqueue_status_peer(struct lantern_client *client, const char *peer_id) {
+    if (!client || !peer_id || !peer_id[0] || !client->connection_lock_initialized) {
+        return;
+    }
+    if (pthread_mutex_lock(&client->connection_lock) == 0) {
+        if (!string_list_contains(&client->pending_status_peer_ids, peer_id)) {
+            (void)lantern_string_list_append(&client->pending_status_peer_ids, peer_id);
+        }
+        pthread_mutex_unlock(&client->connection_lock);
+    }
+}
+
+static void identify_dial_multiaddr(struct lantern_client *client, const char *multiaddr, const char *peer_label) {
+    if (!client || !client->network.host || !multiaddr || multiaddr[0] == '\0') {
+        return;
+    }
+
+    libp2p_stream_t *stream = NULL;
+    int rc = libp2p_host_dial_protocol_blocking(
+        client->network.host,
+        multiaddr,
+        LIBP2P_IDENTIFY_PROTO_ID,
+        LANTERN_PEER_DIAL_TIMEOUT_MS,
+        &stream);
+
+    if (rc == 0 && stream) {
+        libp2p_stream_close(stream);
+        libp2p_stream_free(stream);
+        lantern_log_debug(
+            "network",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = peer_label},
+            "identify dial succeeded addr=%s",
+            multiaddr);
+        return;
+    }
+
+    if (stream) {
+        libp2p_stream_close(stream);
+        libp2p_stream_free(stream);
+    }
+
+    lantern_log_trace(
+        "network",
+        &(const struct lantern_log_metadata){
+            .validator = client->node_id,
+            .peer = peer_label},
+        "identify dial failed rc=%d addr=%s",
+        rc,
+        multiaddr);
+}
+
 static void peer_dialer_attempt(struct lantern_client *client) {
     if (!client || !client->network.host) {
         return;
     }
 
-    /* drain_pending_status_requests(client); */
+    drain_pending_status_requests(client);
 
     struct lantern_string_list stale_status_peers;
     lantern_string_list_init(&stale_status_peers);
@@ -686,6 +779,7 @@ static void peer_dialer_attempt(struct lantern_client *client) {
             }
 
             (void)lantern_libp2p_host_add_enr_peer(&client->network, record, LANTERN_LIBP2P_DEFAULT_PEER_TTL_MS);
+            identify_dial_multiaddr(client, multiaddr, peer_text[0] ? peer_text : record->encoded);
 
             bool already_added = false;
             if (peer_text[0]) {
@@ -772,6 +866,14 @@ static void connection_events_cb(const libp2p_event_t *evt, void *user_data) {
     switch (evt->kind) {
     case LIBP2P_EVT_CONN_OPENED:
         connection_counter_update(client, 1, evt->u.conn_opened.peer, evt->u.conn_opened.inbound, 0);
+        if (evt->u.conn_opened.peer) {
+            char peer_text[128];
+            peer_text[0] = '\0';
+            if (peer_id_to_string(evt->u.conn_opened.peer, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text)) < 0) {
+                peer_text[0] = '\0';
+            }
+            request_status_now(client, evt->u.conn_opened.peer, peer_text[0] ? peer_text : NULL);
+        }
         break;
     case LIBP2P_EVT_CONN_CLOSED:
         connection_counter_update(client, -1, evt->u.conn_closed.peer, false, evt->u.conn_closed.reason);
@@ -2620,6 +2722,17 @@ static bool lantern_client_import_block(
 
     LanternRoot block_root_local = *effective_block_root;
 
+    if (block->message.slot < local_slot) {
+        lantern_client_unlock_state(client, state_locked);
+        lantern_log_debug(
+            "state",
+            meta,
+            "ignoring block slot=%" PRIu64 " local_slot=%" PRIu64,
+            block->message.slot,
+            local_slot);
+        return false;
+    }
+
     uint64_t known_slot = 0;
     bool root_known = false;
     if (effective_block_root) {
@@ -3295,12 +3408,16 @@ int lantern_reqresp_read_response_chunk(
     libp2p_stream_t *stream,
     uint8_t **out_data,
     size_t *out_len,
-    ssize_t *out_err) {
+    ssize_t *out_err,
+    uint8_t *out_response_code) {
     if (!stream || !out_data || !out_len) {
         if (out_err) {
             *out_err = LIBP2P_ERR_NULL_PTR;
         }
         return -1;
+    }
+    if (out_response_code) {
+        *out_response_code = LANTERN_REQRESP_RESPONSE_SERVER_ERROR;
     }
 
     char peer_text[128];
@@ -3313,11 +3430,12 @@ int lantern_reqresp_read_response_chunk(
 
     (void)libp2p_stream_set_read_interest(stream, true);
 
-    uint8_t response_byte = 0;
+    uint8_t response_code = 0;
+    bool legacy_no_code = false;
     ssize_t last_err = 0;
     while (true) {
         (void)libp2p_stream_set_deadline(stream, LANTERN_REQRESP_STALL_TIMEOUT_MS);
-        ssize_t n = libp2p_stream_read(stream, &response_byte, 1);
+        ssize_t n = libp2p_stream_read(stream, &response_code, 1);
         if (n == 1) {
             break;
         }
@@ -3329,81 +3447,49 @@ int lantern_reqresp_read_response_chunk(
         if (out_err) {
             *out_err = last_err;
         }
+        lantern_log_trace(
+            "reqresp",
+            &meta,
+            "response code read failed err=%zd",
+            last_err);
         return -1;
     }
     (void)libp2p_stream_set_deadline(stream, 0);
-
-    if (response_byte != 0) {
+    if (response_code > LANTERN_REQRESP_RESPONSE_SERVER_ERROR) {
+        legacy_no_code = true;
+        if (out_response_code) {
+            *out_response_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
+        }
         lantern_log_trace(
             "reqresp",
             &meta,
-            "response using varint framing");
-        return read_varint_payload_chunk(
-            stream,
-            response_byte,
-            out_data,
-            out_len,
-            out_err,
-            &meta,
-            "chunk");
-    }
-
-    lantern_log_trace(
-        "reqresp",
-        &meta,
-        "response using legacy framing");
-
-    uint8_t *context_buf = NULL;
-    size_t context_collected = 0;
-
-    uint64_t context_len = 0;
-    if (read_stream_varint(stream, &context_len, &meta, "response context", &last_err) != 0) {
-        if (out_err) {
-            *out_err = last_err;
+            "legacy response missing code, treating first byte as header (0x%02x)",
+            (unsigned)response_code);
+    } else {
+        if (out_response_code) {
+            *out_response_code = response_code;
         }
-        return -1;
-    }
-    if (context_len > LANTERN_REQRESP_MAX_CONTEXT_BYTES) {
         lantern_log_trace(
             "reqresp",
             &meta,
-            "response context too large=%" PRIu64,
-            context_len);
-        if (out_err) {
-            *out_err = LIBP2P_ERR_MSG_TOO_LARGE;
-        }
-        return -1;
+            "response code=%u",
+            (unsigned)response_code);
     }
-    if (context_len > 0) {
-        context_buf = (uint8_t *)malloc((size_t)context_len);
-        if (!context_buf) {
-            if (out_err) {
-                *out_err = -ENOMEM;
-            }
-            lantern_log_error(
-                "reqresp",
-                &meta,
-                "failed to allocate response context bytes=%" PRIu64,
-                context_len);
-            return -1;
-        }
 
-        while (context_collected < context_len) {
+    uint8_t header_first_byte = 0;
+    if (legacy_no_code) {
+        header_first_byte = response_code;
+    } else {
+        while (true) {
             (void)libp2p_stream_set_deadline(stream, LANTERN_REQRESP_STALL_TIMEOUT_MS);
-            ssize_t n = libp2p_stream_read(
-                stream,
-                context_buf + context_collected,
-                (size_t)context_len - context_collected);
-            if (n > 0) {
-                context_collected += (size_t)n;
-                continue;
+            ssize_t n = libp2p_stream_read(stream, &header_first_byte, 1);
+            if (n == 1) {
+                break;
             }
             if (n == (ssize_t)LIBP2P_ERR_AGAIN) {
                 continue;
             }
             (void)libp2p_stream_set_deadline(stream, 0);
-            free(context_buf);
-            context_buf = NULL;
             last_err = n == 0 ? (ssize_t)LIBP2P_ERR_EOF : n;
             if (out_err) {
                 *out_err = last_err;
@@ -3411,88 +3497,26 @@ int lantern_reqresp_read_response_chunk(
             lantern_log_trace(
                 "reqresp",
                 &meta,
-                "response context read failed err=%zd collected=%zu/%" PRIu64,
-                last_err,
-                context_collected,
-                context_len);
+                "response payload header read failed err=%zd",
+                last_err);
             return -1;
         }
         (void)libp2p_stream_set_deadline(stream, 0);
     }
 
-    /* legacy framing never encodes an error response when the leading byte is zero */
-    free(context_buf);
-    context_buf = NULL;
+    lantern_log_trace(
+        "reqresp",
+        &meta,
+        "response using varint framing");
 
-    uint64_t payload_len = 0;
-    if (read_stream_varint(stream, &payload_len, &meta, "chunk header", &last_err) != 0) {
-        if (out_err) {
-            *out_err = last_err;
-        }
-        return -1;
-    }
-    if (payload_len > LANTERN_REQRESP_MAX_CHUNK_BYTES || payload_len > SIZE_MAX) {
-        lantern_log_trace(
-            "reqresp",
-            &meta,
-            "chunk header invalid length=%" PRIu64 " max=%u",
-            payload_len,
-            (unsigned)LANTERN_REQRESP_MAX_CHUNK_BYTES);
-        if (out_err) {
-            *out_err = LIBP2P_ERR_MSG_TOO_LARGE;
-        }
-        return -1;
-    }
-
-    if (payload_len == 0) {
-        *out_data = NULL;
-        *out_len = 0;
-        if (out_err) {
-            *out_err = 0;
-        }
-        lantern_log_trace(
-            "reqresp",
-            &meta,
-            "chunk payload empty");
-        return 0;
-    }
-
-    size_t payload_size = (size_t)payload_len;
-    uint8_t *buffer = (uint8_t *)malloc(payload_size);
-    if (!buffer) {
-        if (out_err) {
-            *out_err = -ENOMEM;
-        }
-        return -1;
-    }
-
-    size_t collected = 0;
-    while (collected < payload_size) {
-        (void)libp2p_stream_set_deadline(stream, LANTERN_REQRESP_STALL_TIMEOUT_MS);
-        ssize_t n = libp2p_stream_read(stream, buffer + collected, payload_size - collected);
-        if (n > 0) {
-            collected += (size_t)n;
-            continue;
-        }
-        if (n == (ssize_t)LIBP2P_ERR_AGAIN) {
-            continue;
-        }
-        (void)libp2p_stream_set_deadline(stream, 0);
-        free(buffer);
-        last_err = n == 0 ? (ssize_t)LIBP2P_ERR_EOF : n;
-        if (out_err) {
-            *out_err = last_err;
-        }
-        return -1;
-    }
-    (void)libp2p_stream_set_deadline(stream, 0);
-
-    *out_data = buffer;
-    *out_len = payload_size;
-    if (out_err) {
-        *out_err = 0;
-    }
-    return 0;
+    return read_varint_payload_chunk(
+        stream,
+        header_first_byte,
+        out_data,
+        out_len,
+        out_err,
+        &meta,
+        "chunk");
 }
 
 static int read_varint_payload_chunk(
@@ -3835,7 +3859,8 @@ static void *block_request_worker(void *arg) {
 
     size_t response_len = 0;
     ssize_t read_err = 0;
-    if (lantern_reqresp_read_response_chunk(stream, &response, &response_len, &read_err) != 0) {
+    uint8_t response_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
+    if (lantern_reqresp_read_response_chunk(stream, &response, &response_len, &read_err, &response_code) != 0) {
         lantern_log_error(
             "reqresp",
             &meta,
@@ -3864,6 +3889,17 @@ static void *block_request_worker(void *arg) {
             &meta,
             "blocks_by_root raw payload_len=%zu (empty)",
             response_len);
+    }
+
+    if (response_code != LANTERN_REQRESP_RESPONSE_SUCCESS) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "blocks_by_root response returned code=%u payload_len=%zu",
+            (unsigned)response_code,
+            response_len);
+        schedule_legacy = !ctx->using_legacy;
+        goto cleanup;
     }
 
     if (response_len == 0 || !response) {
@@ -4022,6 +4058,14 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
         .validator = ctx->client ? ctx->client->node_id : NULL,
         .peer = ctx->peer_text[0] ? ctx->peer_text : NULL,
     };
+
+    lantern_log_info(
+        "reqresp",
+        &meta,
+        "block request stream opened protocol=%s err=%d",
+        ctx->protocol_id ? ctx->protocol_id : "(unknown)",
+        err);
+
     if (err != 0 || !stream) {
         lantern_log_warn(
             "reqresp",
@@ -4112,6 +4156,11 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
         block_request_ctx_free(ctx);
         return;
     }
+    lantern_log_info(
+        "reqresp",
+        &meta,
+        "spawned blocks_by_root worker protocol=%s",
+        ctx->protocol_id ? ctx->protocol_id : "(unknown)");
     pthread_detach(thread);
 }
 

@@ -86,7 +86,18 @@ target_compile_definitions(lantern_cli
 )
 
 add_executable(lantern_repro_transition tools/debug/repro_transition.c)
+add_executable(lantern_repro_genesis_transition tools/debug/repro_genesis_transition.c)
 target_link_libraries(lantern_repro_transition PRIVATE lantern)
+target_link_libraries(lantern_repro_genesis_transition PRIVATE lantern)
+
+add_executable(lantern_inspect_block tools/debug/inspect_block.c)
+target_link_libraries(lantern_inspect_block PRIVATE lantern)
+
+add_executable(lantern_inspect_genesis tools/debug/inspect_genesis.c)
+target_link_libraries(lantern_inspect_genesis PRIVATE lantern)
+
+add_executable(lantern_fix_genesis_state tools/debug/fix_genesis_state.c)
+target_link_libraries(lantern_fix_genesis_state PRIVATE lantern)
 
 option(LANTERN_BUILD_TESTS "Build lantern unit tests" ON)
 if(LANTERN_BUILD_TESTS)

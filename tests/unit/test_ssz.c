@@ -65,8 +65,8 @@ static void assert_checkpoint_equal(const LanternCheckpoint *lhs, const LanternC
 }
 
 static void assert_vote_equal(const LanternVote *lhs, const LanternVote *rhs) {
-    if (lhs->validator_id != rhs->validator_id || lhs->slot != rhs->slot) {
-        fprintf(stderr, "vote slot/validator mismatch\n");
+    if (lhs->slot != rhs->slot) {
+        fprintf(stderr, "vote slot mismatch\n");
         abort();
     }
     assert_checkpoint_equal(&lhs->head, &rhs->head);
@@ -105,7 +105,6 @@ static void test_checkpoint_roundtrip(void) {
 
 static LanternVote build_vote(void) {
     LanternVote vote;
-    vote.validator_id = 7;
     vote.slot = 9;
     vote.head = build_checkpoint(0xAB, 10);
     vote.target = build_checkpoint(0xCD, 11);
@@ -116,8 +115,8 @@ static LanternVote build_vote(void) {
 static LanternSignedVote build_signed_vote(uint64_t validator_id, uint64_t slot, uint8_t seed) {
     LanternSignedVote signed_vote;
     memset(&signed_vote, 0, sizeof(signed_vote));
+    signed_vote.validator_id = validator_id;
     signed_vote.data = build_vote();
-    signed_vote.data.validator_id = validator_id;
     signed_vote.data.slot = slot;
     signed_vote.data.head = build_checkpoint(seed, slot);
     signed_vote.data.target = build_checkpoint(seed + 1, slot + 1);
@@ -156,7 +155,6 @@ static void test_vote_roundtrip(void) {
     LanternVote decoded;
     memset(&decoded, 0, sizeof(decoded));
     assert(lantern_ssz_decode_vote(&decoded, buffer, sizeof(buffer)) == 0);
-    assert(decoded.validator_id == input.validator_id);
     assert(decoded.slot == input.slot);
     assert(memcmp(decoded.head.root.bytes, input.head.root.bytes, LANTERN_ROOT_SIZE) == 0);
     assert(memcmp(decoded.target.root.bytes, input.target.root.bytes, LANTERN_ROOT_SIZE) == 0);
@@ -166,6 +164,7 @@ static void test_vote_roundtrip(void) {
 static void test_signed_vote_roundtrip(void) {
     LanternSignedVote signed_vote;
     memset(&signed_vote, 0, sizeof(signed_vote));
+    signed_vote.validator_id = 42;
     signed_vote.data = build_vote();
 
     uint8_t buffer[LANTERN_SIGNED_VOTE_SSZ_SIZE];
@@ -176,7 +175,7 @@ static void test_signed_vote_roundtrip(void) {
     LanternSignedVote decoded;
     memset(&decoded, 0, sizeof(decoded));
     assert(lantern_ssz_decode_signed_vote(&decoded, buffer, sizeof(buffer)) == 0);
-    assert(decoded.data.validator_id == signed_vote.data.validator_id);
+    assert(decoded.validator_id == signed_vote.validator_id);
     assert(decoded.data.slot == signed_vote.data.slot);
     assert(memcmp(decoded.signature.bytes, signed_vote.signature.bytes, LANTERN_SIGNATURE_SIZE) == 0);
 }
@@ -239,7 +238,7 @@ static void test_block_body_roundtrip(void) {
     assert(decoded.attestations.length == body.attestations.length);
 
     for (size_t i = 0; i < body.attestations.length; ++i) {
-        assert(decoded.attestations.data[i].data.validator_id == body.attestations.data[i].data.validator_id);
+        assert(decoded.attestations.data[i].validator_id == body.attestations.data[i].validator_id);
         assert(memcmp(decoded.attestations.data[i].signature.bytes,
                       body.attestations.data[i].signature.bytes,
                       LANTERN_SIGNATURE_SIZE)
@@ -270,7 +269,6 @@ static void reset_block(LanternBlock *block) {
 
 static void build_vote_vector_a(LanternVote *vote) {
     memset(vote, 0, sizeof(*vote));
-    vote->validator_id = LANTERN_VECTOR_VOTE_A_VALIDATOR_ID;
     vote->slot = LANTERN_VECTOR_VOTE_A_SLOT;
     vote->head = checkpoint_from_vector(LANTERN_VECTOR_VOTE_A_HEAD_ROOT, LANTERN_VECTOR_VOTE_A_HEAD_SLOT);
     vote->target = checkpoint_from_vector(LANTERN_VECTOR_VOTE_A_TARGET_ROOT, LANTERN_VECTOR_VOTE_A_TARGET_SLOT);
@@ -279,7 +277,6 @@ static void build_vote_vector_a(LanternVote *vote) {
 
 static void build_vote_vector_b(LanternVote *vote) {
     memset(vote, 0, sizeof(*vote));
-    vote->validator_id = LANTERN_VECTOR_VOTE_B_VALIDATOR_ID;
     vote->slot = LANTERN_VECTOR_VOTE_B_SLOT;
     vote->head = checkpoint_from_vector(LANTERN_VECTOR_VOTE_B_HEAD_ROOT, LANTERN_VECTOR_VOTE_B_HEAD_SLOT);
     vote->target = checkpoint_from_vector(LANTERN_VECTOR_VOTE_B_TARGET_ROOT, LANTERN_VECTOR_VOTE_B_TARGET_SLOT);
@@ -288,11 +285,13 @@ static void build_vote_vector_b(LanternVote *vote) {
 
 static void build_signed_vote_vector_a(LanternSignedVote *signed_vote) {
     memset(signed_vote, 0, sizeof(*signed_vote));
+    signed_vote->validator_id = LANTERN_VECTOR_VOTE_A_VALIDATOR_ID;
     build_vote_vector_a(&signed_vote->data);
 }
 
 static void build_signed_vote_vector_b(LanternSignedVote *signed_vote) {
     memset(signed_vote, 0, sizeof(*signed_vote));
+    signed_vote->validator_id = LANTERN_VECTOR_VOTE_B_VALIDATOR_ID;
     build_vote_vector_b(&signed_vote->data);
 }
 

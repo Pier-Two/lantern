@@ -304,10 +304,6 @@ static int encode_vote_internal(const LanternVote *vote, uint8_t *out, size_t ou
         return -1;
     }
     size_t offset = 0;
-    if (write_u64(out + offset, out_len - offset, vote->validator_id) != 0) {
-        return -1;
-    }
-    offset += SSZ_BYTE_SIZE_OF_UINT64;
     if (write_u64(out + offset, out_len - offset, vote->slot) != 0) {
         return -1;
     }
@@ -336,10 +332,6 @@ static int decode_vote_internal(LanternVote *vote, const uint8_t *data, size_t d
         return -1;
     }
     size_t offset = 0;
-    if (read_u64(data + offset, data_len - offset, &vote->validator_id) != 0) {
-        return -1;
-    }
-    offset += SSZ_BYTE_SIZE_OF_UINT64;
     if (read_u64(data + offset, data_len - offset, &vote->slot) != 0) {
         return -1;
     }
@@ -372,6 +364,10 @@ int lantern_ssz_encode_signed_vote(const LanternSignedVote *vote, uint8_t *out, 
         return -1;
     }
     size_t offset = 0;
+    if (write_u64(out + offset, out_len - offset, vote->validator_id) != 0) {
+        return -1;
+    }
+    offset += SSZ_BYTE_SIZE_OF_UINT64;
     if (encode_vote_internal(&vote->data, out + offset, out_len - offset, NULL) != 0) {
         return -1;
     }
@@ -389,10 +385,16 @@ int lantern_ssz_decode_signed_vote(LanternSignedVote *vote, const uint8_t *data,
     if (!vote || !data || data_len != LANTERN_SIGNED_VOTE_SSZ_SIZE) {
         return -1;
     }
-    if (decode_vote_internal(&vote->data, data, LANTERN_VOTE_SSZ_SIZE) != 0) {
+    size_t offset = 0;
+    if (read_u64(data + offset, data_len - offset, &vote->validator_id) != 0) {
         return -1;
     }
-    if (!lantern_signature_bytes_are_zero(data + LANTERN_VOTE_SSZ_SIZE, LANTERN_SIGNATURE_SIZE)) {
+    offset += SSZ_BYTE_SIZE_OF_UINT64;
+    if (decode_vote_internal(&vote->data, data + offset, LANTERN_VOTE_SSZ_SIZE) != 0) {
+        return -1;
+    }
+    offset += LANTERN_VOTE_SSZ_SIZE;
+    if (!lantern_signature_bytes_are_zero(data + offset, LANTERN_SIGNATURE_SIZE)) {
         return -1;
     }
     memset(vote->signature.bytes, 0, LANTERN_SIGNATURE_SIZE);
@@ -696,11 +698,6 @@ int lantern_ssz_encode_state(const LanternState *state, uint8_t *out, size_t out
     }
     offset += tmp;
 
-    if (write_root(out + offset, out_len - offset, &state->validators_root) != 0) {
-        return -1;
-    }
-    offset += LANTERN_ROOT_SIZE;
-
     if (out_len < offset + (var_field_count * SSZ_BYTE_SIZE_OF_UINT32)) {
         return -1;
     }
@@ -772,9 +769,9 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
     size_t offset = 0;
     const size_t offsets_size = var_field_count * SSZ_BYTE_SIZE_OF_UINT32;
     const size_t min_truncated_size =
-        LANTERN_CONFIG_SSZ_SIZE + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + LANTERN_ROOT_SIZE + offsets_size;
+        LANTERN_CONFIG_SSZ_SIZE + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + offsets_size;
     const size_t min_full_size = LANTERN_CONFIG_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT64 + LANTERN_BLOCK_HEADER_SSZ_SIZE
-        + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + LANTERN_ROOT_SIZE + offsets_size;
+        + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + offsets_size;
     bool truncated = false;
 
     if (data_len < min_full_size) {
@@ -823,63 +820,43 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
     }
     offset += LANTERN_CHECKPOINT_SSZ_SIZE;
 
-    if (data_len - offset < LANTERN_ROOT_SIZE) {
-        return -1;
-    }
-    if (read_root(data + offset, data_len - offset, &state->validators_root) != 0) {
-        return -1;
-    }
-    offset += LANTERN_ROOT_SIZE;
-
     if (data_len - offset < offsets_size) {
         return -1;
     }
 
     size_t offsets_start = offset;
     size_t offsets[var_field_count];
-    for (size_t i = 0; i < var_field_count; ++i) {
-        uint32_t value = 0;
-        if (read_u32(data + offset, data_len - offset, &value) != 0) {
-            return -1;
-        }
-        offsets[i] = value;
-        offset += SSZ_BYTE_SIZE_OF_UINT32;
-    }
-
-    size_t root_field_start = offsets_start - LANTERN_ROOT_SIZE;
-    if (offsets[0] < offset && root_field_start < data_len) {
-        uint32_t legacy_offsets[var_field_count];
-        bool legacy_layout = true;
-        size_t legacy_read_pos = root_field_start;
+    bool offsets_valid = false;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        size_t read_pos = offsets_start;
         for (size_t i = 0; i < var_field_count; ++i) {
             uint32_t value = 0;
-            if (legacy_read_pos >= data_len
-                || read_u32(data + legacy_read_pos, data_len - legacy_read_pos, &value) != 0) {
-                legacy_layout = false;
+            if (read_u32(data + read_pos, data_len - read_pos, &value) != 0) {
+                return -1;
+            }
+            offsets[i] = value;
+            read_pos += SSZ_BYTE_SIZE_OF_UINT32;
+        }
+        size_t table_end = offsets_start + offsets_size;
+        offsets_valid = true;
+        for (size_t i = 0; i < var_field_count; ++i) {
+            if (offsets[i] < table_end || offsets[i] > data_len || (i > 0 && offsets[i] < offsets[i - 1])) {
+                offsets_valid = false;
                 break;
             }
-            legacy_offsets[i] = value;
-            legacy_read_pos += SSZ_BYTE_SIZE_OF_UINT32;
         }
-        if (legacy_layout) {
-            size_t legacy_base = root_field_start + (var_field_count * SSZ_BYTE_SIZE_OF_UINT32);
-            size_t prev = 0;
-            for (size_t i = 0; i < var_field_count; ++i) {
-                size_t value = legacy_offsets[i];
-                if (value < legacy_base || value > data_len || (i > 0 && value < prev)) {
-                    legacy_layout = false;
-                    break;
-                }
-                prev = value;
-            }
-            if (legacy_layout) {
-                for (size_t i = 0; i < var_field_count; ++i) {
-                    offsets[i] = legacy_offsets[i];
-                }
-                memset(state->validators_root.bytes, 0, sizeof(state->validators_root.bytes));
-                offset = legacy_base;
-            }
+        if (offsets_valid) {
+            offset = table_end;
+            break;
         }
+        if (attempt == 0 && data_len - offsets_start >= LANTERN_ROOT_SIZE + offsets_size) {
+            offsets_start += LANTERN_ROOT_SIZE;
+            continue;
+        }
+        return -1;
+    }
+    if (!offsets_valid) {
+        return -1;
     }
 
     size_t payload_start = offsets[0];

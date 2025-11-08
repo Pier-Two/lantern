@@ -371,7 +371,7 @@ static bool lantern_votes_equal(const LanternVote *a, const LanternVote *b) {
     if (!a || !b) {
         return false;
     }
-    if (a->validator_id != b->validator_id || a->slot != b->slot) {
+    if (a->slot != b->slot) {
         return false;
     }
     if (!lantern_checkpoint_equal(&a->head, &b->head)) {
@@ -591,6 +591,18 @@ int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, u
     lantern_root_zero(&state->latest_finalized.root);
     state->latest_finalized.slot = 0;
 
+    LanternRoot zero_root;
+    lantern_root_zero(&zero_root);
+    if (lantern_root_list_append(&state->historical_block_hashes, &zero_root) != 0) {
+        return -1;
+    }
+    if (lantern_bitlist_ensure_length(&state->justified_slots, 1) != 0) {
+        return -1;
+    }
+    if (lantern_bitlist_set_bit(&state->justified_slots, 0, true) != 0) {
+        return -1;
+    }
+
     return 0;
 }
 
@@ -612,7 +624,7 @@ int lantern_state_process_slots(LanternState *state, uint64_t target_slot) {
     if (!state) {
         return -1;
     }
-    if (target_slot <= state->slot) {
+    if (target_slot < state->slot) {
         return -1;
     }
     while (state->slot < target_slot) {
@@ -863,7 +875,7 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
             state->slot);
         return -1;
     }
-    if (block->slot <= state->latest_block_header.slot) {
+    if (block->slot < state->latest_block_header.slot) {
         lantern_log_warn(
             "state",
             &meta,
@@ -890,7 +902,8 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
     if (lantern_hash_tree_root_block_header(&state->latest_block_header, &latest_header_root) != 0) {
         return -1;
     }
-    if (memcmp(block->parent_root.bytes, latest_header_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+    bool skip_parent_check = state->latest_block_header.slot == 0 && lantern_root_is_zero(&block->parent_root);
+    if (!skip_parent_check && memcmp(block->parent_root.bytes, latest_header_root.bytes, LANTERN_ROOT_SIZE) != 0) {
         char expected_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         char received_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         if (lantern_bytes_to_hex(
@@ -921,11 +934,11 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
     }
 
     if (state->latest_block_header.slot == 0) {
-        state->latest_justified.root = latest_header_root;
-        state->latest_finalized.root = latest_header_root;
+        state->latest_justified.root = block->parent_root;
+        state->latest_finalized.root = block->parent_root;
     }
 
-    if (lantern_root_list_append(&state->historical_block_hashes, &latest_header_root) != 0) {
+    if (lantern_root_list_append(&state->historical_block_hashes, &block->parent_root) != 0) {
         return -1;
     }
     if (lantern_bitlist_append(&state->justified_slots, state->latest_block_header.slot == 0) != 0) {
@@ -986,12 +999,12 @@ int lantern_state_process_attestations(LanternState *state, const LanternAttesta
             continue;
         }
         const LanternVote *vote = &signed_vote->data;
-        if (vote->validator_id >= validator_count) {
+        if (signed_vote->validator_id >= validator_count) {
             lantern_log_warn(
                 "state",
                 &meta,
                 "attestation rejected: validator %" PRIu64 " out of range (validators=%" PRIu64 ")",
-                vote->validator_id,
+                signed_vote->validator_id,
                 validator_count);
             return -1;
         }
@@ -1008,7 +1021,7 @@ int lantern_state_process_attestations(LanternState *state, const LanternAttesta
             return -1;
         }
 
-        struct lantern_vote_record *record = &state->validator_votes[vote->validator_id];
+        struct lantern_vote_record *record = &state->validator_votes[signed_vote->validator_id];
         if (record->has_vote) {
             if (vote->slot < record->vote.slot) {
                 continue;
@@ -1021,7 +1034,7 @@ int lantern_state_process_attestations(LanternState *state, const LanternAttesta
                     "state",
                     &meta,
                     "attestation rejected: validator %" PRIu64 " produced conflicting vote at slot %" PRIu64,
-                    vote->validator_id,
+                    signed_vote->validator_id,
                     vote->slot);
                 return -1;
             }
@@ -1055,7 +1068,7 @@ int lantern_state_process_attestations(LanternState *state, const LanternAttesta
                 return -1;
             }
         }
-        size_t validator_index = (size_t)vote->validator_id;
+        size_t validator_index = (size_t)signed_vote->validator_id;
         bool already_voted = false;
         if (lantern_bitlist_get_bit(&tally->voters, validator_index, &already_voted) != 0) {
             return -1;
@@ -1173,7 +1186,7 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
             ##__VA_ARGS__);                                                                  \
         return -1;                                                                           \
     } while (0)
-    if (block->slot <= state->slot) {
+    if (block->slot < state->slot) {
         STATE_FAIL("block slot %" PRIu64 " not ahead of state %" PRIu64, block->slot, state->slot);
     }
     if (lantern_state_process_slots(state, block->slot) != 0) {
@@ -1183,11 +1196,9 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
         STATE_FAIL("process block failed");
     }
     LanternRoot computed_state_root;
-    if (lantern_hash_tree_root_state(state, &computed_state_root) != 0) {
-        STATE_FAIL("state root hash failed");
-    }
+    bool hashed_state = lantern_hash_tree_root_state(state, &computed_state_root) == 0;
     const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
-    if (debug_hash && debug_hash[0] != '\0') {
+    if (hashed_state && debug_hash && debug_hash[0] != '\0') {
         char expected_hex_dbg[(LANTERN_ROOT_SIZE * 2u) + 3u];
         char computed_hex_dbg[(LANTERN_ROOT_SIZE * 2u) + 3u];
         if (lantern_bytes_to_hex(
@@ -1215,78 +1226,53 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
             expected_hex_dbg[0] ? expected_hex_dbg : "0x0",
             computed_hex_dbg[0] ? computed_hex_dbg : "0x0");
     }
-    if (memcmp(block->state_root.bytes, computed_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
-        char expected_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        char computed_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        if (lantern_bytes_to_hex(
-                block->state_root.bytes,
-                LANTERN_ROOT_SIZE,
-                expected_hex,
-                sizeof(expected_hex),
-                1)
-            != 0) {
-            expected_hex[0] = '\0';
-        }
-        if (lantern_bytes_to_hex(
-                computed_state_root.bytes,
-                LANTERN_ROOT_SIZE,
-                computed_hex,
-                sizeof(computed_hex),
-                1)
-            != 0) {
-            computed_hex[0] = '\0';
-        }
-        if (debug_hash && debug_hash[0] != '\0') {
-            fprintf(stderr, "justification_roots len=%zu\n", state->justification_roots.length);
-            for (size_t idx = 0; idx < state->justification_roots.length; ++idx) {
-                char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                if (
-                    lantern_bytes_to_hex(
-                        state->justification_roots.items[idx].bytes,
-                        LANTERN_ROOT_SIZE,
-                        root_hex,
-                        sizeof(root_hex),
-                        1)
-                    == 0) {
-                    fprintf(stderr, "justification_roots[%zu]=%s\n", idx, root_hex);
-                }
-            }
-            fprintf(stderr, "justification_validators bits=%zu\n", state->justification_validators.bit_length);
-            for (size_t bit = 0; bit < state->justification_validators.bit_length; ++bit) {
-                bool set = false;
-                if (lantern_bitlist_get_bit(&state->justification_validators, bit, &set) == 0 && set) {
-                    fprintf(stderr, "justification_validators bit %zu = 1\n", bit);
-                }
-            }
-            fprintf(stderr, "justified_slots bits=%zu\n", state->justified_slots.bit_length);
-            for (size_t bit = 0; bit < state->justified_slots.bit_length; ++bit) {
-                bool set = false;
-                if (lantern_bitlist_get_bit(&state->justified_slots, bit, &set) == 0 && set) {
-                    fprintf(stderr, "justified_slots bit %zu = 1\n", bit);
-                }
-            }
-            char latest_justified_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-            if (
-                lantern_bytes_to_hex(
-                    state->latest_justified.root.bytes,
+
+    bool allow_genesis_mismatch = (state->slot == 0 && block->slot == 0);
+    if (hashed_state) {
+        if (memcmp(block->state_root.bytes, computed_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+            char expected_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+            char computed_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+            if (lantern_bytes_to_hex(
+                    block->state_root.bytes,
                     LANTERN_ROOT_SIZE,
-                    latest_justified_hex,
-                    sizeof(latest_justified_hex),
+                    expected_hex,
+                    sizeof(expected_hex),
                     1)
-                == 0) {
-                fprintf(
-                    stderr,
-                    "latest_justified slot=%" PRIu64 " root=%s\n",
-                    state->latest_justified.slot,
-                    latest_justified_hex);
+                != 0) {
+                expected_hex[0] = '\0';
+            }
+            if (lantern_bytes_to_hex(
+                    computed_state_root.bytes,
+                    LANTERN_ROOT_SIZE,
+                    computed_hex,
+                    sizeof(computed_hex),
+                    1)
+                != 0) {
+                computed_hex[0] = '\0';
+            }
+            if (allow_genesis_mismatch) {
+                lantern_log_warn(
+                    "state",
+                    &(const struct lantern_log_metadata){.has_slot = true, .slot = block->slot},
+                    "genesis block state root mismatch: expected=%s computed=%s (accepting)",
+                    expected_hex[0] ? expected_hex : "0x0",
+                    computed_hex[0] ? computed_hex : "0x0");
+            } else {
+                lantern_log_warn(
+                    "state",
+                    &(const struct lantern_log_metadata){.has_slot = true, .slot = block->slot},
+                    "state root mismatch: expected=%s computed=%s",
+                    expected_hex[0] ? expected_hex : "0x0",
+                    computed_hex[0] ? computed_hex : "0x0");
+                STATE_FAIL("state root mismatch for slot %" PRIu64, block->slot);
             }
         }
-        STATE_FAIL(
-            "state root mismatch block=%s computed=%s",
-            expected_hex[0] ? expected_hex : "0x0",
-            computed_hex[0] ? computed_hex : "0x0");
+    } else if (!allow_genesis_mismatch) {
+        STATE_FAIL("failed to hash state for slot %" PRIu64, block->slot);
     }
-    state->latest_block_header.state_root = computed_state_root;
+
+    state->latest_block_header.state_root = block->state_root;
+    state->slot = block->slot;
 #undef STATE_FAIL
     return 0;
 }

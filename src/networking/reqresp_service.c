@@ -416,9 +416,27 @@ static int send_response_chunk(
     const char *protocol_id,
     const char *phase,
     const char *peer_text,
+    uint8_t response_code,
     const uint8_t *payload,
     size_t payload_len) {
     if (!stream) {
+        return -1;
+    }
+
+    if (write_stream_all(
+            stream,
+            &response_code,
+            1,
+            protocol_id,
+            phase ? phase : "response code",
+            peer_text)
+        != 0) {
+        lantern_log_error(
+            "reqresp",
+            meta,
+            "%s code write failed code=%u",
+            phase ? phase : "response",
+            (unsigned)response_code);
         return -1;
     }
 
@@ -639,6 +657,7 @@ static void *status_worker(void *arg) {
             LANTERN_STATUS_PROTOCOL_ID,
             "status response",
             peer_text[0] ? peer_text : NULL,
+            LANTERN_REQRESP_RESPONSE_SUCCESS,
             buffer,
             written)
         != 0) {
@@ -777,7 +796,8 @@ static void *status_request_worker(void *arg) {
     uint8_t *response = NULL;
     size_t response_len = 0;
     ssize_t read_err = 0;
-    rc = lantern_reqresp_read_response_chunk(stream, &response, &response_len, &read_err);
+    uint8_t response_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
+    rc = lantern_reqresp_read_response_chunk(stream, &response, &response_len, &read_err, &response_code);
     if (rc != 0) {
         lantern_log_error(
             "reqresp",
@@ -788,7 +808,26 @@ static void *status_request_worker(void *arg) {
         goto finish;
     }
 
+    lantern_log_info(
+        "reqresp",
+        &meta,
+        "status response received code=%u payload_len=%zu",
+        (unsigned)response_code,
+        response_len);
+
     log_payload_preview("status response raw", ctx->peer_text, response, response_len);
+
+    if (response_code != LANTERN_REQRESP_RESPONSE_SUCCESS) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "status response returned code=%u payload_len=%zu",
+            (unsigned)response_code,
+            response_len);
+        free(response);
+        failure_code = LIBP2P_ERR_INTERNAL;
+        goto finish;
+    }
 
     LanternStatusMessage remote_status;
     memset(&remote_status, 0, sizeof(remote_status));
@@ -828,6 +867,13 @@ static void *status_request_worker(void *arg) {
         remote_status.finalized.slot,
         finalized_hex[0] ? finalized_hex : "0x0");
 
+    lantern_log_info(
+        "reqresp",
+        &meta,
+        "status decoded head_slot=%" PRIu64 " finalized_slot=%" PRIu64,
+        remote_status.head.slot,
+        remote_status.finalized.slot);
+
     handle_remote_status(service, &remote_status, ctx->peer_text);
     failure_code = LIBP2P_ERR_OK;
 
@@ -846,6 +892,11 @@ static void status_request_on_open(libp2p_stream_t *stream, void *user_data, int
     struct lantern_log_metadata meta = {
         .peer = (ctx && ctx->peer_text[0]) ? ctx->peer_text : NULL,
     };
+    lantern_log_info(
+        "reqresp",
+        &meta,
+        "status request stream opened err=%d",
+        err);
     if (!ctx) {
         if (stream) {
             libp2p_stream_close(stream);
@@ -899,6 +950,10 @@ static void status_request_on_open(libp2p_stream_t *stream, void *user_data, int
         status_request_ctx_free(ctx);
         return;
     }
+    lantern_log_info(
+        "reqresp",
+        &meta,
+        "spawned status request worker");
     pthread_detach(thread);
 }
 
@@ -1090,6 +1145,7 @@ static void *blocks_worker(void *arg) {
             protocol_id,
             "blocks_by_root response",
             peer_text[0] ? peer_text : NULL,
+            LANTERN_REQRESP_RESPONSE_SUCCESS,
             buffer,
             written)
         != 0) {

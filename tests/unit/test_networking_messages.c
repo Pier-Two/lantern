@@ -101,7 +101,6 @@ static LanternCheckpoint build_checkpoint(uint8_t seed, uint64_t slot) {
 
 static LanternVote build_vote(void) {
     LanternVote vote;
-    vote.validator_id = 7;
     vote.slot = 9;
     vote.head = build_checkpoint(0xAB, 10);
     vote.target = build_checkpoint(0xCD, 11);
@@ -112,8 +111,8 @@ static LanternVote build_vote(void) {
 static LanternSignedVote build_signed_vote(uint64_t validator_id, uint64_t slot, uint8_t seed) {
     LanternSignedVote signed_vote;
     memset(&signed_vote, 0, sizeof(signed_vote));
+    signed_vote.validator_id = validator_id;
     signed_vote.data = build_vote();
-    signed_vote.data.validator_id = validator_id;
     signed_vote.data.slot = slot;
     signed_vote.data.head = build_checkpoint(seed, slot);
     signed_vote.data.target = build_checkpoint(seed + 1, slot);
@@ -597,7 +596,7 @@ static void test_gossip_signed_vote_payload(void) {
     check_zero(
         lantern_gossip_decode_signed_vote_snappy(&decoded, compressed, compressed_len),
         "decode signed vote gossip");
-    CHECK(decoded.data.validator_id == vote.data.validator_id);
+    CHECK(decoded.validator_id == vote.validator_id);
     CHECK(decoded.data.target.slot == vote.data.target.slot);
 
     uint8_t invalid_payload[] = {0x01, 0x02, 0x03};
@@ -657,7 +656,7 @@ static void test_gossip_block_snappy_roundtrip_random(void) {
         for (size_t j = 0; j < att_count; ++j) {
             LanternSignedVote vote;
             memset(&vote, 0, sizeof(vote));
-            vote.data.validator_id = rng_uniform(255);
+            vote.validator_id = rng_uniform(255);
             vote.data.slot = rng_uniform(original.message.slot);
             vote.data.source.slot = vote.data.slot > 0 ? rng_uniform(vote.data.slot) : 0;
             if (vote.data.source.slot > vote.data.slot) {
@@ -700,7 +699,7 @@ static void test_gossip_block_snappy_roundtrip_random(void) {
         for (size_t j = 0; j < decoded.message.body.attestations.length; ++j) {
             const LanternSignedVote *expected = &original.message.body.attestations.data[j];
             const LanternSignedVote *actual = &decoded.message.body.attestations.data[j];
-            CHECK(actual->data.validator_id == expected->data.validator_id);
+            CHECK(actual->validator_id == expected->validator_id);
             CHECK(actual->data.slot == expected->data.slot);
             CHECK(actual->data.head.slot == expected->data.head.slot);
             CHECK(actual->data.target.slot == expected->data.target.slot);

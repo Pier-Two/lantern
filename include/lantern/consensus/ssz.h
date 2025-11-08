@@ -9,8 +9,8 @@
 
 #define LANTERN_CONFIG_SSZ_SIZE 16
 #define LANTERN_CHECKPOINT_SSZ_SIZE (LANTERN_ROOT_SIZE + sizeof(uint64_t))
-#define LANTERN_VOTE_SSZ_SIZE (sizeof(uint64_t) * 2 + 3 * LANTERN_CHECKPOINT_SSZ_SIZE)
-#define LANTERN_SIGNED_VOTE_SSZ_SIZE (LANTERN_VOTE_SSZ_SIZE + LANTERN_SIGNATURE_SIZE)
+#define LANTERN_VOTE_SSZ_SIZE (sizeof(uint64_t) + 3 * LANTERN_CHECKPOINT_SSZ_SIZE)
+#define LANTERN_SIGNED_VOTE_SSZ_SIZE (sizeof(uint64_t) + LANTERN_VOTE_SSZ_SIZE + LANTERN_SIGNATURE_SIZE)
 #define LANTERN_BLOCK_HEADER_SSZ_SIZE (sizeof(uint64_t) * 2 + 3 * LANTERN_ROOT_SIZE)
 
 int lantern_ssz_encode_config(const LanternConfig *config, uint8_t *out, size_t out_len, size_t *written);

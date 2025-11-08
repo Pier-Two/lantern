@@ -908,7 +908,6 @@ static int run_fork_choice_fixture(const char *path) {
 
         LanternVote proposer_vote;
         memset(&proposer_vote, 0, sizeof(proposer_vote));
-        proposer_vote.validator_id = signed_block.message.proposer_index;
         proposer_vote.slot = signed_block.message.slot;
         proposer_vote.head.root = block_root;
         proposer_vote.head.slot = signed_block.message.slot;
@@ -948,7 +947,11 @@ static int run_fork_choice_fixture(const char *path) {
                     }
                 }
             }
-            if (lantern_state_set_validator_vote(active_state, (size_t)proposer_vote.validator_id, &proposer_vote) != 0) {
+            if (lantern_state_set_validator_vote(
+                    active_state,
+                    (size_t)signed_block.message.proposer_index,
+                    &proposer_vote)
+                != 0) {
                 if (branch_state_initialized) {
                     lantern_state_reset(&branch_state);
                 }

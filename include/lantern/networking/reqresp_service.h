@@ -16,6 +16,10 @@
 #define LANTERN_REQRESP_MAX_CONTEXT_BYTES (1u << 20)
 #define LANTERN_REQRESP_HEADER_MAX_BYTES 10u
 #define LANTERN_REQRESP_STALL_TIMEOUT_MS 2000u
+#define LANTERN_REQRESP_RESPONSE_SUCCESS 0u
+#define LANTERN_REQRESP_RESPONSE_RESOURCE_UNAVAILABLE 1u
+#define LANTERN_REQRESP_RESPONSE_INVALID_REQUEST 2u
+#define LANTERN_REQRESP_RESPONSE_SERVER_ERROR 3u
 
 #define LANTERN_STATUS_PROTOCOL_ID LANTERN_REQRESP_STATUS_PROTOCOL
 #define LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL
@@ -78,7 +82,8 @@ int lantern_reqresp_read_response_chunk(
     libp2p_stream_t *stream,
     uint8_t **out_data,
     size_t *out_len,
-    ssize_t *out_err);
+    ssize_t *out_err,
+    uint8_t *out_response_code);
 
 #ifdef __cplusplus
 }

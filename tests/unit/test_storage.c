@@ -51,12 +51,10 @@ static void cleanup_dir(const char *path) {
 
 static void build_vote(
     LanternVote *vote,
-    uint64_t validator_id,
     uint64_t slot,
     uint64_t source_slot,
     uint64_t target_slot) {
     memset(vote, 0, sizeof(*vote));
-    vote->validator_id = validator_id;
     vote->slot = slot;
     vote->source.slot = source_slot;
     vote->target.slot = target_slot;
@@ -124,7 +122,7 @@ int main(void) {
     lantern_state_reset(&loaded_state);
 
     LanternVote vote;
-    build_vote(&vote, 1u, 5u, 2u, 4u);
+    build_vote(&vote, 5u, 2u, 4u);
     expect_zero(lantern_state_set_validator_vote(&state, 1u, &vote), "set validator vote");
     expect_zero(lantern_storage_save_votes(base_dir, &state), "save votes");
     lantern_state_clear_validator_vote(&state, 1u);
@@ -138,7 +136,6 @@ int main(void) {
     expect_true(lantern_state_validator_has_vote(&state, 1u), "vote restored");
     LanternVote restored_vote;
     expect_zero(lantern_state_get_validator_vote(&state, 1u, &restored_vote), "get restored vote");
-    assert(restored_vote.validator_id == vote.validator_id);
     assert(restored_vote.slot == vote.slot);
     assert(restored_vote.source.slot == vote.source.slot);
     assert(restored_vote.target.slot == vote.target.slot);

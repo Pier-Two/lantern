@@ -203,7 +203,7 @@ static void build_vote(
     const LanternCheckpoint *target_template,
     uint8_t head_marker) {
     memset(out, 0, sizeof(*out));
-    out->data.validator_id = validator_id;
+    out->validator_id = validator_id;
     out->data.slot = slot;
     out->data.source = *source;
     out->data.target = *target_template;
@@ -331,12 +331,12 @@ static int test_collect_attestations_for_block(void) {
             lantern_state_reset(&state);
             return 1;
         }
-        if (vote->data.validator_id == 0) {
+        if (vote->validator_id == 0) {
             seen_validator[0] = true;
-        } else if (vote->data.validator_id == 1) {
+        } else if (vote->validator_id == 1) {
             seen_validator[1] = true;
         } else {
-            fprintf(stderr, "Unexpected validator id %" PRIu64 " in collected vote\n", vote->data.validator_id);
+            fprintf(stderr, "Unexpected validator id %" PRIu64 " in collected vote\n", vote->validator_id);
             lantern_attestations_reset(&collected);
             lantern_attestations_reset(&input);
             lantern_state_reset(&state);
