@@ -116,6 +116,7 @@ if [[ ${#GDB_ARGS[@]} -gt 0 ]]; then
 fi
 
 exec podman run --rm -it \
+  --entrypoint /usr/bin/env \
   --network host \
   -e LANTERN_DEBUG_STATE_HASH="${LANTERN_DEBUG_STATE_HASH:-1}" \
   -v "$CONFIG_DIR":/config \

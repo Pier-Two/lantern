@@ -1471,7 +1471,6 @@ void lantern_client_options_init(struct lantern_client_options *options) {
     options->http_port = LANTERN_DEFAULT_HTTP_PORT;
     options->metrics_port = LANTERN_DEFAULT_METRICS_PORT;
     options->devnet = LANTERN_DEFAULT_DEVNET;
-    options->enable_ping_service = false;
     lantern_string_list_init(&options->bootnodes);
 }
 
@@ -1546,7 +1545,6 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     if (set_owned_string(&client->devnet, options->devnet) != 0) {
         goto error;
     }
-    client->enable_ping_service = options->enable_ping_service;
     if (!client->status_lock_initialized) {
         if (pthread_mutex_init(&client->status_lock, NULL) != 0) {
             lantern_log_error(
@@ -1925,7 +1923,7 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
         goto error;
     }
 
-    if (client->enable_ping_service) {
+    {
         libp2p_protocol_server_t *ping_server = NULL;
         if (libp2p_ping_service_start(client->network.host, &ping_server) != 0) {
             lantern_log_error(
@@ -1941,11 +1939,6 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
             "network",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "libp2p ping service started");
-    } else {
-        lantern_log_info(
-            "network",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "libp2p ping service disabled (--enable-ping-service not set)");
     }
 
     struct lantern_gossipsub_config gossip_cfg = {
@@ -2085,7 +2078,7 @@ void lantern_shutdown(struct lantern_client *client) {
     }
     client->connection_subscription = NULL;
 
-    if (client->enable_ping_service && client->network.host && client->ping_running && client->ping_server) {
+    if (client->network.host && client->ping_running && client->ping_server) {
         if (libp2p_ping_service_stop(client->network.host, client->ping_server) != 0) {
             lantern_log_warn(
                 "network",
