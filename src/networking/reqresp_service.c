@@ -31,21 +31,19 @@ struct status_stream_ctx {
     struct lantern_reqresp_service *service;
     libp2p_stream_t *stream;
     const char *protocol_id;
-    bool include_response_code;
 };
 
 struct blocks_stream_ctx {
     struct lantern_reqresp_service *service;
     libp2p_stream_t *stream;
     const char *protocol_id;
-    bool include_response_code;
 };
 
 struct status_request_ctx {
     struct lantern_reqresp_service *service;
     peer_id_t peer_id;
     char peer_text[128];
-    int legacy_protocol;
+    int legacy_no_code;
 };
 
 struct status_request_worker_args {
@@ -781,7 +779,6 @@ static void *status_worker(void *arg) {
     libp2p_stream_t *stream = ctx->stream;
     const char *protocol_id =
         ctx->protocol_id ? ctx->protocol_id : LANTERN_STATUS_PROTOCOL_ID;
-    bool include_response_code = ctx->include_response_code;
     free(ctx);
 
     if (!service || !stream) {
@@ -791,6 +788,14 @@ static void *status_worker(void *arg) {
 
     char peer_text[128];
     describe_peer(libp2p_stream_remote_peer(stream), peer_text, sizeof(peer_text));
+
+    bool include_response_code = true;
+    if (protocol_id && strcmp(protocol_id, LANTERN_STATUS_PROTOCOL_ID_LEGACY) == 0) {
+        include_response_code = false;
+    } else if (peer_text[0]) {
+        include_response_code =
+            !lantern_reqresp_service_peer_prefers_legacy(service, peer_text);
+    }
     if (peer_text[0]) {
         lantern_reqresp_service_hint_peer_legacy(
             service,
@@ -1014,8 +1019,7 @@ static void *status_request_worker(void *arg) {
     if (lantern_bytes_to_hex(header, header_len, header_hex, sizeof(header_hex), 0) != 0) {
         header_hex[0] = '\0';
     }
-    const char *protocol_id =
-        ctx->legacy_protocol ? LANTERN_STATUS_PROTOCOL_ID_LEGACY : LANTERN_STATUS_PROTOCOL_ID;
+    const char *protocol_id = LANTERN_STATUS_PROTOCOL_ID;
     lantern_log_info(
         "reqresp",
         &meta,
@@ -1065,7 +1069,7 @@ static void *status_request_worker(void *arg) {
     size_t response_len = 0;
     ssize_t read_err = 0;
     uint8_t response_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
-    bool expect_response_code = ctx->legacy_protocol ? false : true;
+    bool expect_response_code = ctx->legacy_no_code ? false : true;
     rc = lantern_reqresp_read_response_chunk(
         service,
         stream,
@@ -1167,8 +1171,7 @@ static void status_request_on_open(libp2p_stream_t *stream, void *user_data, int
     struct lantern_log_metadata meta = {
         .peer = (ctx && ctx->peer_text[0]) ? ctx->peer_text : NULL,
     };
-    const char *protocol_id =
-        (ctx && ctx->legacy_protocol) ? LANTERN_STATUS_PROTOCOL_ID_LEGACY : LANTERN_STATUS_PROTOCOL_ID;
+    const char *protocol_id = LANTERN_STATUS_PROTOCOL_ID;
     lantern_log_info(
         "reqresp",
         &meta,
@@ -1285,9 +1288,8 @@ int lantern_reqresp_service_request_status(
         return -1;
     }
 
-    ctx->legacy_protocol = lantern_reqresp_service_peer_prefers_legacy(service, ctx->peer_text) ? 1 : 0;
-    const char *protocol_id =
-        ctx->legacy_protocol ? LANTERN_STATUS_PROTOCOL_ID_LEGACY : LANTERN_STATUS_PROTOCOL_ID;
+    ctx->legacy_no_code = lantern_reqresp_service_peer_prefers_legacy(service, ctx->peer_text) ? 1 : 0;
+    const char *protocol_id = LANTERN_STATUS_PROTOCOL_ID;
 
     int rc = libp2p_host_open_stream_async(
         service->host,
@@ -1317,7 +1319,6 @@ static void *blocks_worker(void *arg) {
     libp2p_stream_t *stream = ctx->stream;
     const char *protocol_id =
         ctx->protocol_id ? ctx->protocol_id : LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
-    bool include_response_code = ctx->include_response_code;
     free(ctx);
 
     if (!service || !stream) {
@@ -1327,6 +1328,13 @@ static void *blocks_worker(void *arg) {
 
     char peer_text[128];
     describe_peer(libp2p_stream_remote_peer(stream), peer_text, sizeof(peer_text));
+    bool include_response_code = true;
+    if (protocol_id && strcmp(protocol_id, LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY) == 0) {
+        include_response_code = false;
+    } else if (peer_text[0]) {
+        include_response_code =
+            !lantern_reqresp_service_peer_prefers_legacy(service, peer_text);
+    }
     if (peer_text[0]) {
         lantern_reqresp_service_hint_peer_legacy(
             service,
@@ -1479,8 +1487,6 @@ static void status_on_open_impl(
     ctx->service = service;
     ctx->stream = stream;
     ctx->protocol_id = protocol_id;
-    ctx->include_response_code =
-        !(protocol_id && strcmp(protocol_id, LANTERN_STATUS_PROTOCOL_ID_LEGACY) == 0);
     pthread_t thread;
     if (pthread_create(&thread, NULL, status_worker, ctx) != 0) {
         free(ctx);
@@ -1512,8 +1518,6 @@ static void blocks_on_open_impl(libp2p_stream_t *stream, void *user_data, const 
     ctx->service = service;
     ctx->stream = stream;
     ctx->protocol_id = protocol_id;
-    ctx->include_response_code =
-        !(protocol_id && strcmp(protocol_id, LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY) == 0);
     pthread_t thread;
     if (pthread_create(&thread, NULL, blocks_worker, ctx) != 0) {
         free(ctx);

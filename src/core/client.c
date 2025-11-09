@@ -170,6 +170,10 @@ static void lantern_client_record_block(
     const LanternSignedBlock *block,
     const LanternRoot *root,
     const char *peer_text);
+static void lantern_client_record_vote(
+    struct lantern_client *client,
+    const LanternSignedVote *vote,
+    const char *peer_text);
 static int gossip_block_handler(
     const LanternSignedBlock *block,
     const peer_id_t *from,
@@ -4323,6 +4327,115 @@ static void lantern_client_record_block(
     (void)lantern_client_import_block(client, block, selected_root, &meta);
 }
 
+static void lantern_client_record_vote(
+    struct lantern_client *client,
+    const LanternSignedVote *vote,
+    const char *peer_text) {
+    if (!client || !vote || !client->has_state) {
+        return;
+    }
+
+    struct lantern_log_metadata meta = {
+        .validator = client->node_id,
+        .peer = (peer_text && *peer_text) ? peer_text : NULL,
+    };
+
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked) {
+        return;
+    }
+
+    LanternSignedVote vote_copy = *vote;
+    lantern_signature_zero(&vote_copy.signature);
+
+    char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char source_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    format_root_hex(&vote_copy.data.head.root, head_hex, sizeof(head_hex));
+    format_root_hex(&vote_copy.data.target.root, target_hex, sizeof(target_hex));
+    format_root_hex(&vote_copy.data.source.root, source_hex, sizeof(source_hex));
+    lantern_log_debug(
+        "gossip",
+        &meta,
+        "received vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64,
+        vote_copy.validator_id,
+        vote_copy.data.slot,
+        head_hex[0] ? head_hex : "0x0",
+        target_hex[0] ? target_hex : "0x0",
+        vote_copy.data.target.slot);
+
+    LanternAttestations att_view = {
+        .data = &vote_copy,
+        .length = 1,
+        .capacity = 1,
+    };
+
+    if (lantern_state_process_attestations(&client->state, &att_view) != 0) {
+        lantern_log_debug(
+            "state",
+            &meta,
+            "rejected gossip vote validator=%" PRIu64 " slot=%" PRIu64,
+            vote_copy.validator_id,
+            vote_copy.data.slot);
+        goto cleanup;
+    }
+
+    if (client->has_fork_choice) {
+        if (lantern_fork_choice_add_vote(&client->fork_choice, &vote_copy, false) != 0) {
+            lantern_log_debug(
+                "forkchoice",
+                &meta,
+                "failed to track gossip vote validator=%" PRIu64 " slot=%" PRIu64,
+                vote_copy.validator_id,
+                vote_copy.data.slot);
+        } else {
+            if (lantern_fork_choice_accept_new_votes(&client->fork_choice) != 0) {
+                lantern_log_debug(
+                    "forkchoice",
+                    &meta,
+                    "accepting new votes failed after validator=%" PRIu64 " slot=%" PRIu64,
+                    vote_copy.validator_id,
+                    vote_copy.data.slot);
+            }
+            if (lantern_fork_choice_update_safe_target(&client->fork_choice) != 0) {
+                lantern_log_debug(
+                    "forkchoice",
+                    &meta,
+                    "updating safe target failed after validator=%" PRIu64 " slot=%" PRIu64,
+                    vote_copy.validator_id,
+                    vote_copy.data.slot);
+            }
+        }
+    }
+
+    if (client->data_dir) {
+        if (lantern_storage_save_votes(client->data_dir, &client->state) != 0) {
+            lantern_log_warn(
+                "storage",
+                &meta,
+                "failed to persist votes after validator=%" PRIu64 " slot=%" PRIu64,
+                vote_copy.validator_id,
+                vote_copy.data.slot);
+        }
+    }
+
+    lantern_log_info(
+        "gossip",
+        &meta,
+        "processed vote validator=%" PRIu64
+        " slot=%" PRIu64 " head=%s target=%s@%" PRIu64 " source=%s@%" PRIu64,
+        vote_copy.validator_id,
+        vote_copy.data.slot,
+        head_hex[0] ? head_hex : "0x0",
+        target_hex[0] ? target_hex : "0x0",
+        vote_copy.data.target.slot,
+        source_hex[0] ? source_hex : "0x0",
+        vote_copy.data.source.slot);
+
+cleanup:
+    lantern_client_unlock_state(client, state_locked);
+}
+
 static int gossip_block_handler(
     const LanternSignedBlock *block,
     const peer_id_t *from,
@@ -4346,9 +4459,18 @@ static int gossip_vote_handler(
     const LanternSignedVote *vote,
     const peer_id_t *from,
     void *context) {
-    (void)vote;
-    (void)from;
-    (void)context;
+    if (!vote || !context) {
+        return -1;
+    }
+    struct lantern_client *client = context;
+    char peer_text[128];
+    peer_text[0] = '\0';
+    if (from) {
+        if (peer_id_to_string(from, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text)) < 0) {
+            peer_text[0] = '\0';
+        }
+    }
+    lantern_client_record_vote(client, vote, peer_text[0] ? peer_text : NULL);
     return 0;
 }
 
