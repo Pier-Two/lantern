@@ -54,6 +54,7 @@ add_library(lantern STATIC
     src/support/string_list.c
     src/support/strings.c
     src/support/secure_mem.c
+    src/crypto/hash_sig.c
     src/internal/yaml_parser.c
     external/c-libp2p/src/multiformats/multibase/encoding/base64_url.c
     external/c-libp2p/external/wjcryptlib/lib/WjCryptLib_Sha256.c
@@ -64,6 +65,7 @@ target_include_directories(lantern
         ${PROJECT_SOURCE_DIR}/include
     PRIVATE
         ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/external/c-hash-sig
         ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/secp256k1/include
         ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/libtomcrypt/src/headers
         ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/wjcryptlib/lib

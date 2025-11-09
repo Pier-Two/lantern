@@ -4,6 +4,16 @@ Lantern is a C implementation for Lean consensus. It
 implements gossip, fork-choice, state transition, and storage against the
 Devnet containers defined in [`tools/leanSpec`](../tools/leanSpec).
 
+## Prerequisites
+
+The build now links against the hash-based signature bindings in
+`external/c-hash-sig`, which are produced with Rust. Make sure the following
+tools are available on your `PATH`:
+
+- CMake 3.20+
+- A C compiler toolchain supported by your platform
+- [Rust](https://www.rust-lang.org/tools/install) (which provides `cargo`)
+
 ## Quick Start
 
 ```sh

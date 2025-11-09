@@ -9,7 +9,10 @@ if [[ -d "${ROOT_DIR}/.git" ]]; then
     if [[ "${LANTERN_BOOTSTRAP_SKIP_SUBMODULE_SYNC:-0}" == "1" ]]; then
         echo "bootstrap: skipping submodule sync (requested)" >&2
     else
-        git submodule update --init --recursive external/c-libp2p external/c-ssz
+        git submodule update --init --recursive \
+            external/c-libp2p \
+            external/c-ssz \
+            external/c-hash-sig
     fi
 else
     echo "bootstrap: skipping submodule sync (git metadata unavailable)" >&2

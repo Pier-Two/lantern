@@ -35,6 +35,11 @@ function(_lantern_define_static target_name source_dir)
     endif()
 endfunction()
 
+find_program(CARGO_EXECUTABLE cargo)
+if(NOT CARGO_EXECUTABLE)
+    message(FATAL_ERROR "cargo is required to build post-quantum signature bindings. Install Rust (https://rustup.rs/) and ensure cargo is on PATH.")
+endif()
+
 function(_lantern_define_snappy target_name source_dir)
     if(NOT TARGET ${target_name})
         add_library(${target_name} STATIC
@@ -54,6 +59,33 @@ function(_lantern_define_snappy target_name source_dir)
     endif()
 endfunction()
 
+function(_lantern_define_c_hash_sig target_name source_dir)
+    set(c_hash_sig_output
+        "${source_dir}/target/release/${CMAKE_STATIC_LIBRARY_PREFIX}pq_bindings_c_rust${CMAKE_STATIC_LIBRARY_SUFFIX}"
+    )
+
+    add_custom_command(
+        OUTPUT "${c_hash_sig_output}"
+        COMMAND "${CARGO_EXECUTABLE}" build --release
+        WORKING_DIRECTORY "${source_dir}"
+        BYPRODUCTS "${c_hash_sig_output}"
+        DEPENDS "${source_dir}/Cargo.toml" "${source_dir}/Cargo.lock" "${source_dir}/src/lib.rs"
+        COMMENT "Building c-hash-sig Rust bindings"
+        VERBATIM
+    )
+
+    add_custom_target(${target_name}_build DEPENDS "${c_hash_sig_output}")
+
+    add_library(${target_name} STATIC IMPORTED GLOBAL)
+    set_target_properties(${target_name}
+        PROPERTIES
+            IMPORTED_LOCATION "${c_hash_sig_output}"
+            INTERFACE_INCLUDE_DIRECTORIES "${source_dir}"
+    )
+
+    add_dependencies(${target_name} ${target_name}_build)
+endfunction()
+
 function(lantern_configure_dependencies target)
     if(NOT TARGET ${target})
         message(FATAL_ERROR "lantern_configure_dependencies expects an existing CMake target")
@@ -64,6 +96,7 @@ function(lantern_configure_dependencies target)
     _lantern_define_interface(lantern_libp2p ${external_root}/c-libp2p)
     _lantern_define_static(lantern_c_ssz ${external_root}/c-ssz)
     _lantern_define_snappy(lantern_snappy_c ${external_root}/snappy-c)
+    _lantern_define_c_hash_sig(lantern_c_hash_sig ${external_root}/c-hash-sig)
 
     set(libp2p_source_dir ${external_root}/c-libp2p)
     if(EXISTS ${libp2p_source_dir}/CMakeLists.txt)
@@ -166,8 +199,17 @@ ${_lantern_ignore_block})
             lantern_libp2p
             lantern_c_ssz
             lantern_snappy_c
+            lantern_c_hash_sig
             libp2p_unified
             protocol_gossipsub
             protocol_ping
     )
+
+    if(CMAKE_DL_LIBS)
+        target_link_libraries(${target} PUBLIC ${CMAKE_DL_LIBS})
+    endif()
+
+    if(NOT WIN32)
+        target_link_libraries(${target} PUBLIC m)
+    endif()
 endfunction()
