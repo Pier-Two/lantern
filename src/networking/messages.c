@@ -57,6 +57,85 @@ static int ensure_block_capacity(LanternBlocksByRootResponse *resp, size_t requi
     return 0;
 }
 
+static void log_status_payload_debug(const char *label, const uint8_t *data, size_t length) {
+    if (!data || length == 0) {
+        lantern_log_warn(
+            "reqresp",
+            NULL,
+            "%s len=%zu (no payload)",
+            label ? label : "status payload",
+            length);
+        return;
+    }
+    const size_t max_preview = 256u;
+    size_t preview_len = length < max_preview ? length : max_preview;
+    size_t hex_capacity = (preview_len * 2u) + 1u;
+    char *hex = (char *)malloc(hex_capacity);
+    if (!hex) {
+        lantern_log_warn(
+            "reqresp",
+            NULL,
+            "%s len=%zu (preview alloc failed)",
+            label ? label : "status payload",
+            length);
+        return;
+    }
+    if (lantern_bytes_to_hex(data, preview_len, hex, hex_capacity, 0) != 0) {
+        hex[0] = '\0';
+    }
+    lantern_log_warn(
+        "reqresp",
+        NULL,
+        "%s len=%zu preview=%s%s",
+        label ? label : "status payload",
+        length,
+        hex[0] ? hex : "-",
+        length > preview_len ? "..." : "");
+    free(hex);
+}
+
+static uint64_t read_u64_le_partial(const uint8_t *slot_bytes, size_t slot_len) {
+    if (!slot_bytes) {
+        return 0;
+    }
+    if (slot_len > sizeof(uint64_t)) {
+        slot_len = sizeof(uint64_t);
+    }
+    uint64_t slot = 0;
+    for (size_t i = 0; i < slot_len; ++i) {
+        slot |= ((uint64_t)slot_bytes[i]) << (8u * i);
+    }
+    return slot;
+}
+
+static void log_truncated_slot_once(const char *field, size_t slot_len) {
+    enum {
+        SLOT_WARN_HEAD = 1u << 0,
+        SLOT_WARN_FINALIZED = 1u << 1,
+        SLOT_WARN_GENERIC = 1u << 2,
+    };
+    static unsigned logged = 0;
+    unsigned mask = SLOT_WARN_GENERIC;
+    if (field) {
+        if (strcmp(field, "head") == 0) {
+            mask = SLOT_WARN_HEAD;
+        } else if (strcmp(field, "finalized") == 0) {
+            mask = SLOT_WARN_FINALIZED;
+        }
+    }
+    if (logged & mask) {
+        return;
+    }
+    logged |= mask;
+    lantern_log_warn(
+        "reqresp",
+        NULL,
+        "status decode %s slot truncated to %zu bytes (expected %zu); padding high bytes with zero",
+        field ? field : "status",
+        slot_len,
+        sizeof(uint64_t));
+}
+
 void lantern_blocks_by_root_request_init(LanternBlocksByRootRequest *req) {
     if (!req) {
         return;
@@ -166,6 +245,10 @@ int lantern_network_status_decode(
     if (!status || (!data && data_len > 0)) {
         return -1;
     }
+    if (data_len == 0) {
+        log_status_payload_debug("status decode empty", data, data_len);
+        return -1;
+    }
     if (data_len == 2u * LANTERN_CHECKPOINT_SSZ_SIZE) {
         if (lantern_ssz_decode_checkpoint(&status->finalized, data, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
             return -1;
@@ -186,6 +269,49 @@ int lantern_network_status_decode(
         status->finalized = status->head;
         return 0;
     }
+    size_t min_dual_checkpoint = LANTERN_CHECKPOINT_SSZ_SIZE + LANTERN_ROOT_SIZE;
+    if (data_len >= min_dual_checkpoint) {
+        if (lantern_ssz_decode_checkpoint(&status->finalized, data, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
+            log_status_payload_debug("status decode truncated_finalized", data, data_len);
+            return -1;
+        }
+        const size_t head_offset = LANTERN_CHECKPOINT_SSZ_SIZE;
+        const size_t head_available = data_len - head_offset;
+        if (head_available < LANTERN_ROOT_SIZE + 1) {
+            log_status_payload_debug("status decode truncated_head_root", data, data_len);
+            return -1;
+        }
+        memcpy(status->head.root.bytes, data + head_offset, LANTERN_ROOT_SIZE);
+        size_t slot_bytes_len = head_available - LANTERN_ROOT_SIZE;
+        if (slot_bytes_len > sizeof(uint64_t)) {
+            log_status_payload_debug("status decode invalid_head_slot", data, data_len);
+            return -1;
+        }
+        status->head.slot = read_u64_le_partial(data + head_offset + LANTERN_ROOT_SIZE, slot_bytes_len);
+        if (slot_bytes_len != sizeof(uint64_t)) {
+            log_truncated_slot_once("head", slot_bytes_len);
+        }
+        return 0;
+    }
+    if (data_len >= LANTERN_CHECKPOINT_SSZ_SIZE) {
+        if (lantern_ssz_decode_checkpoint(&status->head, data, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
+            log_status_payload_debug("status decode single_checkpoint_failed", data, data_len);
+            return -1;
+        }
+        status->finalized = status->head;
+        return 0;
+    }
+    if (data_len >= LANTERN_ROOT_SIZE + 1) {
+        memcpy(status->head.root.bytes, data, LANTERN_ROOT_SIZE);
+        size_t slot_bytes_len = data_len - LANTERN_ROOT_SIZE;
+        status->head.slot = read_u64_le_partial(data + LANTERN_ROOT_SIZE, slot_bytes_len);
+        if (slot_bytes_len != sizeof(uint64_t)) {
+            log_truncated_slot_once("head", slot_bytes_len);
+        }
+        status->finalized = status->head;
+        return 0;
+    }
+    log_status_payload_debug("status decode unsupported_format", data, data_len);
     return -1;
 }
 

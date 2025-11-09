@@ -43,6 +43,20 @@ static void fill_bytes(uint8_t *dst, size_t len, uint8_t seed) {
     }
 }
 
+static uint64_t le_bytes_to_u64(const uint8_t *src, size_t len) {
+    if (!src) {
+        return 0;
+    }
+    if (len > sizeof(uint64_t)) {
+        len = sizeof(uint64_t);
+    }
+    uint64_t value = 0;
+    for (size_t i = 0; i < len; ++i) {
+        value |= ((uint64_t)src[i]) << (8u * i);
+    }
+    return value;
+}
+
 static uint32_t rng_state = UINT32_C(0x6ac1e39d);
 
 static uint32_t rng_next(void) {
@@ -415,6 +429,49 @@ static void test_status_snappy(void) {
     check_zero(lantern_network_status_decode_snappy(&snappy_decoded, compressed, compressed_len), "status decode snappy");
     CHECK(memcmp(snappy_decoded.head.root.bytes, status.head.root.bytes, LANTERN_ROOT_SIZE) == 0);
     CHECK(snappy_decoded.finalized.slot == status.finalized.slot);
+}
+
+static void test_status_decode_truncated_head_slot(void) {
+    uint8_t finalized_root[LANTERN_ROOT_SIZE];
+    uint8_t head_root[LANTERN_ROOT_SIZE];
+    fill_bytes(finalized_root, sizeof(finalized_root), 0x31);
+    fill_bytes(head_root, sizeof(head_root), 0x62);
+
+    const uint8_t finalized_slot_bytes[8] = {0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE};
+    const uint8_t head_slot_bytes[6] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB};
+
+    uint8_t payload[LANTERN_ROOT_SIZE + sizeof(finalized_slot_bytes) + LANTERN_ROOT_SIZE + sizeof(head_slot_bytes)];
+    uint8_t *cursor = payload;
+    memcpy(cursor, finalized_root, LANTERN_ROOT_SIZE);
+    cursor += LANTERN_ROOT_SIZE;
+    memcpy(cursor, finalized_slot_bytes, sizeof(finalized_slot_bytes));
+    cursor += sizeof(finalized_slot_bytes);
+    memcpy(cursor, head_root, LANTERN_ROOT_SIZE);
+    cursor += LANTERN_ROOT_SIZE;
+    memcpy(cursor, head_slot_bytes, sizeof(head_slot_bytes));
+
+    LanternStatusMessage decoded = {0};
+    CHECK(lantern_network_status_decode(&decoded, payload, sizeof(payload)) == 0);
+    CHECK(memcmp(decoded.finalized.root.bytes, finalized_root, LANTERN_ROOT_SIZE) == 0);
+    CHECK(decoded.finalized.slot == le_bytes_to_u64(finalized_slot_bytes, sizeof(finalized_slot_bytes)));
+    CHECK(memcmp(decoded.head.root.bytes, head_root, LANTERN_ROOT_SIZE) == 0);
+    CHECK(decoded.head.slot == le_bytes_to_u64(head_slot_bytes, sizeof(head_slot_bytes)));
+}
+
+static void test_status_decode_single_truncated_checkpoint(void) {
+    uint8_t head_root[LANTERN_ROOT_SIZE];
+    fill_bytes(head_root, sizeof(head_root), 0x5A);
+
+    const uint8_t slot_bytes[10] = {0x02, 0x04, 0x06, 0x08, 0x0A, 0x0C, 0x0E, 0x10, 0x12, 0x14};
+    uint8_t payload[LANTERN_ROOT_SIZE + sizeof(slot_bytes)];
+    memcpy(payload, head_root, LANTERN_ROOT_SIZE);
+    memcpy(payload + LANTERN_ROOT_SIZE, slot_bytes, sizeof(slot_bytes));
+
+    LanternStatusMessage decoded = {0};
+    CHECK(lantern_network_status_decode(&decoded, payload, sizeof(payload)) == 0);
+    CHECK(memcmp(decoded.head.root.bytes, head_root, LANTERN_ROOT_SIZE) == 0);
+    CHECK(decoded.finalized.slot == decoded.head.slot);
+    CHECK(decoded.head.slot == le_bytes_to_u64(slot_bytes, sizeof(slot_bytes)));
 }
 
 static void test_blocks_by_root_request(void) {
@@ -792,6 +849,8 @@ static void test_client_publish_block_loopback(void) {
 
 int main(void) {
     test_status_snappy();
+    test_status_decode_truncated_head_slot();
+    test_status_decode_single_truncated_checkpoint();
     test_blocks_by_root_request();
     test_blocks_by_root_response();
     test_gossip_signed_vote_payload();
