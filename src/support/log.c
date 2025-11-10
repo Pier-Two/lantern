@@ -6,9 +6,48 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#if defined(_WIN32)
+#include <io.h>
+#define lantern_isatty _isatty
+#define lantern_fileno _fileno
+#else
+#include <unistd.h>
+#define lantern_isatty isatty
+#define lantern_fileno fileno
+#endif
 
 static char g_node_id[96] = {0};
 static enum LanternLogLevel g_min_level = LANTERN_LOG_LEVEL_DEBUG;
+static bool g_color_initialized = false;
+static bool g_color_stdout = false;
+static bool g_color_stderr = false;
+
+static int equals_ignore_case(const char *lhs, const char *rhs);
+
+enum lantern_log_color_mode {
+    LANTERN_LOG_COLOR_AUTO = 0,
+    LANTERN_LOG_COLOR_NEVER,
+    LANTERN_LOG_COLOR_ALWAYS,
+};
+
+static enum lantern_log_color_mode g_color_mode = LANTERN_LOG_COLOR_AUTO;
+
+static const char *level_to_color(enum LanternLogLevel level) {
+    switch (level) {
+    case LANTERN_LOG_LEVEL_TRACE:
+        return "\x1b[90m"; /* bright black */
+    case LANTERN_LOG_LEVEL_DEBUG:
+        return "\x1b[36m"; /* cyan */
+    case LANTERN_LOG_LEVEL_INFO:
+        return "\x1b[32m"; /* green */
+    case LANTERN_LOG_LEVEL_WARN:
+        return "\x1b[33m"; /* yellow */
+    case LANTERN_LOG_LEVEL_ERROR:
+        return "\x1b[31m"; /* red */
+    default:
+        return "\x1b[0m";
+    }
+}
 
 static const char *level_to_string(enum LanternLogLevel level) {
     switch (level) {
@@ -25,6 +64,60 @@ static const char *level_to_string(enum LanternLogLevel level) {
     default:
         return "INFO";
     }
+}
+
+static enum lantern_log_color_mode parse_color_mode(const char *text)
+{
+    if (!text) {
+        return LANTERN_LOG_COLOR_AUTO;
+    }
+    if (equals_ignore_case(text, "always")) {
+        return LANTERN_LOG_COLOR_ALWAYS;
+    }
+    if (equals_ignore_case(text, "never")) {
+        return LANTERN_LOG_COLOR_NEVER;
+    }
+    if (equals_ignore_case(text, "auto")) {
+        return LANTERN_LOG_COLOR_AUTO;
+    }
+    return LANTERN_LOG_COLOR_AUTO;
+}
+
+static bool detect_terminal(FILE *stream)
+{
+    if (!stream) {
+        return false;
+    }
+    int fd = lantern_fileno(stream);
+    if (fd < 0) {
+        return false;
+    }
+    return lantern_isatty(fd) != 0;
+}
+
+static void ensure_color_configuration(void)
+{
+    if (g_color_initialized) {
+        return;
+    }
+    const char *env_color = getenv("LANTERN_LOG_COLOR");
+    g_color_mode = parse_color_mode(env_color);
+    switch (g_color_mode) {
+    case LANTERN_LOG_COLOR_ALWAYS:
+        g_color_stdout = true;
+        g_color_stderr = true;
+        break;
+    case LANTERN_LOG_COLOR_NEVER:
+        g_color_stdout = false;
+        g_color_stderr = false;
+        break;
+    case LANTERN_LOG_COLOR_AUTO:
+    default:
+        g_color_stdout = detect_terminal(stdout);
+        g_color_stderr = detect_terminal(stderr);
+        break;
+    }
+    g_color_initialized = true;
 }
 
 void lantern_log_set_node_id(const char *node_id) {
@@ -299,8 +392,18 @@ void lantern_log_log(
         }
     }
 
-    fprintf(level >= LANTERN_LOG_LEVEL_WARN ? stderr : stdout, "%s\n", line);
-    fflush(level >= LANTERN_LOG_LEVEL_WARN ? stderr : stdout);
+    ensure_color_configuration();
+    FILE *target = level >= LANTERN_LOG_LEVEL_WARN ? stderr : stdout;
+    const bool colorize = (target == stderr) ? g_color_stderr : g_color_stdout;
+    const char *prefix = "";
+    const char *suffix = "";
+    if (colorize) {
+        prefix = level_to_color(level);
+        suffix = "\x1b[0m";
+    }
+
+    fprintf(target, "%s%s%s\n", prefix, line, suffix);
+    fflush(target);
 }
 
 static void log_variadic(

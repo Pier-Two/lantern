@@ -199,6 +199,7 @@ struct lantern_peer_status_entry {
     LanternStatusMessage status;
     bool has_status;
     bool requested_head;
+    bool status_request_inflight;
     uint64_t last_status_request_ms;
     uint64_t last_blocks_request_ms;
     uint32_t consecutive_blocks_failures;
@@ -217,6 +218,106 @@ struct block_request_worker_args {
     struct block_request_ctx *ctx;
     libp2p_stream_t *stream;
 };
+
+static size_t lantern_peer_id_capacity(void) {
+    return sizeof(((struct lantern_peer_status_entry *)0)->peer_id);
+}
+
+static struct lantern_peer_status_entry *
+lantern_client_find_status_entry_locked(struct lantern_client *client, const char *peer_id) {
+    if (!client || !peer_id || !peer_id[0]) {
+        return NULL;
+    }
+    const size_t peer_cap = lantern_peer_id_capacity();
+    for (size_t i = 0; i < client->peer_status_count; ++i) {
+        struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
+        if (strncmp(entry->peer_id, peer_id, peer_cap) == 0) {
+            return entry;
+        }
+    }
+    return NULL;
+}
+
+static struct lantern_peer_status_entry *
+lantern_client_ensure_status_entry_locked(struct lantern_client *client, const char *peer_id) {
+    if (!client || !peer_id || !peer_id[0]) {
+        return NULL;
+    }
+    struct lantern_peer_status_entry *entry = lantern_client_find_status_entry_locked(client, peer_id);
+    if (entry) {
+        return entry;
+    }
+    if (client->peer_status_count == client->peer_status_capacity) {
+        size_t new_capacity = client->peer_status_capacity == 0 ? 4u : client->peer_status_capacity * 2u;
+        if (new_capacity > (SIZE_MAX / sizeof(*client->peer_status_entries))) {
+            return NULL;
+        }
+        struct lantern_peer_status_entry *grown = realloc(
+            client->peer_status_entries,
+            new_capacity * sizeof(*client->peer_status_entries));
+        if (!grown) {
+            return NULL;
+        }
+        memset(
+            grown + client->peer_status_capacity,
+            0,
+            (new_capacity - client->peer_status_capacity) * sizeof(*grown));
+        client->peer_status_entries = grown;
+        client->peer_status_capacity = new_capacity;
+    }
+    entry = &client->peer_status_entries[client->peer_status_count++];
+    memset(entry, 0, sizeof(*entry));
+    const size_t peer_cap = lantern_peer_id_capacity();
+    strncpy(entry->peer_id, peer_id, peer_cap - 1);
+    entry->peer_id[peer_cap - 1] = '\0';
+    return entry;
+}
+
+static bool lantern_client_try_begin_status_request(struct lantern_client *client, const char *peer_id) {
+    if (!client || !peer_id || !peer_id[0] || !client->status_lock_initialized) {
+        return true;
+    }
+    if (pthread_mutex_lock(&client->status_lock) != 0) {
+        return false;
+    }
+    bool allowed = false;
+    struct lantern_peer_status_entry *entry = lantern_client_ensure_status_entry_locked(client, peer_id);
+    if (entry && !entry->status_request_inflight) {
+        entry->status_request_inflight = true;
+        allowed = true;
+    }
+    pthread_mutex_unlock(&client->status_lock);
+    return allowed;
+}
+
+static void lantern_client_note_status_request_start(struct lantern_client *client, const char *peer_id) {
+    if (!client || !peer_id || !peer_id[0] || !client->status_lock_initialized) {
+        return;
+    }
+    if (pthread_mutex_lock(&client->status_lock) != 0) {
+        return;
+    }
+    struct lantern_peer_status_entry *entry = lantern_client_find_status_entry_locked(client, peer_id);
+    if (entry) {
+        entry->last_status_request_ms = monotonic_millis();
+    }
+    pthread_mutex_unlock(&client->status_lock);
+}
+
+static void lantern_client_status_request_failed(struct lantern_client *client, const char *peer_id) {
+    if (!client || !peer_id || !peer_id[0] || !client->status_lock_initialized) {
+        return;
+    }
+    if (pthread_mutex_lock(&client->status_lock) != 0) {
+        return;
+    }
+    struct lantern_peer_status_entry *entry = lantern_client_find_status_entry_locked(client, peer_id);
+    if (entry) {
+        entry->status_request_inflight = false;
+        entry->last_status_request_ms = 0;
+    }
+    pthread_mutex_unlock(&client->status_lock);
+}
 
 struct lantern_persisted_block {
     LanternSignedBlock block;
@@ -385,6 +486,19 @@ static void request_status_now(struct lantern_client *client, const peer_id_t *p
         .validator = client->node_id,
         .peer = status_peer,
     };
+
+    bool guard_claimed = false;
+    if (status_peer && client->status_lock_initialized) {
+        guard_claimed = lantern_client_try_begin_status_request(client, status_peer);
+        if (!guard_claimed) {
+            lantern_log_trace(
+                "reqresp",
+                &meta,
+                "status request already in flight; skipping");
+            return;
+        }
+    }
+
     int status_rc = lantern_reqresp_service_request_status(&client->reqresp, peer, status_peer);
     if (status_peer) {
         lantern_log_trace(
@@ -407,20 +521,11 @@ static void request_status_now(struct lantern_client *client, const peer_id_t *p
     if (status_rc != 0 && status_peer) {
         lantern_client_enqueue_status_peer(client, status_peer);
     }
-    if (client->status_lock_initialized && status_peer && status_peer[0]) {
-        if (pthread_mutex_lock(&client->status_lock) == 0) {
-            for (size_t i = 0; i < client->peer_status_count; ++i) {
-                struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
-                if (strncmp(entry->peer_id, status_peer, sizeof(entry->peer_id)) == 0) {
-                    if (status_rc == 0) {
-                        entry->last_status_request_ms = monotonic_millis();
-                    } else {
-                        entry->last_status_request_ms = 0;
-                    }
-                    break;
-                }
-            }
-            pthread_mutex_unlock(&client->status_lock);
+    if (status_peer && guard_claimed) {
+        if (status_rc == 0) {
+            lantern_client_note_status_request_start(client, status_peer);
+        } else {
+            lantern_client_status_request_failed(client, status_peer);
         }
     }
 }
@@ -2980,6 +3085,10 @@ static void reqresp_status_failure(void *context, const char *peer_id, int error
         error = LIBP2P_ERR_INTERNAL;
     }
 
+    if (peer_copy[0] != '\0') {
+        lantern_client_status_request_failed(client, peer_copy);
+    }
+
     bool first_failure = true;
     if (peer_copy[0] != '\0') {
         if (client->status_lock_initialized) {
@@ -3113,39 +3222,12 @@ static void lantern_client_on_peer_status(
         return;
     }
 
-    struct lantern_peer_status_entry *entry = NULL;
-    for (size_t i = 0; i < client->peer_status_count; ++i) {
-        if (strncmp(client->peer_status_entries[i].peer_id, peer_copy, peer_cap) == 0) {
-            entry = &client->peer_status_entries[i];
-            break;
-        }
-    }
-
+    struct lantern_peer_status_entry *entry = lantern_client_ensure_status_entry_locked(client, peer_copy);
     if (!entry) {
-        if (client->peer_status_count == client->peer_status_capacity) {
-            size_t new_capacity = client->peer_status_capacity == 0 ? 4 : client->peer_status_capacity * 2;
-            if (new_capacity > (SIZE_MAX / sizeof(*client->peer_status_entries))) {
-                pthread_mutex_unlock(&client->status_lock);
-                return;
-            }
-            struct lantern_peer_status_entry *grown = realloc(
-                client->peer_status_entries,
-                new_capacity * sizeof(*client->peer_status_entries));
-            if (!grown) {
-                pthread_mutex_unlock(&client->status_lock);
-                return;
-            }
-            memset(
-                grown + client->peer_status_capacity,
-                0,
-                (new_capacity - client->peer_status_capacity) * sizeof(*grown));
-            client->peer_status_entries = grown;
-            client->peer_status_capacity = new_capacity;
-        }
-        entry = &client->peer_status_entries[client->peer_status_count++];
-        memset(entry, 0, sizeof(*entry));
-        memcpy(entry->peer_id, peer_copy, peer_cap);
+        pthread_mutex_unlock(&client->status_lock);
+        return;
     }
+    entry->status_request_inflight = false;
 
     string_list_remove(&client->status_failure_peer_ids, peer_copy);
 

@@ -27,6 +27,71 @@
 
 #define LANTERN_LIBP2P_KEY_TYPE_SECP256K1 2u
 
+static void lantern_libp2p_configure_logging(void);
+
+static enum LanternLogLevel lantern_libp2p_convert_level(libp2p_log_level_t level)
+{
+    switch (level) {
+    case LIBP2P_LOG_TRACE:
+        return LANTERN_LOG_LEVEL_TRACE;
+    case LIBP2P_LOG_DEBUG:
+        return LANTERN_LOG_LEVEL_DEBUG;
+    case LIBP2P_LOG_INFO:
+        return LANTERN_LOG_LEVEL_INFO;
+    case LIBP2P_LOG_WARN:
+        return LANTERN_LOG_LEVEL_WARN;
+    case LIBP2P_LOG_ERROR:
+    default:
+        return LANTERN_LOG_LEVEL_ERROR;
+    }
+}
+
+static void lantern_libp2p_log_writer(libp2p_log_level_t level, const char *msg, void *ud)
+{
+    (void)ud;
+    if (!msg) {
+        return;
+    }
+    if (level != LIBP2P_LOG_ERROR && lantern_log_get_level() != LANTERN_LOG_LEVEL_TRACE) {
+        return;
+    }
+
+    enum LanternLogLevel mapped = lantern_libp2p_convert_level(level);
+    switch (mapped) {
+    case LANTERN_LOG_LEVEL_TRACE:
+        lantern_log_trace("libp2p", NULL, "%s", msg);
+        break;
+    case LANTERN_LOG_LEVEL_DEBUG:
+        lantern_log_debug("libp2p", NULL, "%s", msg);
+        break;
+    case LANTERN_LOG_LEVEL_INFO:
+        lantern_log_info("libp2p", NULL, "%s", msg);
+        break;
+    case LANTERN_LOG_LEVEL_WARN:
+        lantern_log_warn("libp2p", NULL, "%s", msg);
+        break;
+    case LANTERN_LOG_LEVEL_ERROR:
+    default:
+        lantern_log_error("libp2p", NULL, "%s", msg);
+        break;
+    }
+}
+
+static void lantern_libp2p_configure_logging(void)
+{
+    static bool writer_installed = false;
+    if (!writer_installed) {
+        libp2p_log_set_writer(lantern_libp2p_log_writer, NULL);
+        writer_installed = true;
+    }
+
+    libp2p_log_level_t target = LIBP2P_LOG_ERROR;
+    if (lantern_log_get_level() == LANTERN_LOG_LEVEL_TRACE) {
+        target = LIBP2P_LOG_TRACE;
+    }
+    libp2p_log_set_level(target);
+}
+
 int lantern_libp2p_encode_secp256k1_private_key_proto(
     const uint8_t *secret,
     size_t secret_len,
@@ -131,28 +196,7 @@ int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct la
 
     lantern_libp2p_host_reset(state);
 
-    {
-        enum LanternLogLevel llevel = lantern_log_get_level();
-        libp2p_log_level_t target = LIBP2P_LOG_ERROR;
-        /* Reduce libp2p chatter (identify push retries, etc.) unless Lantern runs at TRACE. */
-        switch (llevel) {
-        case LANTERN_LOG_LEVEL_TRACE:
-            target = LIBP2P_LOG_TRACE;
-            break;
-        case LANTERN_LOG_LEVEL_DEBUG:
-            target = LIBP2P_LOG_INFO;
-            break;
-        case LANTERN_LOG_LEVEL_INFO:
-            target = LIBP2P_LOG_WARN;
-            break;
-        case LANTERN_LOG_LEVEL_WARN:
-        case LANTERN_LOG_LEVEL_ERROR:
-        default:
-            target = LIBP2P_LOG_ERROR;
-            break;
-        }
-        libp2p_log_set_level(target);
-    }
+    lantern_libp2p_configure_logging();
 
     libp2p_host_builder_t *builder = libp2p_host_builder_new();
     if (!builder) {

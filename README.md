@@ -23,6 +23,12 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
+## Logging
+
+Lantern emits structured log lines with color-coded levels (TRACE/DEBUG/INFO/WARN/ERROR) when the output stream is a TTY. Set `LANTERN_LOG_COLOR=always|never|auto` to override the detection.
+
+Libp2p internals are now routed through the Lantern logger and are suppressed unless they are fatal. To inspect verbose libp2p traces, run Lantern with `--log-level trace` (or `LANTERN_LOG_LEVEL=trace`) and the libp2p entries will appear under the `component=libp2p` namespace.
+
 ## Regenerating Fixtures
 
 The consensus JSON and SSZ fixtures live in `tests/fixtures`. To refresh them from LeanSpec, run:
