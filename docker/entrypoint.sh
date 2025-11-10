@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Allow users to pass explicit arguments to lantern_cli. If any arguments are
-# supplied, execute them verbatim and skip the opinionated defaults.
+# Allow users to pass explicit arguments to lantern_cli. If arguments begin
+# with a flag (e.g. `--data-dir`), treat them as Lantern CLI options;
+# otherwise execute the provided command verbatim (needed for gdb/lldb).
 if [[ "$#" -gt 0 ]]; then
-    exec /opt/lantern/bin/lantern "$@"
+    if [[ "$1" == --* ]]; then
+        exec /opt/lantern/bin/lantern "$@"
+    else
+        exec "$@"
+    fi
 fi
 
 DATA_DIR="${LANTERN_DATA_DIR:-/data}"

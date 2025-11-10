@@ -1,6 +1,7 @@
 # Git metadata and build outputs
 build
 cmake-build*
+lean-quickstart-logs
 
 # Editor/project artifacts
 .vscode
@@ -13,3 +14,7 @@ __pycache__/
 
 # macOS metadata
 .DS_Store
+
+# Large devnet fixtures not required for docker build
+tools/lean-quickstart/local-devnet/clients/
+tools/lean-quickstart/deserialization_dumps/

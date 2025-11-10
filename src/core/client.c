@@ -3860,6 +3860,11 @@ static void *block_request_worker(void *arg) {
     uint8_t *response = NULL;
     bool request_success = false;
     bool schedule_legacy = false;
+    bool attempt_legacy = false;
+    struct lantern_client *legacy_client = NULL;
+    LanternRoot legacy_root = ctx->root;
+    char legacy_peer[sizeof(ctx->peer_text)];
+    legacy_peer[0] = '\0';
 
     if (lantern_root_list_resize(&request.roots, 1) != 0) {
         lantern_log_error(
@@ -4120,14 +4125,11 @@ static void *block_request_worker(void *arg) {
 
     request_success = (response_msg.length > 0);
 
-    bool attempt_legacy = false;
-    struct lantern_client *legacy_client = NULL;
-    LanternRoot legacy_root = ctx->root;
-    char legacy_peer[sizeof(ctx->peer_text)];
-    legacy_peer[0] = '\0';
-    if (!request_success && schedule_legacy && ctx->client && !ctx->using_legacy && ctx->peer_text[0]) {
+cleanup:
+    if (!request_success && schedule_legacy && ctx->client && !ctx->using_legacy && ctx->peer_text[0] && !attempt_legacy) {
         attempt_legacy = true;
         legacy_client = ctx->client;
+        legacy_root = ctx->root;
         strncpy(legacy_peer, ctx->peer_text, sizeof(legacy_peer) - 1u);
         legacy_peer[sizeof(legacy_peer) - 1u] = '\0';
         char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
@@ -4138,8 +4140,6 @@ static void *block_request_worker(void *arg) {
             "retrying blocks_by_root with legacy protocol root=%s",
             root_hex[0] ? root_hex : "0x0");
     }
-
-cleanup:
     lantern_blocks_by_root_response_reset(&response_msg);
     free(response);
     free(payload);

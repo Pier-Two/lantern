@@ -44,6 +44,7 @@ struct status_request_ctx {
     peer_id_t peer_id;
     char peer_text[128];
     int legacy_no_code;
+    const char *protocol_id;
 };
 
 struct status_request_worker_args {
@@ -1019,7 +1020,7 @@ static void *status_request_worker(void *arg) {
     if (lantern_bytes_to_hex(header, header_len, header_hex, sizeof(header_hex), 0) != 0) {
         header_hex[0] = '\0';
     }
-    const char *protocol_id = LANTERN_STATUS_PROTOCOL_ID;
+    const char *protocol_id = ctx->protocol_id ? ctx->protocol_id : LANTERN_STATUS_PROTOCOL_ID;
     lantern_log_info(
         "reqresp",
         &meta,
@@ -1171,7 +1172,8 @@ static void status_request_on_open(libp2p_stream_t *stream, void *user_data, int
     struct lantern_log_metadata meta = {
         .peer = (ctx && ctx->peer_text[0]) ? ctx->peer_text : NULL,
     };
-    const char *protocol_id = LANTERN_STATUS_PROTOCOL_ID;
+    const char *protocol_id =
+        (ctx && ctx->protocol_id) ? ctx->protocol_id : LANTERN_STATUS_PROTOCOL_ID;
     lantern_log_info(
         "reqresp",
         &meta,
@@ -1288,15 +1290,31 @@ int lantern_reqresp_service_request_status(
         return -1;
     }
 
-    ctx->legacy_no_code = lantern_reqresp_service_peer_prefers_legacy(service, ctx->peer_text) ? 1 : 0;
-    const char *protocol_id = LANTERN_STATUS_PROTOCOL_ID;
+    int prefer_legacy = lantern_reqresp_service_peer_prefers_legacy(service, ctx->peer_text) ? 1 : 0;
+    struct {
+        const char *protocol_id;
+        int legacy_flag;
+    } attempts[2] = {
+        {prefer_legacy ? LANTERN_STATUS_PROTOCOL_ID_LEGACY : LANTERN_STATUS_PROTOCOL_ID, prefer_legacy ? 1 : 0},
+        {prefer_legacy ? LANTERN_STATUS_PROTOCOL_ID : LANTERN_STATUS_PROTOCOL_ID_LEGACY, prefer_legacy ? 0 : 1}};
 
-    int rc = libp2p_host_open_stream_async(
-        service->host,
-        &ctx->peer_id,
-        protocol_id,
-        status_request_on_open,
-        ctx);
+    int rc = -1;
+    for (size_t i = 0; i < (sizeof(attempts) / sizeof(attempts[0])); ++i) {
+        ctx->protocol_id = attempts[i].protocol_id;
+        ctx->legacy_no_code = attempts[i].legacy_flag;
+        rc = libp2p_host_open_stream_async(
+            service->host,
+            &ctx->peer_id,
+            ctx->protocol_id,
+            status_request_on_open,
+            ctx);
+        if (rc == 0) {
+            if (ctx->peer_text[0]) {
+                lantern_reqresp_service_hint_peer_legacy(service, ctx->peer_text, ctx->legacy_no_code);
+            }
+            break;
+        }
+    }
     if (rc != 0) {
         lantern_log_warn(
             "reqresp",
