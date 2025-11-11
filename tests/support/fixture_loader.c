@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "lantern/consensus/hash.h"
+#include "lantern/support/strings.h"
 
 #define JSON_INITIAL_TOKENS 256
 
@@ -325,6 +326,97 @@ int lantern_fixture_token_to_root(
     return lantern_fixture_parse_hex_bytes(str, len, root->bytes, sizeof(root->bytes));
 }
 
+static int lantern_fixture_parse_root_array_field(
+    const struct lantern_fixture_document *doc,
+    int parent_idx,
+    const char *field_name,
+    struct lantern_root_list *list) {
+    if (!doc || !list) {
+        return -1;
+    }
+    int container_idx = lantern_fixture_object_get_field(doc, parent_idx, field_name);
+    if (container_idx < 0) {
+        return lantern_root_list_resize(list, 0);
+    }
+    int data_idx = lantern_fixture_object_get_field(doc, container_idx, "data");
+    if (data_idx < 0) {
+        return lantern_root_list_resize(list, 0);
+    }
+    int length = lantern_fixture_array_get_length(doc, data_idx);
+    if (length < 0) {
+        return -1;
+    }
+    if (lantern_root_list_resize(list, (size_t)length) != 0) {
+        return -1;
+    }
+    for (int i = 0; i < length; ++i) {
+        int entry_idx = lantern_fixture_array_get_element(doc, data_idx, i);
+        if (entry_idx < 0) {
+            return -1;
+        }
+        if (lantern_fixture_token_to_root(doc, entry_idx, &list->items[i]) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int lantern_fixture_parse_bitlist_field(
+    const struct lantern_fixture_document *doc,
+    int parent_idx,
+    const char *field_name,
+    struct lantern_bitlist *list) {
+    if (!doc || !list) {
+        return -1;
+    }
+    int container_idx = lantern_fixture_object_get_field(doc, parent_idx, field_name);
+    if (container_idx < 0) {
+        return lantern_bitlist_resize(list, 0);
+    }
+    int data_idx = lantern_fixture_object_get_field(doc, container_idx, "data");
+    if (data_idx < 0) {
+        return lantern_bitlist_resize(list, 0);
+    }
+    int length = lantern_fixture_array_get_length(doc, data_idx);
+    if (length < 0) {
+        return -1;
+    }
+    if (lantern_bitlist_resize(list, (size_t)length) != 0) {
+        return -1;
+    }
+    if (length == 0) {
+        return 0;
+    }
+    if (!list->bytes) {
+        return -1;
+    }
+    size_t required_bytes = (size_t)((length + 7) / 8);
+    memset(list->bytes, 0, required_bytes);
+    for (int i = 0; i < length; ++i) {
+        int bit_idx = lantern_fixture_array_get_element(doc, data_idx, i);
+        if (bit_idx < 0) {
+            return -1;
+        }
+        uint64_t bit_value = 0;
+        if (lantern_fixture_token_to_uint64(doc, bit_idx, &bit_value) != 0) {
+            return -1;
+        }
+        if (bit_value > 1) {
+            return -1;
+        }
+        if (bit_value == 0) {
+            continue;
+        }
+        size_t byte_index = (size_t)i / 8u;
+        size_t bit_offset = (size_t)i % 8u;
+        if (byte_index >= required_bytes) {
+            return -1;
+        }
+        list->bytes[byte_index] |= (uint8_t)(1u << bit_offset);
+    }
+    return 0;
+}
+
 static int lantern_fixture_parse_attestations(
     const struct lantern_fixture_document *doc,
     int body_idx,
@@ -357,7 +449,7 @@ static int lantern_fixture_parse_attestations(
         if (validator_idx < 0) {
             return -1;
         }
-        if (lantern_fixture_token_to_uint64(doc, validator_idx, &vote.validator_id) != 0) {
+        if (lantern_fixture_token_to_uint64(doc, validator_idx, &vote.data.validator_id) != 0) {
             return -1;
         }
 
@@ -553,6 +645,15 @@ int lantern_fixture_parse_anchor_state(
             }
         }
     }
+    LanternRoot validators_root;
+    if (lantern_hash_tree_root_validators(
+            count > 0 ? validator_pubkeys : NULL,
+            (size_t)count,
+            &validators_root)
+        != 0) {
+        free(validator_pubkeys);
+        return -1;
+    }
     *validator_count = (uint64_t)count;
 
     lantern_state_init(state);
@@ -563,6 +664,20 @@ int lantern_fixture_parse_anchor_state(
     if (lantern_state_prepare_validator_votes(state, *validator_count) != 0) {
         free(validator_pubkeys);
         return -1;
+    }
+    state->validator_registry_root = validators_root;
+    const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
+    if (debug_hash && debug_hash[0] != '\0') {
+        char validators_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        if (lantern_bytes_to_hex(
+                state->validator_registry_root.bytes,
+                LANTERN_ROOT_SIZE,
+                validators_hex,
+                sizeof(validators_hex),
+                1)
+            == 0) {
+            fprintf(stderr, "fixture validators root: %s\n", validators_hex);
+        }
     }
     free(validator_pubkeys);
 
@@ -627,6 +742,34 @@ int lantern_fixture_parse_anchor_state(
 
     field_idx = lantern_fixture_object_get_field(doc, header_idx, "bodyRoot");
     if (lantern_fixture_token_to_root(doc, field_idx, &state->latest_block_header.body_root) != 0) {
+        return -1;
+    }
+
+    if (lantern_fixture_parse_root_array_field(
+            doc,
+            anchor_state_index,
+            "historicalBlockHashes",
+            &state->historical_block_hashes)
+        != 0) {
+        return -1;
+    }
+    if (lantern_fixture_parse_bitlist_field(doc, anchor_state_index, "justifiedSlots", &state->justified_slots) != 0) {
+        return -1;
+    }
+    if (lantern_fixture_parse_root_array_field(
+            doc,
+            anchor_state_index,
+            "justificationsRoots",
+            &state->justification_roots)
+        != 0) {
+        return -1;
+    }
+    if (lantern_fixture_parse_bitlist_field(
+            doc,
+            anchor_state_index,
+            "justificationsValidators",
+            &state->justification_validators)
+        != 0) {
         return -1;
     }
 

@@ -66,7 +66,7 @@ static LanternSignedVote make_vote(
     const LanternCheckpoint *target) {
     LanternSignedVote vote;
     memset(&vote, 0, sizeof(vote));
-    vote.validator_id = validator_id;
+    vote.data.validator_id = validator_id;
     vote.data.slot = target ? target->slot : 0;
     if (source) {
         vote.data.source = *source;

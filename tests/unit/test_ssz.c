@@ -49,6 +49,29 @@ static void expect_bytes_equal(
     }
 }
 
+static void maybe_dump_state_vector(const uint8_t *data, size_t len) {
+    const char *dump_env = getenv("LANTERN_DUMP_SSZ_STATE");
+    if (!dump_env || dump_env[0] == '\0') {
+        return;
+    }
+    printf("static const uint8_t LANTERN_SSZ_VECTOR_STATE[] = {\n");
+    for (size_t i = 0; i < len; ++i) {
+        if (i % 12 == 0) {
+            printf("    ");
+        }
+        printf("0x%02X", data[i]);
+        if (i + 1 < len) {
+            printf(", ");
+        }
+        if ((i + 1) % 12 == 0 || i + 1 == len) {
+            printf("\n");
+        }
+    }
+    printf("};\n");
+    fflush(stdout);
+    exit(0);
+}
+
 static LanternCheckpoint checkpoint_from_vector(const uint8_t *root_bytes, uint64_t slot) {
     LanternCheckpoint checkpoint;
     copy_root(&checkpoint.root, root_bytes);
@@ -105,6 +128,7 @@ static void test_checkpoint_roundtrip(void) {
 
 static LanternVote build_vote(void) {
     LanternVote vote;
+    vote.validator_id = 0;
     vote.slot = 9;
     vote.head = build_checkpoint(0xAB, 10);
     vote.target = build_checkpoint(0xCD, 11);
@@ -115,8 +139,8 @@ static LanternVote build_vote(void) {
 static LanternSignedVote build_signed_vote(uint64_t validator_id, uint64_t slot, uint8_t seed) {
     LanternSignedVote signed_vote;
     memset(&signed_vote, 0, sizeof(signed_vote));
-    signed_vote.validator_id = validator_id;
     signed_vote.data = build_vote();
+    signed_vote.data.validator_id = validator_id;
     signed_vote.data.slot = slot;
     signed_vote.data.head = build_checkpoint(seed, slot);
     signed_vote.data.target = build_checkpoint(seed + 1, slot + 1);
@@ -164,7 +188,7 @@ static void test_vote_roundtrip(void) {
 static void test_signed_vote_roundtrip(void) {
     LanternSignedVote signed_vote;
     memset(&signed_vote, 0, sizeof(signed_vote));
-    signed_vote.validator_id = 42;
+    signed_vote.data.validator_id = 42;
     signed_vote.data = build_vote();
 
     uint8_t buffer[LANTERN_SIGNED_VOTE_SSZ_SIZE];
@@ -175,7 +199,7 @@ static void test_signed_vote_roundtrip(void) {
     LanternSignedVote decoded;
     memset(&decoded, 0, sizeof(decoded));
     assert(lantern_ssz_decode_signed_vote(&decoded, buffer, sizeof(buffer)) == 0);
-    assert(decoded.validator_id == signed_vote.validator_id);
+    assert(decoded.data.validator_id == signed_vote.data.validator_id);
     assert(decoded.data.slot == signed_vote.data.slot);
     assert(memcmp(decoded.signature.bytes, signed_vote.signature.bytes, LANTERN_SIGNATURE_SIZE) == 0);
 }
@@ -238,7 +262,7 @@ static void test_block_body_roundtrip(void) {
     assert(decoded.attestations.length == body.attestations.length);
 
     for (size_t i = 0; i < body.attestations.length; ++i) {
-        assert(decoded.attestations.data[i].validator_id == body.attestations.data[i].validator_id);
+        assert(decoded.attestations.data[i].data.validator_id == body.attestations.data[i].data.validator_id);
         assert(memcmp(decoded.attestations.data[i].signature.bytes,
                       body.attestations.data[i].signature.bytes,
                       LANTERN_SIGNATURE_SIZE)
@@ -269,6 +293,7 @@ static void reset_block(LanternBlock *block) {
 
 static void build_vote_vector_a(LanternVote *vote) {
     memset(vote, 0, sizeof(*vote));
+    vote->validator_id = LANTERN_VECTOR_VOTE_A_VALIDATOR_ID;
     vote->slot = LANTERN_VECTOR_VOTE_A_SLOT;
     vote->head = checkpoint_from_vector(LANTERN_VECTOR_VOTE_A_HEAD_ROOT, LANTERN_VECTOR_VOTE_A_HEAD_SLOT);
     vote->target = checkpoint_from_vector(LANTERN_VECTOR_VOTE_A_TARGET_ROOT, LANTERN_VECTOR_VOTE_A_TARGET_SLOT);
@@ -277,6 +302,7 @@ static void build_vote_vector_a(LanternVote *vote) {
 
 static void build_vote_vector_b(LanternVote *vote) {
     memset(vote, 0, sizeof(*vote));
+    vote->validator_id = LANTERN_VECTOR_VOTE_B_VALIDATOR_ID;
     vote->slot = LANTERN_VECTOR_VOTE_B_SLOT;
     vote->head = checkpoint_from_vector(LANTERN_VECTOR_VOTE_B_HEAD_ROOT, LANTERN_VECTOR_VOTE_B_HEAD_SLOT);
     vote->target = checkpoint_from_vector(LANTERN_VECTOR_VOTE_B_TARGET_ROOT, LANTERN_VECTOR_VOTE_B_TARGET_SLOT);
@@ -285,14 +311,14 @@ static void build_vote_vector_b(LanternVote *vote) {
 
 static void build_signed_vote_vector_a(LanternSignedVote *signed_vote) {
     memset(signed_vote, 0, sizeof(*signed_vote));
-    signed_vote->validator_id = LANTERN_VECTOR_VOTE_A_VALIDATOR_ID;
     build_vote_vector_a(&signed_vote->data);
+    signed_vote->data.validator_id = LANTERN_VECTOR_VOTE_A_VALIDATOR_ID;
 }
 
 static void build_signed_vote_vector_b(LanternSignedVote *signed_vote) {
     memset(signed_vote, 0, sizeof(*signed_vote));
-    signed_vote->validator_id = LANTERN_VECTOR_VOTE_B_VALIDATOR_ID;
     build_vote_vector_b(&signed_vote->data);
+    signed_vote->data.validator_id = LANTERN_VECTOR_VOTE_B_VALIDATOR_ID;
 }
 
 static void build_block_header_vector(LanternBlockHeader *header) {
@@ -761,6 +787,7 @@ static void test_leanspec_vectors(void) {
     uint8_t state_encoded[sizeof(LANTERN_SSZ_VECTOR_STATE)];
     written = 0;
     expect_ok(lantern_ssz_encode_state(&state_expected, state_encoded, sizeof(state_encoded), &written), "state encode");
+    maybe_dump_state_vector(state_encoded, written);
     assert(written == sizeof(LANTERN_SSZ_VECTOR_STATE));
     expect_bytes_equal(LANTERN_SSZ_VECTOR_STATE, sizeof(LANTERN_SSZ_VECTOR_STATE), state_encoded, written);
 
@@ -821,6 +848,12 @@ static void test_state_accepts_empty_justification_validators_payload(void) {
         lantern_ssz_encode_state(&genesis_state, encoded, sizeof(encoded), &written),
         "encode genesis state");
 
+    /*
+     * The offsets table for the State container begins immediately after the
+     * fixed-size fields (config, slot, latest_block_header, latest_justified,
+     * latest_finalized, validator_registry_root). Do not skip any additional
+     * bytes here or the computed offsets will be garbage.
+     */
     size_t offsets_offset = LANTERN_CONFIG_SSZ_SIZE + sizeof(uint64_t) + LANTERN_BLOCK_HEADER_SSZ_SIZE
         + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + LANTERN_ROOT_SIZE;
     uint32_t offsets[4];

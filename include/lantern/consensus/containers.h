@@ -32,6 +32,7 @@ typedef struct {
 } LanternCheckpoint;
 
 typedef struct {
+    uint64_t validator_id;
     uint64_t slot;
     LanternCheckpoint head;
     LanternCheckpoint target;
@@ -39,7 +40,6 @@ typedef struct {
 } LanternVote;
 
 typedef struct {
-    uint64_t validator_id;
     LanternVote data;
     LanternSignature signature;
 } LanternSignedVote;

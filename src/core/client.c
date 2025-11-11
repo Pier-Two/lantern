@@ -4302,6 +4302,21 @@ static int lantern_client_schedule_blocks_request(
         return -1;
     }
 
+    if (client->debug_disable_block_requests) {
+        lantern_log_debug(
+            "reqresp",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = peer_id_text},
+            "skipping blocks_by_root dial for test run");
+        lantern_client_on_blocks_request_complete(
+            client,
+            peer_id_text,
+            root,
+            LANTERN_BLOCKS_REQUEST_ABORTED);
+        return 0;
+    }
+
     struct block_request_ctx *ctx = (struct block_request_ctx *)calloc(1, sizeof(*ctx));
     if (!ctx) {
         return -1;
@@ -4440,7 +4455,7 @@ static void lantern_client_record_vote(
         "gossip",
         &meta,
         "received vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64,
-        vote_copy.validator_id,
+        vote_copy.data.validator_id,
         vote_copy.data.slot,
         head_hex[0] ? head_hex : "0x0",
         target_hex[0] ? target_hex : "0x0",
@@ -4457,7 +4472,7 @@ static void lantern_client_record_vote(
             "state",
             &meta,
             "rejected gossip vote validator=%" PRIu64 " slot=%" PRIu64,
-            vote_copy.validator_id,
+            vote_copy.data.validator_id,
             vote_copy.data.slot);
         goto cleanup;
     }
@@ -4468,7 +4483,7 @@ static void lantern_client_record_vote(
                 "forkchoice",
                 &meta,
                 "failed to track gossip vote validator=%" PRIu64 " slot=%" PRIu64,
-                vote_copy.validator_id,
+                vote_copy.data.validator_id,
                 vote_copy.data.slot);
         } else {
             if (lantern_fork_choice_accept_new_votes(&client->fork_choice) != 0) {
@@ -4476,7 +4491,7 @@ static void lantern_client_record_vote(
                     "forkchoice",
                     &meta,
                     "accepting new votes failed after validator=%" PRIu64 " slot=%" PRIu64,
-                    vote_copy.validator_id,
+                    vote_copy.data.validator_id,
                     vote_copy.data.slot);
             }
             if (lantern_fork_choice_update_safe_target(&client->fork_choice) != 0) {
@@ -4484,7 +4499,7 @@ static void lantern_client_record_vote(
                     "forkchoice",
                     &meta,
                     "updating safe target failed after validator=%" PRIu64 " slot=%" PRIu64,
-                    vote_copy.validator_id,
+                    vote_copy.data.validator_id,
                     vote_copy.data.slot);
             }
         }
@@ -4496,7 +4511,7 @@ static void lantern_client_record_vote(
                 "storage",
                 &meta,
                 "failed to persist votes after validator=%" PRIu64 " slot=%" PRIu64,
-                vote_copy.validator_id,
+                vote_copy.data.validator_id,
                 vote_copy.data.slot);
         }
     }
@@ -4506,7 +4521,7 @@ static void lantern_client_record_vote(
         &meta,
         "processed vote validator=%" PRIu64
         " slot=%" PRIu64 " head=%s target=%s@%" PRIu64 " source=%s@%" PRIu64,
-        vote_copy.validator_id,
+        vote_copy.data.validator_id,
         vote_copy.data.slot,
         head_hex[0] ? head_hex : "0x0",
         target_hex[0] ? target_hex : "0x0",
@@ -5042,6 +5057,13 @@ int lantern_client_debug_set_parent_requested(
         }
     }
     return entry ? 0 : -1;
+}
+
+void lantern_client_debug_disable_block_requests(struct lantern_client *client, bool disable) {
+    if (!client) {
+        return;
+    }
+    client->debug_disable_block_requests = disable ? true : false;
 }
 
 int lantern_client_debug_on_blocks_request_complete(

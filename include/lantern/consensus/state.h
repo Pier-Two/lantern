@@ -8,7 +8,6 @@
 #include "lantern/consensus/containers.h"
 
 struct lantern_vote_record;
-struct lantern_checkpoint_tally;
 struct lantern_fork_choice;
 
 struct lantern_root_list {
@@ -35,10 +34,8 @@ typedef struct {
     struct lantern_bitlist justification_validators;
     struct lantern_vote_record *validator_votes;
     size_t validator_votes_len;
-    struct lantern_checkpoint_tally *justification_tallies;
-    size_t justification_tally_len;
-    size_t justification_tally_capacity;
     struct lantern_fork_choice *fork_choice;
+    LanternRoot validator_registry_root;
 } LanternState;
 
 void lantern_root_list_init(struct lantern_root_list *list);

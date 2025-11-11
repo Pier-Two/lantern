@@ -123,6 +123,7 @@ static size_t state_encoded_size(const LanternState *state) {
         + SSZ_BYTE_SIZE_OF_UINT64
         + LANTERN_BLOCK_HEADER_SSZ_SIZE
         + (2u * LANTERN_CHECKPOINT_SSZ_SIZE)
+        + LANTERN_ROOT_SIZE
         + (4u * SSZ_BYTE_SIZE_OF_UINT32);
     size_t variable = root_list_encoded_size(&state->historical_block_hashes)
         + bitlist_encoded_size(&state->justified_slots)

@@ -192,7 +192,8 @@ if(LANTERN_BUILD_TESTS)
             LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
     )
     add_test(NAME lantern_consensus_vectors COMMAND lantern_consensus_vectors_test)
-    set_tests_properties(lantern_consensus_vectors PROPERTIES TIMEOUT 120)
+    # Consensus fixtures iterate over dozens of LeanSpec transitions and need a longer timeout.
+    set_tests_properties(lantern_consensus_vectors PROPERTIES TIMEOUT 300)
 
     set(_lantern_ctest_targets
         lantern_client

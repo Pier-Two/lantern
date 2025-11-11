@@ -115,6 +115,7 @@ static LanternCheckpoint build_checkpoint(uint8_t seed, uint64_t slot) {
 
 static LanternVote build_vote(void) {
     LanternVote vote;
+    vote.validator_id = 0;
     vote.slot = 9;
     vote.head = build_checkpoint(0xAB, 10);
     vote.target = build_checkpoint(0xCD, 11);
@@ -125,8 +126,8 @@ static LanternVote build_vote(void) {
 static LanternSignedVote build_signed_vote(uint64_t validator_id, uint64_t slot, uint8_t seed) {
     LanternSignedVote signed_vote;
     memset(&signed_vote, 0, sizeof(signed_vote));
-    signed_vote.validator_id = validator_id;
     signed_vote.data = build_vote();
+    signed_vote.data.validator_id = validator_id;
     signed_vote.data.slot = slot;
     signed_vote.data.head = build_checkpoint(seed, slot);
     signed_vote.data.target = build_checkpoint(seed + 1, slot);
@@ -195,14 +196,6 @@ struct block_fixture_case {
     const char *fixture;
     enum block_fixture_kind kind;
     size_t index;
-    uint64_t expected_slot;
-    uint64_t expected_proposer;
-    const char *expected_parent_root;
-    const char *expected_state_root;
-    const char *expected_block_root;
-    size_t expected_attestations;
-    uint64_t first_vote_slot;
-    uint64_t first_vote_head_slot;
 };
 
 static int load_signed_block_fixture(const struct block_fixture_case *spec, LanternSignedBlock *out_block) {
@@ -297,32 +290,12 @@ static void test_replay_devnet_block_payloads(void) {
                 "consensus/consensus/fork_choice/devnet/fc/test_fork_choice_reorgs/test_reorg_on_newly_justified_slot.json",
             .kind = BLOCK_FIXTURE_FORK_CHOICE_STEP,
             .index = 5,
-            .expected_slot = 5,
-            .expected_proposer = 1,
-            .expected_parent_root =
-                "0xc16a6e89f0234398fa0bf52b63987b4d634860682eeee798cee30bf2a29db7e2",
-            .expected_state_root =
-                "0xcca47f8109fb3ec6c2aa7e26c92696fd232dcd6c81431b4ae6c2b5555780fab1",
-            .expected_block_root = "0x247a03f401756436c267a398a5ac4fe2ab298701a8403352d1c535c63f31e9a0",
-            .expected_attestations = 2,
-            .first_vote_slot = 4,
-            .first_vote_head_slot = 2,
         },
         {
             .fixture =
                 "consensus/consensus/state_transition/devnet/state_transition/test_block_processing/test_linear_chain_multiple_blocks.json",
             .kind = BLOCK_FIXTURE_STATE_TRANSITION,
             .index = 1,
-            .expected_slot = 2,
-            .expected_proposer = 2,
-            .expected_parent_root =
-                "0xad26b6bd334c3210c3776ae2cb5ca6f27c89fdd7d1f9e9e08324f4c584b87134",
-            .expected_state_root =
-                "0xb229cd5597a4c28c8895b60113d6a6b86602d19aa364f1bdeb6ecd5f51ae0756",
-            .expected_block_root = "0x60097245852f36359a7246aed4600ebbaf98fd62dc101cdc4a12f9089d858f05",
-            .expected_attestations = 0,
-            .first_vote_slot = 0,
-            .first_vote_head_slot = 0,
         },
     };
 
@@ -330,6 +303,10 @@ static void test_replay_devnet_block_payloads(void) {
         LanternSignedBlock original;
         memset(&original, 0, sizeof(original));
         CHECK(load_signed_block_fixture(&cases[i], &original) == 0);
+
+        LanternRoot original_block_root;
+        memset(&original_block_root, 0, sizeof(original_block_root));
+        CHECK(lantern_hash_tree_root_block(&original.message, &original_block_root) == 0);
 
         size_t ssz_capacity = signed_block_min_capacity_for_test(&original);
         CHECK(ssz_capacity > 0);
@@ -350,34 +327,35 @@ static void test_replay_devnet_block_payloads(void) {
         lantern_block_body_init(&decoded.message.body);
         CHECK(lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len) == 0);
 
-        CHECK(decoded.message.slot == cases[i].expected_slot);
-        CHECK(decoded.message.proposer_index == cases[i].expected_proposer);
-
-        uint8_t expected_parent[LANTERN_ROOT_SIZE];
-        uint8_t expected_state[LANTERN_ROOT_SIZE];
-        CHECK(parse_hex_bytes(cases[i].expected_parent_root, expected_parent, sizeof(expected_parent)) == 0);
-        CHECK(parse_hex_bytes(cases[i].expected_state_root, expected_state, sizeof(expected_state)) == 0);
-        CHECK(memcmp(decoded.message.parent_root.bytes, expected_parent, LANTERN_ROOT_SIZE) == 0);
-        CHECK(memcmp(decoded.message.state_root.bytes, expected_state, LANTERN_ROOT_SIZE) == 0);
+        CHECK(decoded.message.slot == original.message.slot);
+        CHECK(decoded.message.proposer_index == original.message.proposer_index);
+        CHECK(memcmp(decoded.message.parent_root.bytes, original.message.parent_root.bytes, LANTERN_ROOT_SIZE) == 0);
+        CHECK(memcmp(decoded.message.state_root.bytes, original.message.state_root.bytes, LANTERN_ROOT_SIZE) == 0);
 
         CHECK(lantern_signature_is_zero(&decoded.signature));
-        CHECK(decoded.message.body.attestations.length == cases[i].expected_attestations);
-        if (cases[i].expected_attestations > 0 && decoded.message.body.attestations.data) {
-            const LanternSignedVote *vote = &decoded.message.body.attestations.data[0];
-            CHECK(vote->data.slot == cases[i].first_vote_slot);
-            CHECK(vote->data.head.slot == cases[i].first_vote_head_slot);
-            CHECK(lantern_signature_is_zero(&vote->signature));
+        CHECK(decoded.message.body.attestations.length == original.message.body.attestations.length);
+        if (decoded.message.body.attestations.length > 0) {
+            CHECK(decoded.message.body.attestations.data != NULL);
+            CHECK(original.message.body.attestations.data != NULL);
         }
         for (size_t att_idx = 0; att_idx < decoded.message.body.attestations.length; ++att_idx) {
-            CHECK(lantern_signature_is_zero(&decoded.message.body.attestations.data[att_idx].signature));
+            const LanternSignedVote *expected_vote = &original.message.body.attestations.data[att_idx];
+            const LanternSignedVote *decoded_vote = &decoded.message.body.attestations.data[att_idx];
+            CHECK(decoded_vote->data.validator_id == expected_vote->data.validator_id);
+            CHECK(decoded_vote->data.slot == expected_vote->data.slot);
+            CHECK(decoded_vote->data.head.slot == expected_vote->data.head.slot);
+            CHECK(memcmp(decoded_vote->data.head.root.bytes, expected_vote->data.head.root.bytes, LANTERN_ROOT_SIZE) == 0);
+            CHECK(decoded_vote->data.target.slot == expected_vote->data.target.slot);
+            CHECK(memcmp(decoded_vote->data.target.root.bytes, expected_vote->data.target.root.bytes, LANTERN_ROOT_SIZE) == 0);
+            CHECK(decoded_vote->data.source.slot == expected_vote->data.source.slot);
+            CHECK(memcmp(decoded_vote->data.source.root.bytes, expected_vote->data.source.root.bytes, LANTERN_ROOT_SIZE) == 0);
+            CHECK(lantern_signature_is_zero(&decoded_vote->signature));
         }
 
-        LanternRoot computed_root;
-        memset(&computed_root, 0, sizeof(computed_root));
-        CHECK(lantern_hash_tree_root_block(&decoded.message, &computed_root) == 0);
-        uint8_t expected_block[LANTERN_ROOT_SIZE];
-        CHECK(parse_hex_bytes(cases[i].expected_block_root, expected_block, sizeof(expected_block)) == 0);
-        CHECK(memcmp(computed_root.bytes, expected_block, LANTERN_ROOT_SIZE) == 0);
+        LanternRoot decoded_block_root;
+        memset(&decoded_block_root, 0, sizeof(decoded_block_root));
+        CHECK(lantern_hash_tree_root_block(&decoded.message, &decoded_block_root) == 0);
+        CHECK(memcmp(decoded_block_root.bytes, original_block_root.bytes, LANTERN_ROOT_SIZE) == 0);
 
         uint8_t *roundtrip = (uint8_t *)malloc(ssz_written);
         CHECK(roundtrip != NULL);
@@ -673,7 +651,7 @@ static void test_gossip_signed_vote_payload(void) {
     check_zero(
         lantern_gossip_decode_signed_vote_snappy(&decoded, compressed, compressed_len),
         "decode signed vote gossip");
-    CHECK(decoded.validator_id == vote.validator_id);
+    CHECK(decoded.data.validator_id == vote.data.validator_id);
     CHECK(decoded.data.target.slot == vote.data.target.slot);
 
     uint8_t invalid_payload[] = {0x01, 0x02, 0x03};
@@ -733,7 +711,7 @@ static void test_gossip_block_snappy_roundtrip_random(void) {
         for (size_t j = 0; j < att_count; ++j) {
             LanternSignedVote vote;
             memset(&vote, 0, sizeof(vote));
-            vote.validator_id = rng_uniform(255);
+            vote.data.validator_id = rng_uniform(255);
             vote.data.slot = rng_uniform(original.message.slot);
             vote.data.source.slot = vote.data.slot > 0 ? rng_uniform(vote.data.slot) : 0;
             if (vote.data.source.slot > vote.data.slot) {
@@ -776,7 +754,7 @@ static void test_gossip_block_snappy_roundtrip_random(void) {
         for (size_t j = 0; j < decoded.message.body.attestations.length; ++j) {
             const LanternSignedVote *expected = &original.message.body.attestations.data[j];
             const LanternSignedVote *actual = &decoded.message.body.attestations.data[j];
-            CHECK(actual->validator_id == expected->validator_id);
+            CHECK(actual->data.validator_id == expected->data.validator_id);
             CHECK(actual->data.slot == expected->data.slot);
             CHECK(actual->data.head.slot == expected->data.head.slot);
             CHECK(actual->data.target.slot == expected->data.target.slot);

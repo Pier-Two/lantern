@@ -135,6 +135,7 @@ struct lantern_client {
     size_t peer_status_capacity;
     pthread_mutex_t status_lock;
     bool status_lock_initialized;
+    bool debug_disable_block_requests;
 };
 
 void lantern_client_options_init(struct lantern_client_options *options);
@@ -180,6 +181,7 @@ int lantern_client_debug_set_parent_requested(
     struct lantern_client *client,
     const LanternRoot *root,
     bool requested);
+void lantern_client_debug_disable_block_requests(struct lantern_client *client, bool disable);
 int lantern_client_debug_on_blocks_request_complete(
     struct lantern_client *client,
     const char *peer_id,

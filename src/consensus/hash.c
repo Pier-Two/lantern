@@ -143,11 +143,9 @@ int lantern_hash_tree_root_config(const LanternConfig *config, LanternRoot *out_
     if (!config || !out_root) {
         return -1;
     }
-    uint8_t chunks[2][SSZ_BYTES_PER_CHUNK];
-    memset(chunks, 0, sizeof(chunks));
-    chunk_from_uint64(config->num_validators, chunks[0]);
-    chunk_from_uint64(config->genesis_time, chunks[1]);
-    return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
+    uint8_t chunk[SSZ_BYTES_PER_CHUNK];
+    chunk_from_uint64(config->genesis_time, chunk);
+    return merkleize_chunks(chunk, 1, 0, out_root);
 }
 
 int lantern_hash_tree_root_checkpoint(const LanternCheckpoint *checkpoint, LanternRoot *out_root) {
@@ -160,7 +158,7 @@ int lantern_hash_tree_root_checkpoint(const LanternCheckpoint *checkpoint, Lante
     return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
 }
 
-int lantern_hash_tree_root_vote(const LanternVote *vote, LanternRoot *out_root) {
+static int hash_vote_data(const LanternVote *vote, LanternRoot *out_root) {
     if (!vote || !out_root) {
         return -1;
     }
@@ -184,6 +182,20 @@ int lantern_hash_tree_root_vote(const LanternVote *vote, LanternRoot *out_root) 
     return merkleize_chunks(&chunks[0][0], 4, 0, out_root);
 }
 
+int lantern_hash_tree_root_vote(const LanternVote *vote, LanternRoot *out_root) {
+    if (!vote || !out_root) {
+        return -1;
+    }
+    LanternRoot data_root;
+    if (hash_vote_data(vote, &data_root) != 0) {
+        return -1;
+    }
+    uint8_t chunks[2][SSZ_BYTES_PER_CHUNK];
+    chunk_from_uint64(vote->validator_id, chunks[0]);
+    memcpy(chunks[1], data_root.bytes, SSZ_BYTES_PER_CHUNK);
+    return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
+}
+
 int lantern_hash_tree_root_signed_vote(const LanternSignedVote *vote, LanternRoot *out_root) {
     if (!vote || !out_root) {
         return -1;
@@ -192,11 +204,10 @@ int lantern_hash_tree_root_signed_vote(const LanternSignedVote *vote, LanternRoo
     if (lantern_hash_tree_root_vote(&vote->data, &vote_root) != 0) {
         return -1;
     }
-    uint8_t chunks[3][SSZ_BYTES_PER_CHUNK];
-    chunk_from_uint64(vote->validator_id, chunks[0]);
-    memcpy(chunks[1], vote_root.bytes, SSZ_BYTES_PER_CHUNK);
-    memcpy(chunks[2], vote->signature.bytes, SSZ_BYTES_PER_CHUNK);
-    return merkleize_chunks(&chunks[0][0], 3, 0, out_root);
+    uint8_t chunks[2][SSZ_BYTES_PER_CHUNK];
+    memcpy(chunks[0], vote_root.bytes, SSZ_BYTES_PER_CHUNK);
+    memcpy(chunks[1], vote->signature.bytes, SSZ_BYTES_PER_CHUNK);
+    return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
 }
 
 int lantern_merkleize_root_list(
@@ -312,7 +323,7 @@ static int hash_attestations(const LanternAttestations *attestations, LanternRoo
         }
         for (size_t i = 0; i < count; ++i) {
             LanternRoot vote_root;
-            if (lantern_hash_tree_root_signed_vote(&attestations->data[i], &vote_root) != 0) {
+            if (lantern_hash_tree_root_vote(&attestations->data[i].data, &vote_root) != 0) {
                 free(chunks);
                 return -1;
             }
@@ -402,6 +413,7 @@ int lantern_hash_tree_root_state(const LanternState *state, LanternRoot *out_roo
     LanternRoot justified_slots_root;
     LanternRoot justification_roots_root;
     LanternRoot justification_validators_root;
+    LanternRoot validators_root = state->validator_registry_root;
 
     if (lantern_hash_tree_root_config(&state->config, &config_root) != 0) {
         return -1;
@@ -510,6 +522,9 @@ int lantern_hash_tree_root_state(const LanternState *state, LanternRoot *out_roo
         if (lantern_bytes_to_hex(justification_roots_root.bytes, LANTERN_ROOT_SIZE, debug_hex, sizeof(debug_hex), 1) == 0) {
             fprintf(stderr, "hash state slot %llu justification roots root: %s\n", (unsigned long long)state->slot, debug_hex);
         }
+        if (lantern_bytes_to_hex(validators_root.bytes, LANTERN_ROOT_SIZE, debug_hex, sizeof(debug_hex), 1) == 0) {
+            fprintf(stderr, "hash state slot %llu validators root: %s\n", (unsigned long long)state->slot, debug_hex);
+        }
         if (
             lantern_bytes_to_hex(justification_validators_root.bytes, LANTERN_ROOT_SIZE, debug_hex, sizeof(debug_hex), 1) == 0) {
             fprintf(
@@ -562,7 +577,7 @@ int lantern_hash_tree_root_state(const LanternState *state, LanternRoot *out_roo
         }
     }
 
-    uint8_t chunks[9][SSZ_BYTES_PER_CHUNK];
+    uint8_t chunks[10][SSZ_BYTES_PER_CHUNK];
     memcpy(chunks[0], config_root.bytes, SSZ_BYTES_PER_CHUNK);
     chunk_from_uint64(state->slot, chunks[1]);
     memcpy(chunks[2], header_root.bytes, SSZ_BYTES_PER_CHUNK);
@@ -570,9 +585,10 @@ int lantern_hash_tree_root_state(const LanternState *state, LanternRoot *out_roo
     memcpy(chunks[4], finalized_root.bytes, SSZ_BYTES_PER_CHUNK);
     memcpy(chunks[5], historical_root.bytes, SSZ_BYTES_PER_CHUNK);
     memcpy(chunks[6], justified_slots_root.bytes, SSZ_BYTES_PER_CHUNK);
-    memcpy(chunks[7], justification_roots_root.bytes, SSZ_BYTES_PER_CHUNK);
-    memcpy(chunks[8], justification_validators_root.bytes, SSZ_BYTES_PER_CHUNK);
-    return merkleize_chunks(&chunks[0][0], 9, 0, out_root);
+    memcpy(chunks[7], validators_root.bytes, SSZ_BYTES_PER_CHUNK);
+    memcpy(chunks[8], justification_roots_root.bytes, SSZ_BYTES_PER_CHUNK);
+    memcpy(chunks[9], justification_validators_root.bytes, SSZ_BYTES_PER_CHUNK);
+    return merkleize_chunks(&chunks[0][0], 10, 0, out_root);
 }
 
 int lantern_hash_tree_root_validators(const uint8_t *pubkeys, size_t count, LanternRoot *out_root) {
@@ -591,13 +607,14 @@ int lantern_hash_tree_root_validators(const uint8_t *pubkeys, size_t count, Lant
         if (!chunks) {
             return -1;
         }
+        const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
         for (size_t i = 0; i < count; ++i) {
             LanternRoot validator_root;
             if (hash_validator(pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), &validator_root) != 0) {
                 free(chunks);
                 return -1;
             }
-            if (i == 0) {
+            if (debug_hash && debug_hash[0] != '\0' && i == 0) {
                 char validator_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
                 if (lantern_bytes_to_hex(
                         validator_root.bytes,
@@ -609,7 +626,7 @@ int lantern_hash_tree_root_validators(const uint8_t *pubkeys, size_t count, Lant
                     fprintf(stderr, "validator[0] root: %s\n", validator_hex);
                 }
             }
-    memcpy(chunks + (i * SSZ_BYTES_PER_CHUNK), validator_root.bytes, SSZ_BYTES_PER_CHUNK);
+            memcpy(chunks + (i * SSZ_BYTES_PER_CHUNK), validator_root.bytes, SSZ_BYTES_PER_CHUNK);
         }
     }
     uint8_t temp_root[SSZ_BYTES_PER_CHUNK];

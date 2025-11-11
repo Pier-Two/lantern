@@ -1,21 +1,274 @@
 #include "lantern/core/client.h"
 #include "lantern/consensus/hash.h"
+#include "lantern/networking/enr.h"
+#include "lantern/networking/libp2p.h"
+#include "lantern/networking/reqresp_service.h"
+#include "lantern/support/strings.h"
+#include "protocol/identify/protocol_identify.h"
+#include "protocol/ping/protocol_ping.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <limits.h>
 
 #ifndef LANTERN_TEST_FIXTURE_DIR
 #error "LANTERN_TEST_FIXTURE_DIR must be defined"
 #endif
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+static void fill_root_with_index(LanternRoot *root, uint32_t index);
 
 static void build_fixture_path(char *buffer, size_t length, const char *relative) {
     int written = snprintf(buffer, length, "%s/%s", LANTERN_TEST_FIXTURE_DIR, relative);
     if (written <= 0 || (size_t)written >= length) {
         fprintf(stderr, "Failed to compose fixture path for %s\n", relative);
     }
+}
+
+#define LOOPBACK_STUB_BASE_PORT 12000
+
+struct stub_peer_config {
+    const char *name;
+    const char *privkey_hex;
+};
+
+static const struct stub_peer_config kStubPeerConfigs[] = {
+    {"ream_0", "1111111111111111111111111111111111111111111111111111111111111111"},
+    {"ream_1", "2222222222222222222222222222222222222222222222222222222222222222"},
+    {"zeam_2", "3333333333333333333333333333333333333333333333333333333333333333"},
+    {"zeam_3", "4444444444444444444444444444444444444444444444444444444444444444"},
+    {"qlean_4", "5555555555555555555555555555555555555555555555555555555555555555"},
+    {"qlean_5", "6666666666666666666666666666666666666666666666666666666666666666"},
+    {"lantern_6", "7777777777777777777777777777777777777777777777777777777777777777"},
+};
+
+#define STUB_PEER_COUNT (sizeof(kStubPeerConfigs) / sizeof(kStubPeerConfigs[0]))
+
+struct stub_peer_runtime {
+    struct lantern_libp2p_host host;
+    struct lantern_enr_record enr;
+    uint16_t port;
+    libp2p_protocol_server_t *identify_server;
+    libp2p_protocol_server_t *ping_server;
+    bool ping_running;
+    struct lantern_reqresp_service reqresp;
+    bool reqresp_running;
+};
+
+struct stub_network_context {
+    struct stub_peer_runtime peers[STUB_PEER_COUNT];
+    size_t count;
+    char nodes_path[PATH_MAX];
+};
+
+static int stub_build_status(void *context, LanternStatusMessage *out_status) {
+    if (!context || !out_status) {
+        return -1;
+    }
+    struct stub_peer_runtime *peer = (struct stub_peer_runtime *)context;
+    memset(out_status, 0, sizeof(*out_status));
+    fill_root_with_index(&out_status->finalized.root, peer->port);
+    out_status->finalized.slot = peer->port;
+    out_status->head = out_status->finalized;
+    return 0;
+}
+
+static int stub_handle_status(void *context, const LanternStatusMessage *peer_status, const char *peer_id) {
+    (void)context;
+    (void)peer_status;
+    (void)peer_id;
+    return 0;
+}
+
+static void stub_status_failure(void *context, const char *peer_id, int error) {
+    (void)context;
+    (void)peer_id;
+    (void)error;
+}
+
+static int stub_collect_blocks(
+    void *context,
+    const LanternRoot *roots,
+    size_t root_count,
+    LanternBlocksByRootResponse *out_blocks) {
+    (void)context;
+    (void)roots;
+    (void)root_count;
+    if (!out_blocks) {
+        return -1;
+    }
+    return lantern_blocks_by_root_response_resize(out_blocks, 0);
+}
+
+static int stub_build_status(void *context, LanternStatusMessage *out_status);
+static int stub_handle_status(void *context, const LanternStatusMessage *peer_status, const char *peer_id);
+static void stub_status_failure(void *context, const char *peer_id, int error);
+static int stub_collect_blocks(
+    void *context,
+    const LanternRoot *roots,
+    size_t root_count,
+    LanternBlocksByRootResponse *out_blocks);
+
+static void stub_network_teardown(struct stub_network_context *ctx) {
+    if (!ctx) {
+        return;
+    }
+    for (size_t i = 0; i < ctx->count; ++i) {
+        if (ctx->peers[i].reqresp_running) {
+            lantern_reqresp_service_reset(&ctx->peers[i].reqresp);
+            ctx->peers[i].reqresp_running = false;
+        }
+        if (ctx->peers[i].ping_running && ctx->peers[i].host.host && ctx->peers[i].ping_server) {
+            libp2p_ping_service_stop(ctx->peers[i].host.host, ctx->peers[i].ping_server);
+        }
+        ctx->peers[i].ping_server = NULL;
+        ctx->peers[i].ping_running = false;
+        if (ctx->peers[i].identify_server && ctx->peers[i].host.host) {
+            libp2p_identify_service_stop(ctx->peers[i].host.host, ctx->peers[i].identify_server);
+        }
+        ctx->peers[i].identify_server = NULL;
+        lantern_libp2p_host_reset(&ctx->peers[i].host);
+        lantern_enr_record_reset(&ctx->peers[i].enr);
+    }
+    ctx->count = 0;
+    if (ctx->nodes_path[0] != '\0') {
+        (void)remove(ctx->nodes_path);
+        ctx->nodes_path[0] = '\0';
+    }
+}
+
+static int stub_network_initialize(struct stub_network_context *ctx) {
+    if (!ctx) {
+        return -1;
+    }
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->count = STUB_PEER_COUNT;
+    for (size_t i = 0; i < STUB_PEER_COUNT; ++i) {
+        struct stub_peer_runtime *peer = &ctx->peers[i];
+        lantern_libp2p_host_init(&peer->host);
+        lantern_enr_record_init(&peer->enr);
+        peer->port = (uint16_t)(LOOPBACK_STUB_BASE_PORT + (uint16_t)i);
+        peer->identify_server = NULL;
+        peer->ping_server = NULL;
+        peer->ping_running = false;
+        lantern_reqresp_service_init(&peer->reqresp);
+        peer->reqresp_running = false;
+
+        uint8_t secret[32];
+        if (lantern_hex_decode(kStubPeerConfigs[i].privkey_hex, secret, sizeof(secret)) != 0) {
+            fprintf(stderr, "Failed to decode stub peer privkey for %s\n", kStubPeerConfigs[i].name);
+            memset(secret, 0, sizeof(secret));
+            stub_network_teardown(ctx);
+            return -1;
+        }
+
+        char listen_multiaddr[128];
+        int written = snprintf(
+            listen_multiaddr, sizeof(listen_multiaddr), "/ip4/127.0.0.1/udp/%u/quic-v1", (unsigned)peer->port);
+        if (written <= 0 || (size_t)written >= sizeof(listen_multiaddr)) {
+            fprintf(stderr, "Failed to compose stub listen address\n");
+            memset(secret, 0, sizeof(secret));
+            stub_network_teardown(ctx);
+            return -1;
+        }
+
+        struct lantern_libp2p_config cfg = {
+            .listen_multiaddr = listen_multiaddr,
+            .secp256k1_secret = secret,
+            .secret_len = sizeof(secret),
+            .allow_outbound_identify = 1,
+        };
+        if (lantern_libp2p_host_start(&peer->host, &cfg) != 0) {
+            fprintf(stderr, "Failed to start stub peer host for %s\n", kStubPeerConfigs[i].name);
+            memset(secret, 0, sizeof(secret));
+            stub_network_teardown(ctx);
+            return -1;
+        }
+
+        if (libp2p_identify_service_start(peer->host.host, &peer->identify_server) != 0) {
+            fprintf(stderr, "Failed to start identify service for stub peer %s\n", kStubPeerConfigs[i].name);
+            memset(secret, 0, sizeof(secret));
+            stub_network_teardown(ctx);
+            return -1;
+        }
+
+        if (libp2p_ping_service_start(peer->host.host, &peer->ping_server) != 0) {
+            fprintf(stderr, "Failed to start ping service for stub peer %s\n", kStubPeerConfigs[i].name);
+            memset(secret, 0, sizeof(secret));
+            stub_network_teardown(ctx);
+            return -1;
+        }
+        peer->ping_running = true;
+
+        struct lantern_reqresp_service_callbacks reqresp_callbacks = {
+            .context = peer,
+            .build_status = stub_build_status,
+            .handle_status = stub_handle_status,
+            .status_failure = stub_status_failure,
+            .collect_blocks = stub_collect_blocks,
+        };
+        struct lantern_reqresp_service_config reqresp_cfg = {
+            .host = peer->host.host,
+            .callbacks = &reqresp_callbacks,
+        };
+        if (lantern_reqresp_service_start(&peer->reqresp, &reqresp_cfg) != 0) {
+            fprintf(stderr, "Failed to start req/resp service for stub peer %s\n", kStubPeerConfigs[i].name);
+            memset(secret, 0, sizeof(secret));
+            stub_network_teardown(ctx);
+            return -1;
+        }
+        peer->reqresp_running = true;
+
+        if (lantern_enr_record_build_v4(&peer->enr, secret, "127.0.0.1", peer->port, 1) != 0) {
+            fprintf(stderr, "Failed to build ENR for stub peer %s\n", kStubPeerConfigs[i].name);
+            memset(secret, 0, sizeof(secret));
+            stub_network_teardown(ctx);
+            return -1;
+        }
+
+        memset(secret, 0, sizeof(secret));
+    }
+
+    const char *tmpdir = getenv("TMPDIR");
+    if (!tmpdir || tmpdir[0] == '\0') {
+        tmpdir = "/tmp";
+    }
+    int path_written = snprintf(
+        ctx->nodes_path, sizeof(ctx->nodes_path), "%s/lantern_client_stub_nodes_%ld.yaml", tmpdir, (long)getpid());
+    if (path_written <= 0 || (size_t)path_written >= sizeof(ctx->nodes_path)) {
+        fprintf(stderr, "Failed to compose stub nodes path\n");
+        stub_network_teardown(ctx);
+        return -1;
+    }
+
+    FILE *fp = fopen(ctx->nodes_path, "w");
+    if (!fp) {
+        perror("lantern_client_stub_nodes fopen");
+        stub_network_teardown(ctx);
+        return -1;
+    }
+    for (size_t i = 0; i < ctx->count; ++i) {
+        if (!ctx->peers[i].enr.encoded) {
+            fclose(fp);
+            stub_network_teardown(ctx);
+            return -1;
+        }
+        if (fprintf(fp, "- %s\n", ctx->peers[i].enr.encoded) < 0) {
+            fclose(fp);
+            stub_network_teardown(ctx);
+            return -1;
+        }
+    }
+    fclose(fp);
+    return 0;
 }
 
 static bool string_list_contains(const struct lantern_string_list *list, const char *value) {
@@ -639,6 +892,14 @@ int main(void) {
         return 1;
     }
 
+    struct stub_network_context stub_network;
+    bool stub_ready = false;
+    if (stub_network_initialize(&stub_network) != 0) {
+        fprintf(stderr, "Failed to initialize stub peer network\n");
+        return 1;
+    }
+    stub_ready = true;
+
     struct lantern_client_options options;
     lantern_client_options_init(&options);
 
@@ -657,7 +918,14 @@ int main(void) {
     options.data_dir = LANTERN_TEST_FIXTURE_DIR;
     options.genesis_config_path = config_path;
     options.validator_registry_path = registry_path;
-    options.nodes_path = nodes_path;
+    if (stub_network.nodes_path[0] != '\0') {
+        options.nodes_path = stub_network.nodes_path;
+    } else {
+        fprintf(stderr, "Stub nodes path missing\n");
+        stub_network_teardown(&stub_network);
+        lantern_client_options_free(&options);
+        return 1;
+    }
     options.genesis_state_path = state_path;
     options.validator_config_path = validator_config_path;
     options.node_id = "ream_0";
@@ -683,10 +951,13 @@ int main(void) {
         goto cleanup;
     }
     client_ready = true;
+    lantern_client_debug_disable_block_requests(&client, true);
 
     if (verify_client_state(&client, &options, ream_indices, 1, 9000) != 0) {
         goto cleanup;
     }
+
+    usleep(200000);
 
     lantern_shutdown(&client);
     client_ready = false;
@@ -700,10 +971,13 @@ int main(void) {
         goto cleanup;
     }
     client_ready = true;
+    lantern_client_debug_disable_block_requests(&client, true);
 
     if (verify_client_state(&client, &options, lantern_indices, 1, 9000) != 0) {
         goto cleanup;
     }
+
+    usleep(200000);
 
     exit_code = 0;
 
@@ -712,5 +986,8 @@ cleanup:
         lantern_shutdown(&client);
     }
     lantern_client_options_free(&options);
+    if (stub_ready) {
+        stub_network_teardown(&stub_network);
+    }
     return exit_code;
 }

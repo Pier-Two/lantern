@@ -3,6 +3,7 @@
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/ssz.h"
+#include "lantern/support/log.h"
 #include "lantern/support/strings.h"
 #include "tests/support/fixture_loader.h"
 
@@ -23,6 +24,17 @@
 
 #define LABEL_MAX_LENGTH 64
 #define MAX_LABELS 128
+
+static void configure_logging(void) {
+    const char *env_level = getenv("LANTERN_LOG_LEVEL");
+    if (env_level && env_level[0] != '\0') {
+        if (lantern_log_set_level_from_string(env_level, NULL) != 0) {
+            fprintf(stderr, "invalid LANTERN_LOG_LEVEL '%s'\n", env_level);
+        }
+        return;
+    }
+    lantern_log_set_level(LANTERN_LOG_LEVEL_WARN);
+}
 
 struct stored_vote_entry {
     bool has_vote;
@@ -908,6 +920,7 @@ static int run_fork_choice_fixture(const char *path) {
 
         LanternVote proposer_vote;
         memset(&proposer_vote, 0, sizeof(proposer_vote));
+        proposer_vote.validator_id = signed_block.message.proposer_index;
         proposer_vote.slot = signed_block.message.slot;
         proposer_vote.head.root = block_root;
         proposer_vote.head.slot = signed_block.message.slot;
@@ -1397,6 +1410,7 @@ static int run_fork_choice_fixture(const char *path) {
 }
 
 int main(void) {
+    configure_logging();
     char state_transition_root[1024];
     int written = snprintf(
         state_transition_root,

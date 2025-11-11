@@ -239,7 +239,7 @@ static libp2p_gossipsub_validation_result_t gossipsub_vote_validator(
         "gossip",
         &meta,
         "accepted vote gossip validator=%" PRIu64 " slot=%" PRIu64 " head=%s",
-        vote.validator_id,
+        vote.data.validator_id,
         vote.data.slot,
         head_hex[0] ? head_hex : "0x0");
 
