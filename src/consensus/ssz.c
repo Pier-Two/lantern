@@ -10,7 +10,6 @@
 #include "ssz_deserialize.h"
 #include "ssz_serialize.h"
 
-#include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
 
 static int write_u32(uint8_t *out, size_t remaining, uint32_t value) {
@@ -379,10 +378,7 @@ int lantern_ssz_encode_signed_vote(const LanternSignedVote *vote, uint8_t *out, 
         return -1;
     }
     offset += LANTERN_VOTE_SSZ_SIZE;
-    if (!lantern_signature_is_zero(&vote->signature)) {
-        return -1;
-    }
-    memset(out + offset, 0, LANTERN_SIGNATURE_SIZE);
+    memcpy(out + offset, vote->signature.bytes, LANTERN_SIGNATURE_SIZE);
     offset += LANTERN_SIGNATURE_SIZE;
     set_written(written, offset);
     return 0;
@@ -397,10 +393,7 @@ int lantern_ssz_decode_signed_vote(LanternSignedVote *vote, const uint8_t *data,
         return -1;
     }
     offset += LANTERN_VOTE_SSZ_SIZE;
-    if (!lantern_signature_bytes_are_zero(data + offset, LANTERN_SIGNATURE_SIZE)) {
-        return -1;
-    }
-    memset(vote->signature.bytes, 0, LANTERN_SIGNATURE_SIZE);
+    memcpy(vote->signature.bytes, data + offset, LANTERN_SIGNATURE_SIZE);
     return 0;
 }
 
@@ -624,10 +617,7 @@ int lantern_ssz_encode_signed_block(const LanternSignedBlock *block, uint8_t *ou
         return -1;
     }
 
-    if (!lantern_signature_is_zero(&block->signature)) {
-        return -1;
-    }
-    memset(out + SSZ_BYTE_SIZE_OF_UINT32, 0, LANTERN_SIGNATURE_SIZE);
+    memcpy(out + SSZ_BYTE_SIZE_OF_UINT32, block->signature.bytes, LANTERN_SIGNATURE_SIZE);
 
     size_t message_written = 0;
     if (lantern_ssz_encode_block(&block->message, out + message_offset, out_len - message_offset, &message_written) != 0) {

@@ -27,7 +27,3 @@ void lantern_signature_zero(LanternSignature *signature) {
     }
     memset(signature->bytes, 0, sizeof(signature->bytes));
 }
-
-bool lantern_signature_bytes_are_zero(const uint8_t *bytes, size_t length) {
-    return bytes_are_zero(bytes, length);
-}

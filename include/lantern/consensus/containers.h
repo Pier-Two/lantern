@@ -45,6 +45,12 @@ typedef struct {
 } LanternSignedVote;
 
 typedef struct {
+    LanternSignature *data;
+    size_t length;
+    size_t capacity;
+} LanternBlockSignatures;
+
+typedef struct {
     LanternSignedVote *data;
     size_t length;
     size_t capacity;
@@ -79,11 +85,27 @@ typedef struct {
     LanternSignature signature;
 } LanternSignedBlock;
 
+typedef struct {
+    LanternBlock block;
+    LanternSignedVote proposer_attestation;
+} LanternBlockWithAttestation;
+
+typedef struct {
+    LanternBlockWithAttestation message;
+    LanternBlockSignatures signatures;
+} LanternSignedBlockWithAttestation;
+
 void lantern_attestations_init(LanternAttestations *list);
 void lantern_attestations_reset(LanternAttestations *list);
 int lantern_attestations_append(LanternAttestations *list, const LanternSignedVote *vote);
 int lantern_attestations_copy(LanternAttestations *dst, const LanternAttestations *src);
 int lantern_attestations_resize(LanternAttestations *list, size_t new_length);
+
+void lantern_block_signatures_init(LanternBlockSignatures *list);
+void lantern_block_signatures_reset(LanternBlockSignatures *list);
+int lantern_block_signatures_append(LanternBlockSignatures *list, const LanternSignature *signature);
+int lantern_block_signatures_copy(LanternBlockSignatures *dst, const LanternBlockSignatures *src);
+int lantern_block_signatures_resize(LanternBlockSignatures *list, size_t new_length);
 
 void lantern_block_body_init(LanternBlockBody *body);
 void lantern_block_body_reset(LanternBlockBody *body);

@@ -442,18 +442,6 @@ int lantern_fork_choice_add_block(
     return 0;
 }
 
-static bool is_signature_zero(const LanternSignature *sig) {
-    if (!sig) {
-        return false;
-    }
-    for (size_t i = 0; i < sizeof(sig->bytes); ++i) {
-        if (sig->bytes[i] != 0) {
-            return false;
-        }
-    }
-    return true;
-}
-
 int lantern_fork_choice_add_vote(
     LanternForkChoice *store,
     const LanternSignedVote *vote,
@@ -462,9 +450,6 @@ int lantern_fork_choice_add_vote(
         return -1;
     }
     if (vote->data.validator_id >= store->validator_count) {
-        return -1;
-    }
-    if (!is_signature_zero(&vote->signature)) {
         return -1;
     }
     const LanternCheckpoint *target = &vote->data.target;

@@ -16,7 +16,6 @@
 #include "lantern/consensus/duties.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
-#include "lantern/consensus/signature.h"
 
 struct lantern_vote_record {
     LanternVote vote;
@@ -676,13 +675,6 @@ static int lantern_state_mark_justified_slot(LanternState *state, uint64_t slot)
     return lantern_bitlist_set_bit(&state->justified_slots, index, true);
 }
 
-static bool lantern_signature_is_zeroed(const LanternSignature *signature) {
-    if (!signature) {
-        return false;
-    }
-    return lantern_signature_is_zero(signature);
-}
-
 int lantern_state_process_block_header(LanternState *state, const LanternBlock *block) {
     if (!state || !block) {
         return -1;
@@ -1024,9 +1016,6 @@ int lantern_state_process_block(LanternState *state, const LanternBlock *block) 
 
 int lantern_state_transition(LanternState *state, const LanternSignedBlock *signed_block) {
     if (!state || !signed_block) {
-        return -1;
-    }
-    if (!lantern_signature_is_zeroed(&signed_block->signature)) {
         return -1;
     }
     const LanternBlock *block = &signed_block->message;

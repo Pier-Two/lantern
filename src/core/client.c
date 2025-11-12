@@ -2908,7 +2908,6 @@ static bool lantern_client_import_block(
     }
 
     LanternSignedBlock import_block = *block;
-    lantern_signature_zero(&import_block.signature);
 
     if (lantern_state_transition(&client->state, &import_block) != 0) {
         lantern_client_unlock_state(client, state_locked);
@@ -4418,7 +4417,6 @@ static void lantern_client_record_vote(
     }
 
     LanternSignedVote vote_copy = *vote;
-    lantern_signature_zero(&vote_copy.signature);
 
     char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];

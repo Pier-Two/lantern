@@ -4,7 +4,6 @@
 #include <string.h>
 
 #include "lantern/consensus/containers.h"
-#include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/ssz.h"
 #include "../fixtures/ssz_vectors.h"
@@ -15,6 +14,13 @@ static void fill_bytes(uint8_t *dst, size_t len, uint8_t seed) {
     for (size_t i = 0; i < len; ++i) {
         dst[i] = (uint8_t)(seed + i);
     }
+}
+
+static void fill_signature(LanternSignature *signature, uint8_t seed) {
+    if (!signature) {
+        return;
+    }
+    fill_bytes(signature->bytes, LANTERN_SIGNATURE_SIZE, seed);
 }
 
 static void copy_root(LanternRoot *dst, const uint8_t *bytes) {
@@ -145,6 +151,7 @@ static LanternSignedVote build_signed_vote(uint64_t validator_id, uint64_t slot,
     signed_vote.data.head = build_checkpoint(seed, slot);
     signed_vote.data.target = build_checkpoint(seed + 1, slot + 1);
     signed_vote.data.source = build_checkpoint(seed + 2, slot > 0 ? slot - 1 : slot);
+    fill_signature(&signed_vote.signature, (uint8_t)(seed + 3));
     return signed_vote;
 }
 
@@ -186,10 +193,7 @@ static void test_vote_roundtrip(void) {
 }
 
 static void test_signed_vote_roundtrip(void) {
-    LanternSignedVote signed_vote;
-    memset(&signed_vote, 0, sizeof(signed_vote));
-    signed_vote.data.validator_id = 42;
-    signed_vote.data = build_vote();
+    LanternSignedVote signed_vote = build_signed_vote(42, 9, 0x21);
 
     uint8_t buffer[LANTERN_SIGNED_VOTE_SSZ_SIZE];
     size_t written = 0;
@@ -210,14 +214,16 @@ static void test_signed_vote_signature_validation(void) {
     size_t written = 0;
     assert(lantern_ssz_encode_signed_vote(&signed_vote, buffer, sizeof(buffer), &written) == 0);
 
-    buffer[LANTERN_VOTE_SSZ_SIZE] = 0xAA;
     LanternSignedVote decoded;
     memset(&decoded, 0, sizeof(decoded));
-    assert(lantern_ssz_decode_signed_vote(&decoded, buffer, sizeof(buffer)) != 0);
+    buffer[LANTERN_VOTE_SSZ_SIZE] ^= 0xAA;
+    assert(lantern_ssz_decode_signed_vote(&decoded, buffer, sizeof(buffer)) == 0);
+    assert(memcmp(&buffer[LANTERN_VOTE_SSZ_SIZE], decoded.signature.bytes, LANTERN_SIGNATURE_SIZE) == 0);
+    assert(decoded.signature.bytes[0] == (uint8_t)(signed_vote.signature.bytes[0] ^ 0xAA));
 
-    LanternSignedVote invalid = signed_vote;
-    invalid.signature.bytes[0] = 0x01;
-    assert(lantern_ssz_encode_signed_vote(&invalid, buffer, sizeof(buffer), &written) != 0);
+    assert(lantern_ssz_encode_signed_vote(&signed_vote, buffer, sizeof(buffer), &written) == 0);
+    buffer[0] ^= 0xFF;
+    assert(lantern_ssz_decode_signed_vote(&decoded, buffer, sizeof(buffer)) != 0);
 }
 
 static void test_block_header_roundtrip(void) {
@@ -313,12 +319,14 @@ static void build_signed_vote_vector_a(LanternSignedVote *signed_vote) {
     memset(signed_vote, 0, sizeof(*signed_vote));
     build_vote_vector_a(&signed_vote->data);
     signed_vote->data.validator_id = LANTERN_VECTOR_VOTE_A_VALIDATOR_ID;
+    fill_signature(&signed_vote->signature, 0xA5);
 }
 
 static void build_signed_vote_vector_b(LanternSignedVote *signed_vote) {
     memset(signed_vote, 0, sizeof(*signed_vote));
     build_vote_vector_b(&signed_vote->data);
     signed_vote->data.validator_id = LANTERN_VECTOR_VOTE_B_VALIDATOR_ID;
+    fill_signature(&signed_vote->signature, 0xB6);
 }
 
 static void build_block_header_vector(LanternBlockHeader *header) {
@@ -354,6 +362,7 @@ static void build_block_vector(LanternBlock *block) {
 static void build_signed_block_vector(LanternSignedBlock *signed_block) {
     memset(signed_block, 0, sizeof(*signed_block));
     build_block_vector(&signed_block->message);
+    fill_signature(&signed_block->signature, 0xC7);
 }
 
 static void build_state_vector(LanternState *state) {

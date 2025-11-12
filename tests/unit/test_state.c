@@ -39,6 +39,13 @@ static void fill_root(LanternRoot *root, uint8_t value) {
     memset(root->bytes, value, LANTERN_ROOT_SIZE);
 }
 
+static void fill_signature(LanternSignature *signature, uint8_t value) {
+    if (!signature) {
+        return;
+    }
+    memset(signature->bytes, value, LANTERN_SIGNATURE_SIZE);
+}
+
 static bool checkpoints_equal(const LanternCheckpoint *a, const LanternCheckpoint *b) {
     if (!a || !b) {
         return false;
@@ -211,6 +218,22 @@ static void build_vote(
     if (head_marker != 0) {
         fill_root(&out->data.head.root, head_marker);
     }
+    uint8_t sig_marker = head_marker ? head_marker : (uint8_t)(validator_id + slot);
+    fill_signature(&out->signature, sig_marker);
+}
+
+static const LanternSignedVote *find_vote_by_validator(
+    const LanternAttestations *attestations,
+    uint64_t validator_id) {
+    if (!attestations) {
+        return NULL;
+    }
+    for (size_t i = 0; i < attestations->length; ++i) {
+        if (attestations->data[i].data.validator_id == validator_id) {
+            return &attestations->data[i];
+        }
+    }
+    return NULL;
 }
 
 static int test_attestations_require_quorum(void) {
@@ -315,14 +338,14 @@ static int test_collect_attestations_for_block(void) {
     bool seen_validator[2] = {false, false};
     for (size_t i = 0; i < collected.length; ++i) {
         const LanternSignedVote *vote = &collected.data[i];
-        for (size_t b = 0; b < LANTERN_SIGNATURE_SIZE; ++b) {
-            if (vote->signature.bytes[b] != 0) {
-                fprintf(stderr, "Collected vote %zu has non-zero signature byte\n", i);
-                lantern_attestations_reset(&collected);
-                lantern_attestations_reset(&input);
-                lantern_state_reset(&state);
-                return 1;
-            }
+        const LanternSignedVote *original = find_vote_by_validator(&input, vote->data.validator_id);
+        if (!original
+            || memcmp(vote->signature.bytes, original->signature.bytes, LANTERN_SIGNATURE_SIZE) != 0) {
+            fprintf(stderr, "Collected vote %zu signature mismatch\n", i);
+            lantern_attestations_reset(&collected);
+            lantern_attestations_reset(&input);
+            lantern_state_reset(&state);
+            return 1;
         }
         if (!checkpoints_equal(&vote->data.source, &state.latest_justified)) {
             fprintf(stderr, "Collected vote %zu has mismatched source checkpoint\n", i);

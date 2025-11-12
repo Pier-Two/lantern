@@ -6,7 +6,6 @@
 
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/hash.h"
-#include "lantern/consensus/signature.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/core/client.h"
 #include "lantern/networking/gossip.h"
@@ -41,6 +40,13 @@ static void fill_bytes(uint8_t *dst, size_t len, uint8_t seed) {
     for (size_t i = 0; i < len; ++i) {
         dst[i] = (uint8_t)(seed + i);
     }
+}
+
+static void fill_signature(LanternSignature *signature, uint8_t seed) {
+    if (!signature) {
+        return;
+    }
+    fill_bytes(signature->bytes, LANTERN_SIGNATURE_SIZE, seed);
 }
 
 static uint64_t le_bytes_to_u64(const uint8_t *src, size_t len) {
@@ -132,6 +138,7 @@ static LanternSignedVote build_signed_vote(uint64_t validator_id, uint64_t slot,
     signed_vote.data.head = build_checkpoint(seed, slot);
     signed_vote.data.target = build_checkpoint(seed + 1, slot);
     signed_vote.data.source = build_checkpoint(seed + 2, slot > 0 ? slot - 1 : slot);
+    fill_signature(&signed_vote.signature, (uint8_t)(seed + 3));
     return signed_vote;
 }
 
@@ -144,7 +151,7 @@ static void populate_block(LanternSignedBlock *signed_block, uint8_t seed) {
     fill_bytes(signed_block->message.state_root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(0x20 + seed));
     LanternSignedVote vote = build_signed_vote(1 + seed, 50 + seed, (uint8_t)(0x30 + seed));
     check_zero(lantern_attestations_append(&signed_block->message.body.attestations, &vote), "attestation append");
-    memset(signed_block->signature.bytes, 0, sizeof(signed_block->signature.bytes));
+    fill_signature(&signed_block->signature, (uint8_t)(0x60 + seed));
 }
 
 struct block_hook_ctx {
@@ -303,6 +310,12 @@ static void test_replay_devnet_block_payloads(void) {
         LanternSignedBlock original;
         memset(&original, 0, sizeof(original));
         CHECK(load_signed_block_fixture(&cases[i], &original) == 0);
+        fill_signature(&original.signature, (uint8_t)(0x80 + i));
+        for (size_t att = 0; att < original.message.body.attestations.length; ++att) {
+            fill_signature(
+                &original.message.body.attestations.data[att].signature,
+                (uint8_t)(0x90 + att + i));
+        }
 
         LanternRoot original_block_root;
         memset(&original_block_root, 0, sizeof(original_block_root));
@@ -332,7 +345,7 @@ static void test_replay_devnet_block_payloads(void) {
         CHECK(memcmp(decoded.message.parent_root.bytes, original.message.parent_root.bytes, LANTERN_ROOT_SIZE) == 0);
         CHECK(memcmp(decoded.message.state_root.bytes, original.message.state_root.bytes, LANTERN_ROOT_SIZE) == 0);
 
-        CHECK(lantern_signature_is_zero(&decoded.signature));
+        CHECK(memcmp(decoded.signature.bytes, original.signature.bytes, LANTERN_SIGNATURE_SIZE) == 0);
         CHECK(decoded.message.body.attestations.length == original.message.body.attestations.length);
         if (decoded.message.body.attestations.length > 0) {
             CHECK(decoded.message.body.attestations.data != NULL);
@@ -349,7 +362,11 @@ static void test_replay_devnet_block_payloads(void) {
             CHECK(memcmp(decoded_vote->data.target.root.bytes, expected_vote->data.target.root.bytes, LANTERN_ROOT_SIZE) == 0);
             CHECK(decoded_vote->data.source.slot == expected_vote->data.source.slot);
             CHECK(memcmp(decoded_vote->data.source.root.bytes, expected_vote->data.source.root.bytes, LANTERN_ROOT_SIZE) == 0);
-            CHECK(lantern_signature_is_zero(&decoded_vote->signature));
+            CHECK(memcmp(
+                      decoded_vote->signature.bytes,
+                      expected_vote->signature.bytes,
+                      LANTERN_SIGNATURE_SIZE)
+                  == 0);
         }
 
         LanternRoot decoded_block_root;
@@ -705,7 +722,7 @@ static void test_gossip_block_snappy_roundtrip_random(void) {
         original.message.proposer_index = rng_uniform(63);
         rng_fill_bytes(original.message.parent_root.bytes, LANTERN_ROOT_SIZE);
         rng_fill_bytes(original.message.state_root.bytes, LANTERN_ROOT_SIZE);
-        memset(original.signature.bytes, 0, sizeof(original.signature.bytes));
+        rng_fill_bytes(original.signature.bytes, LANTERN_SIGNATURE_SIZE);
 
         size_t att_count = rng_uniform(4);
         for (size_t j = 0; j < att_count; ++j) {
@@ -722,7 +739,7 @@ static void test_gossip_block_snappy_roundtrip_random(void) {
             rng_fill_bytes(vote.data.head.root.bytes, LANTERN_ROOT_SIZE);
             rng_fill_bytes(vote.data.target.root.bytes, LANTERN_ROOT_SIZE);
             rng_fill_bytes(vote.data.source.root.bytes, LANTERN_ROOT_SIZE);
-            memset(vote.signature.bytes, 0, sizeof(vote.signature.bytes));
+            rng_fill_bytes(vote.signature.bytes, LANTERN_SIGNATURE_SIZE);
             CHECK(lantern_attestations_append(&original.message.body.attestations, &vote) == 0);
         }
 
@@ -762,6 +779,7 @@ static void test_gossip_block_snappy_roundtrip_random(void) {
             CHECK(memcmp(actual->data.head.root.bytes, expected->data.head.root.bytes, LANTERN_ROOT_SIZE) == 0);
             CHECK(memcmp(actual->data.target.root.bytes, expected->data.target.root.bytes, LANTERN_ROOT_SIZE) == 0);
             CHECK(memcmp(actual->data.source.root.bytes, expected->data.source.root.bytes, LANTERN_ROOT_SIZE) == 0);
+            CHECK(memcmp(actual->signature.bytes, expected->signature.bytes, LANTERN_SIGNATURE_SIZE) == 0);
         }
         CHECK(memcmp(decoded.signature.bytes, original.signature.bytes, LANTERN_SIGNATURE_SIZE) == 0);
 
