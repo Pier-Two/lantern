@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/quorum.h"
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/support/time.h"
 
@@ -407,6 +408,7 @@ static int update_global_checkpoints(
 int lantern_fork_choice_add_block(
     LanternForkChoice *store,
     const LanternBlock *block,
+    const LanternSignedVote *proposer_attestation,
     const LanternCheckpoint *post_justified,
     const LanternCheckpoint *post_finalized,
     const LanternRoot *block_root_hint) {
@@ -437,6 +439,11 @@ int lantern_fork_choice_add_block(
     }
     if (lantern_fork_choice_recompute_head(store) != 0) {
         return -1;
+    }
+    if (proposer_attestation) {
+        if (lantern_fork_choice_add_vote(store, proposer_attestation, false) != 0) {
+            return -1;
+        }
     }
     lean_metrics_record_fork_choice_block_time(lantern_time_now_seconds() - metrics_start);
     return 0;
@@ -491,18 +498,6 @@ int lantern_fork_choice_update_checkpoints(
         return -1;
     }
     return update_global_checkpoints(store, latest_justified, latest_finalized);
-}
-
-static uint64_t quorum_threshold(uint64_t validators) {
-    if (validators == 0) {
-        return 0;
-    }
-    uint64_t numerator = validators * 2u;
-    uint64_t threshold = numerator / 3u;
-    if (threshold == 0) {
-        threshold = 1;
-    }
-    return threshold;
 }
 
 static int find_start_index(
@@ -671,7 +666,7 @@ int lantern_fork_choice_update_safe_target(LanternForkChoice *store) {
     if (!store || !store->initialized || !store->has_anchor) {
         return -1;
     }
-    uint64_t threshold = quorum_threshold(store->config.num_validators);
+    uint64_t threshold = lantern_consensus_quorum_threshold(store->config.num_validators);
     LanternRoot safe;
     if (lmd_ghost_compute(
             store,

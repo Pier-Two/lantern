@@ -1122,7 +1122,14 @@ static int run_fork_choice_fixture(const char *path) {
 
         LanternCheckpoint post_justified = block_justified;
         LanternCheckpoint post_finalized = block_finalized;
-        if (lantern_fork_choice_add_block(&store, &signed_block.message, &post_justified, &post_finalized, &block_root) != 0) {
+        if (lantern_fork_choice_add_block(
+                &store,
+                &signed_block.message.block,
+                &signed_block.message.proposer_attestation,
+                &post_justified,
+                &post_finalized,
+                &block_root)
+            != 0) {
             if (branch_state_initialized) {
                 lantern_state_reset(&branch_state);
             }

@@ -4809,6 +4809,7 @@ static int restore_persisted_blocks(struct lantern_client *client) {
         if (lantern_fork_choice_add_block(
                 &client->fork_choice,
                 &entry->block.message.block,
+                &entry->block.message.proposer_attestation,
                 &client->state.latest_justified,
                 &client->state.latest_finalized,
                 &entry->root)

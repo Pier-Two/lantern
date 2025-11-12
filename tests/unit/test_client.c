@@ -614,6 +614,7 @@ static int test_import_block_parent_mismatch(void) {
     if (lantern_fork_choice_add_block(
             &client.fork_choice,
             &parent_block,
+            NULL,
             &client.state.latest_justified,
             &client.state.latest_finalized,
             &parent_root)

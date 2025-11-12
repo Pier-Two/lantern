@@ -108,24 +108,28 @@ static int test_fork_choice_vote_flow(void) {
     init_block(&block_one, 1, 0, &genesis_root, 0x21);
     LanternRoot block_one_root;
     assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
-    assert(lantern_fork_choice_add_block(
-               &store,
-               &block_one,
-               NULL,
-               NULL,
-               &block_one_root)
+    assert(
+        lantern_fork_choice_add_block(
+            &store,
+            &block_one,
+            NULL,
+            NULL,
+            NULL,
+            &block_one_root)
         == 0);
 
     LanternBlock block_two;
     init_block(&block_two, 2, 1, &block_one_root, 0x32);
     LanternRoot block_two_root;
     assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == 0);
-    assert(lantern_fork_choice_add_block(
-               &store,
-               &block_two,
-               NULL,
-               NULL,
-               &block_two_root)
+    assert(
+        lantern_fork_choice_add_block(
+            &store,
+            &block_two,
+            NULL,
+            NULL,
+            NULL,
+            &block_two_root)
         == 0);
 
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
@@ -197,12 +201,14 @@ static int test_fork_choice_checkpoint_progression(void) {
     LanternRoot block_one_root;
     assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
-    assert(lantern_fork_choice_add_block(
-               &store,
-               &block_one,
-               NULL,
-               NULL,
-               &block_one_root)
+    assert(
+        lantern_fork_choice_add_block(
+            &store,
+            &block_one,
+            NULL,
+            NULL,
+            NULL,
+            &block_one_root)
         == 0);
 
     assert(lantern_fork_choice_update_checkpoints(&store, &block_one_cp, NULL) == 0);
@@ -258,24 +264,28 @@ static int test_fork_choice_advance_time_schedules_votes(void) {
     LanternRoot block_voted_root;
     assert(lantern_hash_tree_root_block(&block_voted, &block_voted_root) == 0);
     LanternCheckpoint block_voted_cp = make_checkpoint(&block_voted_root, block_voted.slot);
-    assert(lantern_fork_choice_add_block(
-               &store,
-               &block_voted,
-               NULL,
-               NULL,
-               &block_voted_root)
+    assert(
+        lantern_fork_choice_add_block(
+            &store,
+            &block_voted,
+            NULL,
+            NULL,
+            NULL,
+            &block_voted_root)
         == 0);
 
     LanternBlock block_competing;
     init_block(&block_competing, 2, 1, &genesis_root, 0x22);
     LanternRoot block_competing_root;
     assert(lantern_hash_tree_root_block(&block_competing, &block_competing_root) == 0);
-    assert(lantern_fork_choice_add_block(
-               &store,
-               &block_competing,
-               NULL,
-               NULL,
-               &block_competing_root)
+    assert(
+        lantern_fork_choice_add_block(
+            &store,
+            &block_competing,
+            NULL,
+            NULL,
+            NULL,
+            &block_competing_root)
         == 0);
 
     LanternRoot head;

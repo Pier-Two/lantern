@@ -16,6 +16,7 @@
 #include "lantern/consensus/duties.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/quorum.h"
 
 struct lantern_vote_record {
     LanternVote vote;
@@ -424,14 +425,7 @@ static bool lantern_votes_equal(const LanternVote *a, const LanternVote *b) {
 }
 
 static size_t lantern_quorum_threshold(uint64_t validator_count) {
-    if (validator_count == 0) {
-        return 0;
-    }
-    uint64_t numerator = validator_count * 2u;
-    uint64_t threshold = numerator / 3u;
-    if (threshold == 0) {
-        threshold = 1;
-    }
+    uint64_t threshold = lantern_consensus_quorum_threshold(validator_count);
     if (threshold > SIZE_MAX) {
         return SIZE_MAX;
     }
@@ -988,7 +982,10 @@ int lantern_state_process_attestations(LanternState *state, const LanternAttesta
     return 0;
 }
 
-int lantern_state_process_block(LanternState *state, const LanternBlock *block) {
+int lantern_state_process_block(
+    LanternState *state,
+    const LanternBlock *block,
+    const LanternSignedVote *proposer_attestation) {
     if (!state || !block) {
         return -1;
     }
@@ -1003,6 +1000,7 @@ int lantern_state_process_block(LanternState *state, const LanternBlock *block) 
         if (lantern_fork_choice_add_block(
                 state->fork_choice,
                 block,
+                proposer_attestation,
                 &state->latest_justified,
                 &state->latest_finalized,
                 NULL)
@@ -1047,7 +1045,7 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
     uint64_t slots_processed = block->slot >= slot_before ? (block->slot - slot_before) : 0;
     lean_metrics_record_state_transition_slots(slots_processed, slots_duration);
     double block_start = profiling ? state_profile_now() : 0.0;
-    if (lantern_state_process_block(state, block) != 0) {
+    if (lantern_state_process_block(state, block, &signed_block->message.proposer_attestation) != 0) {
         STATE_FAIL("process block failed");
     }
     if (profiling) {

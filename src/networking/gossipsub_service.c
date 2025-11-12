@@ -19,6 +19,29 @@
 #include "protocol/gossipsub/gossipsub.h"
 
 #define LANTERN_GOSSIPSUB_TOPIC_CAP 128u
+#define LANTERN_ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+#define LANTERN_GOSSIPSUB_PROTOCOL "/meshsub/1.0.0"
+#define LANTERN_GOSSIPSUB_HEARTBEAT_INTERVAL_MS 700u
+#define LANTERN_GOSSIPSUB_FANOUT_TTL_MS 60000u
+#define LANTERN_GOSSIPSUB_MESH_D 8
+#define LANTERN_GOSSIPSUB_MESH_D_LOW 6
+#define LANTERN_GOSSIPSUB_MESH_D_HIGH 12
+#define LANTERN_GOSSIPSUB_MESH_D_LAZY 6
+#define LANTERN_GOSSIPSUB_MESSAGE_CACHE_LEN 6u
+#define LANTERN_GOSSIPSUB_MESSAGE_CACHE_GOSSIP 3u
+#define LANTERN_LEANSPEC_SECONDS_PER_SLOT 4u
+#define LANTERN_LEANSPEC_JUSTIFICATION_LOOKBACK 3u
+#define LANTERN_LEANSPEC_SEEN_TTL_FACTOR 2u
+
+static const char *const k_leanspec_gossipsub_protocols[] = {LANTERN_GOSSIPSUB_PROTOCOL};
+
+static uint32_t lantern_leanspec_seen_ttl_ms(void) {
+    const uint64_t ttl_seconds = (uint64_t)LANTERN_LEANSPEC_SECONDS_PER_SLOT
+        * (uint64_t)LANTERN_LEANSPEC_JUSTIFICATION_LOOKBACK
+        * (uint64_t)LANTERN_LEANSPEC_SEEN_TTL_FACTOR;
+    const uint64_t ttl_ms = ttl_seconds * 1000u;
+    return ttl_ms > UINT32_MAX ? UINT32_MAX : (uint32_t)ttl_ms;
+}
 
 static void describe_peer_id(const peer_id_t *peer, char *buffer, size_t length) {
     if (!buffer || length == 0) {
@@ -347,6 +370,17 @@ int lantern_gossipsub_service_start(
     if (libp2p_gossipsub_config_default(&cfg) != LIBP2P_ERR_OK) {
         return -1;
     }
+    cfg.heartbeat_interval_ms = LANTERN_GOSSIPSUB_HEARTBEAT_INTERVAL_MS;
+    cfg.d = LANTERN_GOSSIPSUB_MESH_D;
+    cfg.d_lo = LANTERN_GOSSIPSUB_MESH_D_LOW;
+    cfg.d_hi = LANTERN_GOSSIPSUB_MESH_D_HIGH;
+    cfg.d_lazy = LANTERN_GOSSIPSUB_MESH_D_LAZY;
+    cfg.message_cache_length = LANTERN_GOSSIPSUB_MESSAGE_CACHE_LEN;
+    cfg.message_cache_gossip = LANTERN_GOSSIPSUB_MESSAGE_CACHE_GOSSIP;
+    cfg.seen_cache_ttl_ms = (int)lantern_leanspec_seen_ttl_ms();
+    cfg.fanout_ttl_ms = LANTERN_GOSSIPSUB_FANOUT_TTL_MS;
+    cfg.protocol_ids = k_leanspec_gossipsub_protocols;
+    cfg.protocol_id_count = LANTERN_ARRAY_SIZE(k_leanspec_gossipsub_protocols);
     cfg.enable_flood_publish = true;
 
     libp2p_gossipsub_t *gs = NULL;

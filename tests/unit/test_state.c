@@ -179,7 +179,7 @@ static int test_state_transition_applies_block(void) {
     LanternRoot parent_root;
     expect_zero(lantern_hash_tree_root_block_header(&expected.latest_block_header, &parent_root), "hash parent header");
     block.parent_root = parent_root;
-    expect_zero(lantern_state_process_block(&expected, &block), "expected process block");
+    expect_zero(lantern_state_process_block(&expected, &block, NULL), "expected process block");
     LanternRoot expected_state_root;
     expect_zero(lantern_hash_tree_root_state(&expected, &expected_state_root), "hash expected state");
     block.state_root = expected_state_root;
@@ -431,7 +431,13 @@ static int test_select_block_parent_uses_fork_choice(void) {
     LanternRoot block_one_root;
     expect_zero(lantern_hash_tree_root_block(&block_one, &block_one_root), "block one root");
     expect_zero(
-        lantern_fork_choice_add_block(&fork_choice, &block_one, &state.latest_justified, &state.latest_finalized, &block_one_root),
+        lantern_fork_choice_add_block(
+            &fork_choice,
+            &block_one,
+            NULL,
+            &state.latest_justified,
+            &state.latest_finalized,
+            &block_one_root),
         "add block one to fork choice");
 
     expect_zero(lantern_state_select_block_parent(&state, &parent_root), "select parent after block one");
@@ -448,7 +454,9 @@ static int test_select_block_parent_uses_fork_choice(void) {
     memset(block_two.state_root.bytes, 0x7Au, sizeof(block_two.state_root.bytes));
     LanternRoot block_two_root;
     expect_zero(lantern_hash_tree_root_block(&block_two, &block_two_root), "block two root");
-    expect_zero(lantern_fork_choice_add_block(&fork_choice, &block_two, NULL, NULL, &block_two_root), "add block two");
+    expect_zero(
+        lantern_fork_choice_add_block(&fork_choice, &block_two, NULL, NULL, NULL, &block_two_root),
+        "add block two");
 
     if (lantern_state_select_block_parent(&state, &parent_root) == 0) {
         fprintf(stderr, "Expected parent mismatch detection to fail\n");
@@ -477,7 +485,9 @@ static int test_compute_vote_checkpoints_basic(void) {
     LanternBlock block1;
     LanternRoot block1_root;
     make_block(&state, 1, &genesis_root, &block1, &block1_root);
-    expect_zero(lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, &block1_root), "add block1");
+    expect_zero(
+        lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, NULL, &block1_root),
+        "add block1");
     fork_choice.head = block1_root;
     fork_choice.has_head = true;
     fork_choice.safe_target = block1_root;
@@ -531,12 +541,16 @@ static int test_compute_vote_checkpoints_respects_safe_target(void) {
     LanternBlock block1;
     LanternRoot block1_root;
     make_block(&state, 1, &genesis_root, &block1, &block1_root);
-    expect_zero(lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, &block1_root), "add block1 safe target test");
+    expect_zero(
+        lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, NULL, &block1_root),
+        "add block1 safe target test");
 
     LanternBlock block2;
     LanternRoot block2_root;
     make_block(&state, 2, &block1_root, &block2, &block2_root);
-    expect_zero(lantern_fork_choice_add_block(&fork_choice, &block2, NULL, NULL, &block2_root), "add block2 safe target test");
+    expect_zero(
+        lantern_fork_choice_add_block(&fork_choice, &block2, NULL, NULL, NULL, &block2_root),
+        "add block2 safe target test");
 
     fork_choice.head = block2_root;
     fork_choice.has_head = true;
@@ -604,7 +618,9 @@ static int test_compute_vote_checkpoints_justifiable(void) {
         LanternBlock block;
         LanternRoot block_root;
         make_block(&state, slot, &parent_root, &block, &block_root);
-        expect_zero(lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, &block_root), "add block for justifiable test");
+        expect_zero(
+            lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, NULL, &block_root),
+            "add block for justifiable test");
         block_roots[slot] = block_root;
         parent_root = block_root;
         lantern_block_body_reset(&block.body);

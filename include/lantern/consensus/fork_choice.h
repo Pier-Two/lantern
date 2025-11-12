@@ -77,6 +77,7 @@ int lantern_fork_choice_set_anchor(
 int lantern_fork_choice_add_block(
     LanternForkChoice *store,
     const LanternBlock *block,
+    const LanternSignedVote *proposer_attestation,
     const LanternCheckpoint *post_justified,
     const LanternCheckpoint *post_finalized,
     const LanternRoot *block_root_hint);

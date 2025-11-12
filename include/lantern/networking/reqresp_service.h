@@ -9,10 +9,10 @@
 #include "libp2p/stream.h"
 #include "peer_id/peer_id.h"
 
-#define LANTERN_REQRESP_STATUS_PROTOCOL "/leanconsensus/req/status/1/ssz_snappy"
-#define LANTERN_REQRESP_STATUS_PROTOCOL_LEGACY "/leanconsensus/req/status/legacy/1/ssz_snappy"
-#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL "/leanconsensus/req/lean_blocks_by_root/1/ssz_snappy"
-#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_LEGACY "/leanconsensus/req/blocks_by_root/1/ssz_snappy"
+#define LANTERN_REQRESP_STATUS_PROTOCOL "/leanconsensus/req/status/1/"
+#define LANTERN_REQRESP_STATUS_PROTOCOL_LEGACY "/leanconsensus/req/status/1/ssz_snappy"
+#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL "/leanconsensus/req/blocks_by_root/1/"
+#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_LEGACY "/leanconsensus/req/lean_blocks_by_root/1/ssz_snappy"
 #define LANTERN_REQRESP_STATUS_PREVIEW_BYTES 64u
 #define LANTERN_REQRESP_MAX_CHUNK_BYTES (1u << 22)
 #define LANTERN_REQRESP_MAX_CONTEXT_BYTES (1u << 20)
