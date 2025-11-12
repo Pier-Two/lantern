@@ -44,7 +44,10 @@ int lantern_consensus_runtime_init(
     if (init_clock(&runtime->clock, config) != 0) {
         return -1;
     }
-    runtime->validator_assignment = *assignment;
+    if (lantern_validator_assignment_copy(&runtime->validator_assignment, assignment) != 0) {
+        lantern_consensus_runtime_reset(runtime);
+        return -1;
+    }
     runtime->validator_count = config->validator_count;
     runtime->has_timepoint = false;
     runtime->initialized = true;
@@ -55,6 +58,7 @@ void lantern_consensus_runtime_reset(struct lantern_consensus_runtime *runtime) 
     if (!runtime) {
         return;
     }
+    lantern_validator_assignment_reset(&runtime->validator_assignment);
     memset(runtime, 0, sizeof(*runtime));
 }
 

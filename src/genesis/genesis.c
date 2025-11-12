@@ -33,6 +33,7 @@ static enum lantern_validator_client_kind classify_validator_client(const char *
 static int derive_peer_id_from_privkey_hex(const char *hex, char **out_peer_id);
 static int decode_validator_pubkey_hex(const char *hex, uint8_t out[LANTERN_VALIDATOR_PUBKEY_SIZE]);
 static int set_record_pubkey(struct lantern_validator_record *record);
+static char *trim_whitespace(char *value);
 
 void lantern_genesis_artifacts_init(struct lantern_genesis_artifacts *artifacts) {
     if (!artifacts) {
@@ -109,8 +110,8 @@ error:
     return -1;
 }
 
-const struct lantern_validator_config_entry *lantern_validator_config_find(
-    const struct lantern_validator_config *config,
+struct lantern_validator_config_entry *lantern_validator_config_find(
+    struct lantern_validator_config *config,
     const char *name) {
     if (!config || !name) {
         return NULL;
@@ -121,6 +122,191 @@ const struct lantern_validator_config_entry *lantern_validator_config_find(
         }
     }
     return NULL;
+}
+
+int lantern_validator_config_assign_ranges(
+    struct lantern_validator_config *config,
+    uint64_t validator_count) {
+    if (!config || !config->entries || config->count == 0) {
+        return -1;
+    }
+    uint64_t next_index = 0;
+    for (size_t i = 0; i < config->count; ++i) {
+        struct lantern_validator_config_entry *entry = &config->entries[i];
+        entry->start_index = next_index;
+        uint64_t end = next_index + entry->count;
+        if (end > validator_count) {
+            return -1;
+        }
+        entry->end_index = end;
+        entry->has_range = true;
+        next_index = end;
+    }
+    if (next_index != validator_count) {
+        return -1;
+    }
+    return 0;
+}
+
+static int compare_u64(const void *lhs, const void *rhs) {
+    const uint64_t *a = lhs;
+    const uint64_t *b = rhs;
+    if (*a < *b) {
+        return -1;
+    }
+    if (*a > *b) {
+        return 1;
+    }
+    return 0;
+}
+
+static int append_assignment_index(struct lantern_validator_config_entry *entry, uint64_t index) {
+    if (!entry) {
+        return -1;
+    }
+    for (size_t i = 0; i < entry->indices_len; ++i) {
+        if (entry->indices[i] == index) {
+            return -1;
+        }
+    }
+    if (entry->indices_len == entry->indices_cap) {
+        size_t new_cap = entry->indices_cap == 0 ? 4 : entry->indices_cap * 2;
+        uint64_t *grown = realloc(entry->indices, new_cap * sizeof(*grown));
+        if (!grown) {
+            return -1;
+        }
+        entry->indices = grown;
+        entry->indices_cap = new_cap;
+    }
+    entry->indices[entry->indices_len++] = index;
+    return 0;
+}
+
+int lantern_validator_config_apply_assignments(
+    struct lantern_validator_config *config,
+    const char *path,
+    uint64_t validator_count) {
+    if (!config || !config->entries || config->count == 0 || !path) {
+        return -1;
+    }
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        return -1;
+    }
+
+    bool *assigned = NULL;
+    if (validator_count > 0) {
+        assigned = calloc((size_t)validator_count, sizeof(*assigned));
+        if (!assigned) {
+            fclose(fp);
+            return -1;
+        }
+    }
+
+    bool saw_mapping = false;
+    size_t assigned_total = 0;
+    struct lantern_validator_config_entry *current = NULL;
+
+    char line[2048];
+    while (fgets(line, sizeof(line), fp)) {
+        char *trimmed = trim_whitespace(line);
+        if (!trimmed || *trimmed == '\0' || *trimmed == '#') {
+            continue;
+        }
+        if (*trimmed == '-') {
+            if (!current || !assigned) {
+                continue;
+            }
+            char *value = trimmed + 1;
+            value = trim_whitespace(value);
+            if (!value || *value == '\0') {
+                continue;
+            }
+            char *endptr = NULL;
+            unsigned long long parsed = strtoull(value, &endptr, 10);
+            if (endptr == value) {
+                continue;
+            }
+            if (parsed >= validator_count) {
+                free(assigned);
+                fclose(fp);
+                return -1;
+            }
+            if (assigned[(size_t)parsed]) {
+                free(assigned);
+                fclose(fp);
+                return -1;
+            }
+            if (append_assignment_index(current, (uint64_t)parsed) != 0) {
+                free(assigned);
+                fclose(fp);
+                return -1;
+            }
+            assigned[(size_t)parsed] = true;
+            assigned_total++;
+            continue;
+        }
+        char *colon = strchr(trimmed, ':');
+        if (!colon) {
+            current = NULL;
+            continue;
+        }
+        bool has_value = false;
+        for (char *p = colon + 1; *p; ++p) {
+            if (!isspace((unsigned char)*p)) {
+                has_value = true;
+                break;
+            }
+        }
+        if (has_value) {
+            current = NULL;
+            continue;
+        }
+        *colon = '\0';
+        char *name = trim_whitespace(trimmed);
+        if (!name || *name == '\0') {
+            current = NULL;
+            continue;
+        }
+        size_t name_len = strlen(name);
+        if (name_len >= 2 && ((name[0] == '"' && name[name_len - 1] == '"')
+                              || (name[0] == '\'' && name[name_len - 1] == '\''))) {
+            name[name_len - 1] = '\0';
+            ++name;
+        }
+        struct lantern_validator_config_entry *entry = lantern_validator_config_find(config, name);
+        current = entry;
+        if (entry) {
+            saw_mapping = true;
+            entry->indices_len = 0;
+        }
+    }
+
+    fclose(fp);
+
+    if (!saw_mapping) {
+        free(assigned);
+        return 0;
+    }
+    if (assigned_total != validator_count) {
+        free(assigned);
+        return -1;
+    }
+
+    for (size_t i = 0; i < config->count; ++i) {
+        struct lantern_validator_config_entry *entry = &config->entries[i];
+        if (entry->indices_len != entry->count || entry->indices_len == 0) {
+            free(assigned);
+            return -1;
+        }
+        qsort(entry->indices, entry->indices_len, sizeof(*entry->indices), compare_u64);
+        entry->start_index = entry->indices[0];
+        entry->end_index = entry->indices[entry->indices_len - 1] + 1u;
+        entry->has_range = true;
+    }
+
+    free(assigned);
+    return 0;
 }
 
 static void free_validator_registry(struct lantern_validator_registry *registry) {
@@ -174,6 +360,15 @@ static void free_validator_config_entry(struct lantern_validator_config_entry *e
     entry->enr.quic_port = 0;
     entry->enr.sequence = 0;
     entry->count = 0;
+    free(entry->hash_sig_dir);
+    entry->hash_sig_dir = NULL;
+    entry->has_range = false;
+    entry->start_index = 0;
+    entry->end_index = 0;
+    free(entry->indices);
+    entry->indices = NULL;
+    entry->indices_len = 0;
+    entry->indices_cap = 0;
 }
 
 static char *trim_whitespace(char *value) {
@@ -561,6 +756,7 @@ static int parse_validator_config(const char *path, struct lantern_validator_con
         const char *ip_val = yaml_object_value(&objects[i], "ip");
         const char *quic_val = yaml_object_value(&objects[i], "quic");
         const char *seq_val = yaml_object_value(&objects[i], "seq");
+        const char *hash_dir_val = yaml_object_value(&objects[i], "hashSigDir");
 
         entries[i].name = dup_trimmed(name_val);
         entries[i].privkey_hex = dup_trimmed(priv_val);
@@ -599,6 +795,13 @@ static int parse_validator_config(const char *path, struct lantern_validator_con
             free(entries);
             return -1;
         }
+        entries[i].hash_sig_dir = dup_trimmed(hash_dir_val);
+        entries[i].has_range = false;
+        entries[i].start_index = 0;
+        entries[i].end_index = 0;
+        entries[i].indices = NULL;
+        entries[i].indices_len = 0;
+        entries[i].indices_cap = 0;
     }
 
     lantern_yaml_free_objects(objects, count);

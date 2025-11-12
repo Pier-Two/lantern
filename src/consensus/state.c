@@ -20,7 +20,9 @@
 
 struct lantern_vote_record {
     LanternVote vote;
+    LanternSignature signature;
     bool has_vote;
+    bool has_signature;
 };
 
 struct state_profile_metric {
@@ -55,6 +57,18 @@ static void state_profile_record(struct state_profile_metric *metric, double del
 
 static void record_attestation_validation_metric(double start_seconds, bool valid) {
     lean_metrics_record_attestation_validation(lantern_time_now_seconds() - start_seconds, valid);
+}
+
+static bool signature_is_zero(const LanternSignature *signature) {
+    if (!signature) {
+        return true;
+    }
+    for (size_t i = 0; i < LANTERN_SIGNATURE_SIZE; ++i) {
+        if (signature->bytes[i] != 0u) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static struct state_profile_metric g_profile_process_slots;
@@ -134,6 +148,94 @@ void lantern_root_list_reset(struct lantern_root_list *list) {
     list->items = NULL;
     list->length = 0;
     list->capacity = 0;
+}
+
+static int clone_root_list(struct lantern_root_list *dst, const struct lantern_root_list *src) {
+    lantern_root_list_init(dst);
+    if (!src || src->length == 0) {
+        return 0;
+    }
+    if (!src->items) {
+        return -1;
+    }
+    size_t count = src->length;
+    LanternRoot *items = malloc(count * sizeof(*items));
+    if (!items) {
+        return -1;
+    }
+    memcpy(items, src->items, count * sizeof(*items));
+    dst->items = items;
+    dst->length = count;
+    dst->capacity = count;
+    return 0;
+}
+
+static int clone_bitlist(struct lantern_bitlist *dst, const struct lantern_bitlist *src) {
+    lantern_bitlist_init(dst);
+    if (!src || src->bit_length == 0) {
+        return 0;
+    }
+    size_t bytes = bitlist_required_bytes(src->bit_length);
+    if (bytes == 0) {
+        dst->bit_length = 0;
+        dst->capacity = 0;
+        return 0;
+    }
+    if (!src->bytes) {
+        return -1;
+    }
+    uint8_t *copy = malloc(bytes);
+    if (!copy) {
+        return -1;
+    }
+    memcpy(copy, src->bytes, bytes);
+    dst->bytes = copy;
+    dst->bit_length = src->bit_length;
+    dst->capacity = bytes;
+    return 0;
+}
+
+static int lantern_state_clone_view(const LanternState *source, LanternState *dest) {
+    if (!source || !dest) {
+        return -1;
+    }
+    lantern_state_init(dest);
+    dest->config = source->config;
+    dest->slot = source->slot;
+    dest->latest_block_header = source->latest_block_header;
+    dest->latest_justified = source->latest_justified;
+    dest->latest_finalized = source->latest_finalized;
+    dest->validator_registry_root = source->validator_registry_root;
+
+    if (clone_root_list(&dest->historical_block_hashes, &source->historical_block_hashes) != 0) {
+        goto error;
+    }
+    if (clone_root_list(&dest->justification_roots, &source->justification_roots) != 0) {
+        goto error;
+    }
+    if (clone_bitlist(&dest->justified_slots, &source->justified_slots) != 0) {
+        goto error;
+    }
+    if (clone_bitlist(&dest->justification_validators, &source->justification_validators) != 0) {
+        goto error;
+    }
+
+    if (source->validator_votes && source->validator_votes_len > 0) {
+        size_t len = source->validator_votes_len;
+        struct lantern_vote_record *records = malloc(len * sizeof(*records));
+        if (!records) {
+            goto error;
+        }
+        memcpy(records, source->validator_votes, len * sizeof(*records));
+        dest->validator_votes = records;
+        dest->validator_votes_len = len;
+    }
+    dest->fork_choice = NULL;
+    return 0;
+
+error:
+    lantern_state_reset(dest);
+    return -1;
 }
 
 int lantern_root_list_resize(struct lantern_root_list *list, size_t new_length) {
@@ -474,26 +576,62 @@ bool lantern_state_validator_has_vote(const LanternState *state, size_t index) {
     return state->validator_votes[index].has_vote;
 }
 
-int lantern_state_get_validator_vote(const LanternState *state, size_t index, LanternVote *out_vote) {
+int lantern_state_get_signed_validator_vote(
+    const LanternState *state,
+    size_t index,
+    LanternSignedVote *out_vote) {
     if (!state || !state->validator_votes || index >= state->validator_votes_len || !out_vote) {
         return -1;
     }
-    if (!state->validator_votes[index].has_vote) {
+    const struct lantern_vote_record *record = &state->validator_votes[index];
+    if (!record->has_vote) {
         return -1;
     }
-    *out_vote = state->validator_votes[index].vote;
-    out_vote->validator_id = (uint64_t)index;
+    memset(out_vote, 0, sizeof(*out_vote));
+    out_vote->data = record->vote;
+    out_vote->data.validator_id = (uint64_t)index;
+    if (record->has_signature) {
+        out_vote->signature = record->signature;
+    }
+    return 0;
+}
+
+int lantern_state_get_validator_vote(const LanternState *state, size_t index, LanternVote *out_vote) {
+    if (!out_vote) {
+        return -1;
+    }
+    LanternSignedVote signed_vote;
+    if (lantern_state_get_signed_validator_vote(state, index, &signed_vote) != 0) {
+        return -1;
+    }
+    *out_vote = signed_vote.data;
+    return 0;
+}
+
+int lantern_state_set_signed_validator_vote(
+    LanternState *state,
+    size_t index,
+    const LanternSignedVote *vote) {
+    if (!state || !state->validator_votes || index >= state->validator_votes_len || !vote) {
+        return -1;
+    }
+    struct lantern_vote_record *record = &state->validator_votes[index];
+    record->vote = vote->data;
+    record->vote.validator_id = (uint64_t)index;
+    record->has_vote = true;
+    record->signature = vote->signature;
+    record->has_signature = !signature_is_zero(&vote->signature);
     return 0;
 }
 
 int lantern_state_set_validator_vote(LanternState *state, size_t index, const LanternVote *vote) {
-    if (!state || !state->validator_votes || index >= state->validator_votes_len || !vote) {
+    if (!vote) {
         return -1;
     }
-    state->validator_votes[index].vote = *vote;
-    state->validator_votes[index].vote.validator_id = (uint64_t)index;
-    state->validator_votes[index].has_vote = true;
-    return 0;
+    LanternSignedVote signed_vote;
+    memset(&signed_vote, 0, sizeof(signed_vote));
+    signed_vote.data = *vote;
+    return lantern_state_set_signed_validator_vote(state, index, &signed_vote);
 }
 
 void lantern_state_clear_validator_vote(LanternState *state, size_t index) {
@@ -891,8 +1029,13 @@ int lantern_state_process_attestations(LanternState *state, const LanternAttesta
                 return -1;
             }
         }
-        record->vote = *vote;
-        record->has_vote = true;
+        LanternSignedVote stored_vote = *signed_vote;
+        stored_vote.data.validator_id = vote->validator_id;
+        if (lantern_state_set_signed_validator_vote(state, (size_t)vote->validator_id, &stored_vote) != 0) {
+            record_attestation_validation_metric(att_validation_start, false);
+            return -1;
+        }
+        record = &state->validator_votes[vote->validator_id];
         if (target_is_justified) {
             if ((vote->source.slot + 1 == vote->target.slot) && latest_justified.slot < vote->target.slot) {
                 latest_finalized = vote->source;
@@ -1196,12 +1339,45 @@ int lantern_state_collect_attestations_for_block(
         LanternSignedVote signed_vote;
         memset(&signed_vote, 0, sizeof(signed_vote));
         signed_vote.data = record->vote;
+        if (record->has_signature) {
+            signed_vote.signature = record->signature;
+        }
         if (lantern_attestations_append(out_attestations, &signed_vote) != 0) {
             (void)lantern_attestations_resize(out_attestations, 0);
             return -1;
         }
     }
     return 0;
+}
+
+int lantern_state_preview_post_state_root(
+    const LanternState *state,
+    const LanternSignedBlock *block,
+    LanternRoot *out_state_root) {
+    if (!state || !block || !out_state_root) {
+        return -1;
+    }
+    LanternState scratch;
+    if (lantern_state_clone_view(state, &scratch) != 0) {
+        return -1;
+    }
+    scratch.fork_choice = NULL;
+    int rc = 0;
+    if (lantern_state_process_slots(&scratch, block->message.block.slot) != 0) {
+        rc = -1;
+        goto cleanup;
+    }
+    if (lantern_state_process_block(&scratch, &block->message.block, &block->message.proposer_attestation) != 0) {
+        rc = -1;
+        goto cleanup;
+    }
+    if (lantern_hash_tree_root_state(&scratch, out_state_root) != 0) {
+        rc = -1;
+    }
+
+cleanup:
+    lantern_state_reset(&scratch);
+    return rc;
 }
 
 void lantern_state_profile_dump(void) {

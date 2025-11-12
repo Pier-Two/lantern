@@ -61,6 +61,13 @@ struct lantern_validator_config_entry {
     enum lantern_validator_client_kind client_kind;
     struct lantern_validator_config_enr enr;
     uint64_t count;
+    char *hash_sig_dir;
+    uint64_t start_index;
+    uint64_t end_index;
+    bool has_range;
+    uint64_t *indices;
+    size_t indices_len;
+    size_t indices_cap;
 };
 
 struct lantern_validator_config {
@@ -81,9 +88,16 @@ struct lantern_genesis_artifacts {
 void lantern_genesis_artifacts_init(struct lantern_genesis_artifacts *artifacts);
 void lantern_genesis_artifacts_reset(struct lantern_genesis_artifacts *artifacts);
 int lantern_genesis_load(struct lantern_genesis_artifacts *artifacts, const struct lantern_genesis_paths *paths);
-const struct lantern_validator_config_entry *lantern_validator_config_find(
-    const struct lantern_validator_config *config,
+struct lantern_validator_config_entry *lantern_validator_config_find(
+    struct lantern_validator_config *config,
     const char *name);
+int lantern_validator_config_assign_ranges(
+    struct lantern_validator_config *config,
+    uint64_t validator_count);
+int lantern_validator_config_apply_assignments(
+    struct lantern_validator_config *config,
+    const char *path,
+    uint64_t validator_count);
 
 #ifdef __cplusplus
 }

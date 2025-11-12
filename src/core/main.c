@@ -29,6 +29,11 @@ enum {
     OPT_BOOTNODE_FILE,
     OPT_DEVNET,
     OPT_LOG_LEVEL,
+    OPT_HASH_SIG_KEY_DIR,
+    OPT_HASH_SIG_PUBLIC_PATH,
+    OPT_HASH_SIG_SECRET_PATH,
+    OPT_HASH_SIG_PUBLIC_TEMPLATE,
+    OPT_HASH_SIG_SECRET_TEMPLATE,
 };
 
 static void print_usage(const char *prog);
@@ -85,6 +90,11 @@ int main(int argc, char **argv) {
         {"bootnodes-file", required_argument, NULL, OPT_BOOTNODE_FILE},
         {"devnet", required_argument, NULL, OPT_DEVNET},
         {"log-level", required_argument, NULL, OPT_LOG_LEVEL},
+        {"hash-sig-key-dir", required_argument, NULL, OPT_HASH_SIG_KEY_DIR},
+        {"hash-sig-public", required_argument, NULL, OPT_HASH_SIG_PUBLIC_PATH},
+        {"hash-sig-secret", required_argument, NULL, OPT_HASH_SIG_SECRET_PATH},
+        {"hash-sig-public-template", required_argument, NULL, OPT_HASH_SIG_PUBLIC_TEMPLATE},
+        {"hash-sig-secret-template", required_argument, NULL, OPT_HASH_SIG_SECRET_TEMPLATE},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'v'},
         {0, 0, 0, 0},
@@ -172,6 +182,21 @@ int main(int argc, char **argv) {
                     optarg);
                 goto error;
             }
+            break;
+        case OPT_HASH_SIG_KEY_DIR:
+            options.hash_sig_key_dir = optarg;
+            break;
+        case OPT_HASH_SIG_PUBLIC_PATH:
+            options.hash_sig_public_path = optarg;
+            break;
+        case OPT_HASH_SIG_SECRET_PATH:
+            options.hash_sig_secret_path = optarg;
+            break;
+        case OPT_HASH_SIG_PUBLIC_TEMPLATE:
+            options.hash_sig_public_template = optarg;
+            break;
+        case OPT_HASH_SIG_SECRET_TEMPLATE:
+            options.hash_sig_secret_template = optarg;
             break;
         case OPT_BOOTNODES:
             if (add_bootnodes_argument(&options, optarg) != 0) {
@@ -285,6 +310,11 @@ static void print_usage(const char *prog) {
         "  --bootnode ENR               Add a bootnode enr\n"
         "  --bootnodes VALUE            ENR or path to YAML/List file of ENRs\n"
         "  --bootnodes-file PATH        File with newline-delimited ENRs\n"
+        "  --hash-sig-key-dir PATH     Directory containing hash-sig key files\n"
+        "  --hash-sig-public PATH      Path to a single hash-sig public key file\n"
+        "  --hash-sig-secret PATH      Path to a single hash-sig secret key file\n"
+        "  --hash-sig-public-template STR  printf-style template for public key paths\n"
+        "  --hash-sig-secret-template STR  printf-style template for secret key paths\n"
         "  --devnet NAME                Devnet identifier for gossip topics\n"
         "  --log-level LEVEL           Minimum log level (trace, debug, info, warn, error)\n"
         "  --help                       Show this message\n"

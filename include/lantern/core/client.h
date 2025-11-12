@@ -18,6 +18,8 @@
 #include "lantern/networking/reqresp_service.h"
 #include "lantern/support/string_list.h"
 
+#include "pq-bindings-c-rust.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -49,6 +51,11 @@ struct lantern_client_options {
     uint16_t metrics_port;
     const char *devnet;
     struct lantern_string_list bootnodes;
+    const char *hash_sig_key_dir;
+    const char *hash_sig_public_path;
+    const char *hash_sig_secret_path;
+    const char *hash_sig_public_template;
+    const char *hash_sig_secret_template;
 };
 
 struct libp2p_subscription;
@@ -68,12 +75,30 @@ struct lantern_pending_block_list {
     size_t capacity;
 };
 
+struct lantern_validator_duty_state {
+    uint64_t last_slot;
+    uint32_t last_interval;
+    bool have_timepoint;
+    bool slot_proposed;
+    bool slot_attested;
+    bool pending_local_proposal;
+    uint64_t pending_local_index;
+    bool proposal_signal_pending;
+};
+
 struct lantern_local_validator {
     uint64_t global_index;
     const struct lantern_validator_record *registry;
     uint8_t *secret;
     size_t secret_len;
     bool has_secret;
+    struct PQSignatureSchemeSecretKey *secret_key;
+    bool has_secret_handle;
+    uint64_t last_proposed_slot;
+    uint64_t last_attested_slot;
+    LanternSignedVote pending_attestation;
+    uint64_t pending_attestation_slot;
+    bool has_pending_attestation;
 };
 
 struct lantern_client {
@@ -101,8 +126,11 @@ struct lantern_client {
     size_t local_validator_count;
     struct lantern_validator_assignment validator_assignment;
     bool has_validator_assignment;
+    struct PQSignatureSchemePublicKey **validator_pubkeys;
+    size_t validator_pubkey_count;
     struct lantern_consensus_runtime runtime;
     bool has_runtime;
+    struct lantern_validator_duty_state validator_duty;
     LanternForkChoice fork_choice;
     bool has_fork_choice;
     LanternState state;
@@ -112,6 +140,9 @@ struct lantern_client {
     bool *validator_enabled;
     pthread_mutex_t validator_lock;
     bool validator_lock_initialized;
+    pthread_t validator_thread;
+    bool validator_thread_started;
+    int validator_stop_flag;
     struct lantern_metrics_server metrics_server;
     bool metrics_running;
     struct lantern_http_server http_server;
@@ -136,6 +167,11 @@ struct lantern_client {
     pthread_mutex_t status_lock;
     bool status_lock_initialized;
     bool debug_disable_block_requests;
+    char *hash_sig_key_dir;
+    char *hash_sig_public_template;
+    char *hash_sig_secret_template;
+    char *hash_sig_public_path;
+    char *hash_sig_secret_path;
 };
 
 void lantern_client_options_init(struct lantern_client_options *options);

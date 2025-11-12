@@ -64,6 +64,13 @@ static void build_vote(
     memset(vote->head.root.bytes, 0x33, LANTERN_ROOT_SIZE);
 }
 
+static void fill_signature(LanternSignature *signature, uint8_t marker) {
+    if (!signature) {
+        return;
+    }
+    memset(signature->bytes, marker, LANTERN_SIGNATURE_SIZE);
+}
+
 static void build_signed_block(
     const LanternState *state,
     uint64_t slot,
@@ -123,7 +130,11 @@ int main(void) {
 
     LanternVote vote;
     build_vote(&vote, 5u, 2u, 4u);
-    expect_zero(lantern_state_set_validator_vote(&state, 1u, &vote), "set validator vote");
+    LanternSignedVote signed_vote;
+    memset(&signed_vote, 0, sizeof(signed_vote));
+    signed_vote.data = vote;
+    fill_signature(&signed_vote.signature, 0xAB);
+    expect_zero(lantern_state_set_signed_validator_vote(&state, 1u, &signed_vote), "set validator vote");
     expect_zero(lantern_storage_save_votes(base_dir, &state), "save votes");
     lantern_state_clear_validator_vote(&state, 1u);
     expect_true(!lantern_state_validator_has_vote(&state, 1u), "vote cleared");
@@ -139,6 +150,16 @@ int main(void) {
     assert(restored_vote.slot == vote.slot);
     assert(restored_vote.source.slot == vote.source.slot);
     assert(restored_vote.target.slot == vote.target.slot);
+    LanternSignedVote restored_signed_vote;
+    expect_zero(
+        lantern_state_get_signed_validator_vote(&state, 1u, &restored_signed_vote),
+        "get restored signed vote");
+    assert(
+        memcmp(
+            restored_signed_vote.signature.bytes,
+            signed_vote.signature.bytes,
+            LANTERN_SIGNATURE_SIZE)
+        == 0);
 
     LanternSignedBlock block;
     LanternRoot block_root;

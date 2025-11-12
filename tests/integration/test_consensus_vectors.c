@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -516,11 +517,61 @@ static int label_registry_assign(
     return -1;
 }
 
-static void reset_block(LanternBlock *block) {
+static void reset_plain_block(LanternBlock *block) {
     if (!block) {
         return;
     }
     lantern_block_body_reset(&block->body);
+}
+
+static void reset_block_message(LanternBlockWithAttestation *message) {
+    if (!message) {
+        return;
+    }
+    lantern_block_body_reset(&message->block.body);
+    LanternSignedBlock *owner =
+        (LanternSignedBlock *)((uint8_t *)message - offsetof(LanternSignedBlock, message));
+    if (owner) {
+        lantern_block_signatures_reset(&owner->signatures);
+    }
+}
+
+static void reset_signed_block_impl(LanternSignedBlock *block) {
+    if (!block) {
+        return;
+    }
+    reset_plain_block(&block->message.block);
+    lantern_block_signatures_reset(&block->signatures);
+}
+
+#define reset_block(ptr)                                                                           \
+    _Generic(                                                                                      \
+        (ptr),                                                                                     \
+        LanternBlock *: reset_plain_block,                                                         \
+        LanternBlockWithAttestation *: reset_block_message,                                        \
+        LanternSignedBlock *: reset_signed_block_impl)(ptr)
+
+static int ensure_signature_envelope(
+    const char *fixture_path,
+    int block_index,
+    const LanternSignedBlock *block) {
+    if (!block) {
+        return -1;
+    }
+    size_t attestation_count = block->message.block.body.attestations.length;
+    size_t expected = attestation_count + 1u;
+    if (block->signatures.length != expected || (expected > 0 && !block->signatures.data)) {
+        fprintf(
+            stderr,
+            "%s block[%d]: expected %zu block signatures (attestations=%zu + proposer) but got %zu\\n",
+            fixture_path ? fixture_path : "(unknown)",
+            block_index,
+            expected,
+            attestation_count,
+            block->signatures.length);
+        return -1;
+    }
+    return 0;
 }
 
 static int run_state_transition_fixture(const char *path);
@@ -649,6 +700,13 @@ static int run_state_transition_fixture(const char *path) {
 
         LanternSignedBlock signed_block;
         if (lantern_fixture_parse_signed_block(&doc, block_idx, &signed_block) != 0) {
+            lantern_state_reset(&state);
+            lantern_fixture_document_reset(&doc);
+            return -1;
+        }
+
+        if (ensure_signature_envelope(path, i, &signed_block) != 0) {
+            reset_block(&signed_block.message);
             lantern_state_reset(&state);
             lantern_fixture_document_reset(&doc);
             return -1;
@@ -883,6 +941,16 @@ static int run_fork_choice_fixture(const char *path) {
 
         LanternSignedBlock signed_block;
         if (lantern_fixture_parse_signed_block(&doc, block_idx, &signed_block) != 0) {
+            reset_block(&anchor_block);
+            lantern_fork_choice_reset(&store);
+            lantern_state_reset(&state);
+            lantern_fixture_document_reset(&doc);
+            stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
+            return -1;
+        }
+
+        if (ensure_signature_envelope(path, i, &signed_block) != 0) {
+            reset_block(&signed_block.message);
             reset_block(&anchor_block);
             lantern_fork_choice_reset(&store);
             lantern_state_reset(&state);

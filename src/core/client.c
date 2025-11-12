@@ -8,11 +8,13 @@
 #include "lantern/consensus/signature.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/consensus/fork_choice.h"
+#include "lantern/crypto/hash_sig.h"
 #include "lantern/storage/storage.h"
 #include "lantern/http/server.h"
 #include "lantern/support/strings.h"
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/support/log.h"
+#include "lantern/support/time.h"
 #include "lantern/support/secure_mem.h"
 #include "lantern/networking/messages.h"
 #include "lantern/networking/reqresp_service.h"
@@ -27,6 +29,7 @@
 #include "protocol/ping/protocol_ping.h"
 #include "peer_id/peer_id.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
+#include "internal/yaml_parser.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -78,6 +81,12 @@ static int find_local_validator_index(const struct lantern_client *client, uint6
 static void reset_local_validators(struct lantern_client *client);
 static void local_validator_cleanup(struct lantern_local_validator *validator);
 static int decode_validator_secret(const char *hex, uint8_t **out_key, size_t *out_len);
+static int configure_hash_sig_sources(struct lantern_client *client, const struct lantern_client_options *options);
+static int load_hash_sig_keys(struct lantern_client *client);
+static void free_hash_sig_pubkeys(struct lantern_client *client);
+static const struct PQSignatureSchemePublicKey *lantern_client_pubkey_handle(
+    const struct lantern_client *client,
+    uint64_t validator_index);
 static int http_snapshot_head(void *context, struct lantern_http_head_snapshot *out_snapshot);
 static size_t http_validator_count_cb(void *context);
 static int http_validator_info_cb(void *context, size_t index, struct lantern_http_validator_info *out_info);
@@ -136,6 +145,28 @@ static bool lantern_client_is_peer_connected(struct lantern_client *client, cons
 static void lantern_client_enqueue_status_peer(struct lantern_client *client, const char *peer_id);
 static int start_peer_dialer(struct lantern_client *client);
 static void stop_peer_dialer(struct lantern_client *client);
+static uint64_t validator_wall_time_now_seconds(void);
+static void validator_sleep_ms(uint32_t ms);
+static bool validator_service_should_run(const struct lantern_client *client);
+static bool validator_is_enabled(const struct lantern_client *client, size_t local_index);
+static uint64_t validator_global_index(const struct lantern_client *client, size_t local_index);
+static int validator_sign_vote(
+    struct lantern_local_validator *validator,
+    uint64_t slot,
+    LanternSignedVote *vote);
+static int validator_store_vote(struct lantern_client *client, const LanternSignedVote *vote);
+static int validator_publish_vote(struct lantern_client *client, const LanternSignedVote *vote);
+static int validator_build_block(
+    struct lantern_client *client,
+    uint64_t slot,
+    size_t local_index,
+    LanternSignedBlock *out_block,
+    LanternSignedVote *out_proposer_vote);
+static int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t local_index);
+static int validator_publish_attestations(struct lantern_client *client, uint64_t slot);
+static int start_validator_service(struct lantern_client *client);
+static void stop_validator_service(struct lantern_client *client);
+static void *validator_thread(void *arg);
 static void *peer_dialer_thread(void *arg);
 static void peer_dialer_attempt(struct lantern_client *client);
 static void peer_dialer_sleep(struct lantern_client *client, unsigned seconds);
@@ -1504,6 +1535,16 @@ static void local_validator_cleanup(struct lantern_local_validator *validator) {
     validator->secret = NULL;
     validator->secret_len = 0;
     validator->has_secret = false;
+    if (validator->secret_key) {
+        pq_secret_key_free(validator->secret_key);
+        validator->secret_key = NULL;
+    }
+    validator->has_secret_handle = false;
+    validator->last_proposed_slot = UINT64_MAX;
+    validator->last_attested_slot = UINT64_MAX;
+    validator->has_pending_attestation = false;
+    validator->pending_attestation_slot = UINT64_MAX;
+    memset(&validator->pending_attestation, 0, sizeof(validator->pending_attestation));
 }
 
 static void reset_local_validators(struct lantern_client *client) {
@@ -1571,6 +1612,595 @@ static int decode_validator_secret(const char *hex, uint8_t **out_key, size_t *o
     return 0;
 }
 
+struct hash_sig_manifest_entry {
+    uint64_t index;
+    char *public_file;
+    char *secret_file;
+};
+
+struct hash_sig_manifest {
+    struct hash_sig_manifest_entry *entries;
+    size_t count;
+};
+
+static void hash_sig_manifest_init(struct hash_sig_manifest *manifest) {
+    if (!manifest) {
+        return;
+    }
+    manifest->entries = NULL;
+    manifest->count = 0;
+}
+
+static void hash_sig_manifest_reset(struct hash_sig_manifest *manifest) {
+    if (!manifest || !manifest->entries) {
+        return;
+    }
+    for (size_t i = 0; i < manifest->count; ++i) {
+        free(manifest->entries[i].public_file);
+        free(manifest->entries[i].secret_file);
+    }
+    free(manifest->entries);
+    manifest->entries = NULL;
+    manifest->count = 0;
+}
+
+static const char *hash_sig_yaml_value(const LanternYamlObject *object, const char *key) {
+    if (!object || !key || !object->pairs) {
+        return NULL;
+    }
+    for (size_t i = 0; i < object->num_pairs; ++i) {
+        if (object->pairs[i].key && strcmp(object->pairs[i].key, key) == 0) {
+            return object->pairs[i].value;
+        }
+    }
+    return NULL;
+}
+
+static int hash_sig_parse_u64(const char *text, uint64_t *out_value) {
+    if (!text || !out_value) {
+        return -1;
+    }
+    char *end = NULL;
+    errno = 0;
+    unsigned long long parsed = strtoull(text, &end, 0);
+    if (errno != 0 || end == text) {
+        return -1;
+    }
+    *out_value = (uint64_t)parsed;
+    return 0;
+}
+
+static int hash_sig_manifest_load(const char *dir, struct hash_sig_manifest *manifest) {
+    if (!dir || !manifest) {
+        return -1;
+    }
+    hash_sig_manifest_reset(manifest);
+
+    char *manifest_path = NULL;
+    size_t dir_len = strlen(dir);
+    const char *filename = "validator-keys-manifest.yaml";
+    size_t filename_len = strlen(filename);
+    bool need_sep = dir_len > 0 && dir[dir_len - 1] != '/' && dir[dir_len - 1] != '\\';
+    size_t total = dir_len + (need_sep ? 1 : 0) + filename_len + 1;
+    manifest_path = malloc(total);
+    if (!manifest_path) {
+        return -1;
+    }
+    memcpy(manifest_path, dir, dir_len);
+    size_t offset = dir_len;
+    if (need_sep) {
+        manifest_path[offset++] = '/';
+    }
+    memcpy(manifest_path + offset, filename, filename_len);
+    manifest_path[offset + filename_len] = '\0';
+
+    size_t count = 0;
+    LanternYamlObject *objects = lantern_yaml_read_array(manifest_path, "validators", &count);
+    free(manifest_path);
+    manifest_path = NULL;
+    if (!objects || count == 0) {
+        lantern_yaml_free_objects(objects, count);
+        return -1;
+    }
+
+    struct hash_sig_manifest_entry *entries = calloc(count, sizeof(*entries));
+    if (!entries) {
+        lantern_yaml_free_objects(objects, count);
+        return -1;
+    }
+
+    for (size_t i = 0; i < count; ++i) {
+        const char *index_text = hash_sig_yaml_value(&objects[i], "index");
+        const char *public_file = hash_sig_yaml_value(&objects[i], "public_key_file");
+        const char *secret_file = hash_sig_yaml_value(&objects[i], "secret_key_file");
+        if (!index_text || !public_file || !secret_file) {
+            lantern_yaml_free_objects(objects, count);
+            hash_sig_manifest_reset(&(struct hash_sig_manifest){.entries = entries, .count = count});
+            return -1;
+        }
+        uint64_t index = 0;
+        if (hash_sig_parse_u64(index_text, &index) != 0) {
+            lantern_yaml_free_objects(objects, count);
+            hash_sig_manifest_reset(&(struct hash_sig_manifest){.entries = entries, .count = count});
+            return -1;
+        }
+        entries[i].index = index;
+        entries[i].public_file = lantern_string_duplicate(public_file);
+        entries[i].secret_file = lantern_string_duplicate(secret_file);
+        if (!entries[i].public_file || !entries[i].secret_file) {
+            lantern_yaml_free_objects(objects, count);
+            hash_sig_manifest_reset(&(struct hash_sig_manifest){.entries = entries, .count = count});
+            return -1;
+        }
+    }
+
+    lantern_yaml_free_objects(objects, count);
+    manifest->entries = entries;
+    manifest->count = count;
+    return 0;
+}
+
+static const struct hash_sig_manifest_entry *hash_sig_manifest_find(
+    const struct hash_sig_manifest *manifest,
+    uint64_t index) {
+    if (!manifest || !manifest->entries) {
+        return NULL;
+    }
+    for (size_t i = 0; i < manifest->count; ++i) {
+        if (manifest->entries[i].index == index) {
+            return &manifest->entries[i];
+        }
+    }
+    return NULL;
+}
+
+static const char *hash_sig_non_empty(const char *value) {
+    return (value && value[0] != '\0') ? value : NULL;
+}
+
+static int hash_sig_join_path(const char *dir, const char *leaf, char **out_path) {
+    if (!dir || !leaf || !out_path) {
+        return -1;
+    }
+    size_t dir_len = strlen(dir);
+    size_t leaf_len = strlen(leaf);
+    bool need_sep = dir_len > 0 && dir[dir_len - 1] != '/' && dir[dir_len - 1] != '\\';
+    size_t total = dir_len + (need_sep ? 1 : 0) + leaf_len + 1;
+    char *buffer = malloc(total);
+    if (!buffer) {
+        return -1;
+    }
+    memcpy(buffer, dir, dir_len);
+    size_t offset = dir_len;
+    if (need_sep) {
+        buffer[offset++] = '/';
+    }
+    memcpy(buffer + offset, leaf, leaf_len);
+    buffer[offset + leaf_len] = '\0';
+    *out_path = buffer;
+    return 0;
+}
+
+static int hash_sig_format_index_template(const char *template, uint64_t index, char **out_path) {
+    if (!template || !out_path) {
+        return -1;
+    }
+    unsigned long long value = (unsigned long long)index;
+    int required = snprintf(NULL, 0, template, value);
+    if (required < 0) {
+        return -1;
+    }
+    size_t length = (size_t)required + 1u;
+    char *buffer = malloc(length);
+    if (!buffer) {
+        return -1;
+    }
+    if (snprintf(buffer, length, template, value) < 0) {
+        free(buffer);
+        return -1;
+    }
+    *out_path = buffer;
+    return 0;
+}
+
+static char *hash_sig_derive_default_dir(const struct lantern_genesis_paths *paths) {
+    if (!paths || !paths->validator_config_path) {
+        return NULL;
+    }
+    const char *config_path = paths->validator_config_path;
+    const char *slash = strrchr(config_path, '/');
+    const char *backslash = strrchr(config_path, '\\');
+    const char *sep = slash;
+    if (backslash && (!sep || backslash > sep)) {
+        sep = backslash;
+    }
+    if (!sep) {
+        return NULL;
+    }
+    size_t dir_len = (size_t)(sep - config_path);
+    if (dir_len == 0) {
+        return NULL;
+    }
+    const char *suffix = "hash-sig-keys";
+    size_t suffix_len = strlen(suffix);
+    size_t total = dir_len + 1 + suffix_len + 1;
+    char *buffer = malloc(total);
+    if (!buffer) {
+        return NULL;
+    }
+    memcpy(buffer, config_path, dir_len);
+    buffer[dir_len] = '/';
+    memcpy(buffer + dir_len + 1, suffix, suffix_len);
+    buffer[dir_len + 1 + suffix_len] = '\0';
+    return buffer;
+}
+
+static void clear_local_secret_handles(struct lantern_client *client) {
+    if (!client || !client->local_validators) {
+        return;
+    }
+    for (size_t i = 0; i < client->local_validator_count; ++i) {
+        struct lantern_local_validator *validator = &client->local_validators[i];
+        if (validator->secret_key) {
+            pq_secret_key_free(validator->secret_key);
+            validator->secret_key = NULL;
+        }
+        validator->has_secret_handle = false;
+    }
+}
+
+static bool hash_sig_path_is_absolute(const char *path) {
+    if (!path || path[0] == '\0') {
+        return false;
+    }
+    if (path[0] == '/' || path[0] == '\\') {
+        return true;
+    }
+    if (strlen(path) >= 3 && isalpha((unsigned char)path[0]) && path[1] == ':' && (path[2] == '/' || path[2] == '\\')) {
+        return true;
+    }
+    return false;
+}
+
+static int resolve_public_key_path(
+    struct lantern_client *client,
+    const struct hash_sig_manifest *manifest,
+    uint64_t index,
+    char **out_path) {
+    if (!client || !out_path) {
+        return -1;
+    }
+    if (client->hash_sig_public_template) {
+        return hash_sig_format_index_template(client->hash_sig_public_template, index, out_path);
+    }
+    if (manifest) {
+        const struct hash_sig_manifest_entry *entry = hash_sig_manifest_find(manifest, index);
+        if (entry && entry->public_file) {
+            if (hash_sig_path_is_absolute(entry->public_file)) {
+                char *copy = lantern_string_duplicate(entry->public_file);
+                if (!copy) {
+                    return -1;
+                }
+                *out_path = copy;
+                return 0;
+            }
+            if (client->hash_sig_key_dir) {
+                return hash_sig_join_path(client->hash_sig_key_dir, entry->public_file, out_path);
+            }
+        }
+    }
+    if (client->hash_sig_key_dir) {
+        char filename[64];
+        int written = snprintf(filename, sizeof(filename), "validator_%" PRIu64 "_pk.json", index);
+        if (written < 0 || (size_t)written >= sizeof(filename)) {
+            return -1;
+        }
+        return hash_sig_join_path(client->hash_sig_key_dir, filename, out_path);
+    }
+    if (client->hash_sig_public_path && client->genesis.chain_config.validator_count == 1) {
+        char *copy = lantern_string_duplicate(client->hash_sig_public_path);
+        if (!copy) {
+            return -1;
+        }
+        *out_path = copy;
+        return 0;
+    }
+    return -1;
+}
+
+static int resolve_secret_key_path(
+    struct lantern_client *client,
+    const struct hash_sig_manifest *manifest,
+    uint64_t index,
+    char **out_path) {
+    if (!client || !out_path) {
+        return -1;
+    }
+    if (client->hash_sig_secret_template) {
+        return hash_sig_format_index_template(client->hash_sig_secret_template, index, out_path);
+    }
+    if (manifest) {
+        const struct hash_sig_manifest_entry *entry = hash_sig_manifest_find(manifest, index);
+        if (entry && entry->secret_file) {
+            if (hash_sig_path_is_absolute(entry->secret_file)) {
+                char *copy = lantern_string_duplicate(entry->secret_file);
+                if (!copy) {
+                    return -1;
+                }
+                *out_path = copy;
+                return 0;
+            }
+            if (client->hash_sig_key_dir) {
+                return hash_sig_join_path(client->hash_sig_key_dir, entry->secret_file, out_path);
+            }
+        }
+    }
+    if (client->hash_sig_key_dir) {
+        char filename[64];
+        int written = snprintf(filename, sizeof(filename), "validator_%" PRIu64 "_sk.json", index);
+        if (written < 0 || (size_t)written >= sizeof(filename)) {
+            return -1;
+        }
+        return hash_sig_join_path(client->hash_sig_key_dir, filename, out_path);
+    }
+    if (client->hash_sig_secret_path) {
+        if (client->validator_assignment.count > 1) {
+            return -1;
+        }
+        char *copy = lantern_string_duplicate(client->hash_sig_secret_path);
+        if (!copy) {
+            return -1;
+        }
+        *out_path = copy;
+        return 0;
+    }
+    return -1;
+}
+
+static int load_hash_sig_public_keys(struct lantern_client *client, const struct hash_sig_manifest *manifest) {
+    if (!client) {
+        return -1;
+    }
+    uint64_t validator_count = client->genesis.chain_config.validator_count;
+    if (validator_count == 0) {
+        return 0;
+    }
+
+    bool has_template = client->hash_sig_public_template != NULL;
+    bool has_dir = client->hash_sig_key_dir != NULL;
+    bool has_single = client->hash_sig_public_path != NULL && validator_count == 1;
+    if (!has_template && !has_dir && !has_single) {
+        lantern_log_error(
+            "crypto",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "missing hash-sig public key directory or template");
+        return -1;
+    }
+
+    free_hash_sig_pubkeys(client);
+    client->validator_pubkeys = calloc((size_t)validator_count, sizeof(*client->validator_pubkeys));
+    if (!client->validator_pubkeys) {
+        return -1;
+    }
+
+    struct lantern_log_metadata meta = {.validator = client->node_id};
+    for (uint64_t i = 0; i < validator_count; ++i) {
+        char *path = NULL;
+        if (resolve_public_key_path(client, manifest, i, &path) != 0) {
+            lantern_log_error(
+                "crypto",
+                &meta,
+                "unable to resolve hash-sig public key path for index=%" PRIu64,
+                i);
+            free_hash_sig_pubkeys(client);
+            return -1;
+        }
+        struct PQSignatureSchemePublicKey *pubkey = NULL;
+        if (lantern_hash_sig_load_public_file(path, &pubkey) != 0) {
+            lantern_log_error(
+                "crypto",
+                &meta,
+                "failed to load hash-sig public key index=%" PRIu64 " path=%s",
+                i,
+                path);
+            free(path);
+            free_hash_sig_pubkeys(client);
+            return -1;
+        }
+        free(path);
+        client->validator_pubkeys[i] = pubkey;
+    }
+    client->validator_pubkey_count = (size_t)validator_count;
+    return 0;
+}
+
+static int load_hash_sig_secret_keys(struct lantern_client *client, const struct hash_sig_manifest *manifest) {
+    if (!client) {
+        return -1;
+    }
+    if (client->local_validator_count == 0) {
+        return 0;
+    }
+
+    bool has_template = client->hash_sig_secret_template != NULL;
+    bool has_dir = client->hash_sig_key_dir != NULL;
+    bool has_single = client->hash_sig_secret_path != NULL && client->validator_assignment.count == 1;
+    if (!has_template && !has_dir && !has_single) {
+        lantern_log_error(
+            "crypto",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "missing hash-sig secret key source for local validators");
+        return -1;
+    }
+
+    clear_local_secret_handles(client);
+    struct lantern_log_metadata meta = {.validator = client->node_id};
+    for (size_t i = 0; i < client->local_validator_count; ++i) {
+        struct lantern_local_validator *validator = &client->local_validators[i];
+        char *path = NULL;
+        if (resolve_secret_key_path(client, manifest, validator->global_index, &path) != 0) {
+            lantern_log_error(
+                "crypto",
+                &meta,
+                "unable to resolve hash-sig secret key path for validator=%" PRIu64,
+                validator->global_index);
+            clear_local_secret_handles(client);
+            return -1;
+        }
+        struct PQSignatureSchemeSecretKey *secret = NULL;
+        if (lantern_hash_sig_load_secret_file(path, &secret) != 0) {
+            lantern_log_error(
+                "crypto",
+                &meta,
+                "failed to load hash-sig secret key validator=%" PRIu64 " path=%s",
+                validator->global_index,
+                path);
+            free(path);
+            clear_local_secret_handles(client);
+            return -1;
+        }
+        free(path);
+        validator->secret_key = secret;
+        validator->has_secret_handle = true;
+    }
+    return 0;
+}
+
+static int load_hash_sig_keys(struct lantern_client *client) {
+    if (!client) {
+        return -1;
+    }
+    if (!lantern_hash_sig_is_available()) {
+        lantern_log_error(
+            "crypto",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "hash-sig bindings unavailable");
+        return -1;
+    }
+
+    struct hash_sig_manifest manifest;
+    hash_sig_manifest_init(&manifest);
+    bool manifest_loaded = false;
+    if (client->hash_sig_key_dir && hash_sig_manifest_load(client->hash_sig_key_dir, &manifest) == 0) {
+        manifest_loaded = true;
+    }
+
+    const struct hash_sig_manifest *manifest_ptr = manifest_loaded ? &manifest : NULL;
+    if (load_hash_sig_public_keys(client, manifest_ptr) != 0) {
+        hash_sig_manifest_reset(&manifest);
+        return -1;
+    }
+    if (client->local_validator_count > 0) {
+        if (load_hash_sig_secret_keys(client, manifest_ptr) != 0) {
+            hash_sig_manifest_reset(&manifest);
+            return -1;
+        }
+    }
+    hash_sig_manifest_reset(&manifest);
+    return 0;
+}
+
+static void free_hash_sig_pubkeys(struct lantern_client *client) {
+    if (!client || !client->validator_pubkeys) {
+        return;
+    }
+    for (size_t i = 0; i < client->validator_pubkey_count; ++i) {
+        if (client->validator_pubkeys[i]) {
+            pq_public_key_free(client->validator_pubkeys[i]);
+            client->validator_pubkeys[i] = NULL;
+        }
+    }
+    free(client->validator_pubkeys);
+    client->validator_pubkeys = NULL;
+    client->validator_pubkey_count = 0;
+}
+
+static const struct PQSignatureSchemePublicKey *lantern_client_pubkey_handle(
+    const struct lantern_client *client,
+    uint64_t validator_index) {
+    if (!client || !client->validator_pubkeys) {
+        return NULL;
+    }
+    if (validator_index >= client->validator_pubkey_count) {
+        return NULL;
+    }
+    return client->validator_pubkeys[validator_index];
+}
+
+static int configure_hash_sig_sources(struct lantern_client *client, const struct lantern_client_options *options) {
+    if (!client || !options) {
+        return -1;
+    }
+    const char *env_dir = hash_sig_non_empty(getenv("HASH_SIG_KEY_DIR"));
+    const char *env_public_path = hash_sig_non_empty(getenv("HASH_SIG_PK_PATH"));
+    const char *env_secret_path = hash_sig_non_empty(getenv("HASH_SIG_SK_PATH"));
+    const char *env_public_template = hash_sig_non_empty(getenv("HASH_SIG_PK_TEMPLATE"));
+    const char *env_secret_template = hash_sig_non_empty(getenv("HASH_SIG_SK_TEMPLATE"));
+
+    const char *resolved_dir = hash_sig_non_empty(options->hash_sig_key_dir);
+    if (!resolved_dir) {
+        resolved_dir = env_dir;
+    }
+    if (!resolved_dir && client->assigned_validators && client->assigned_validators->hash_sig_dir) {
+        resolved_dir = client->assigned_validators->hash_sig_dir;
+    }
+    if (resolved_dir) {
+        if (set_owned_string(&client->hash_sig_key_dir, resolved_dir) != 0) {
+            return -1;
+        }
+    } else {
+        char *derived = hash_sig_derive_default_dir(&client->genesis_paths);
+        if (derived) {
+            int rc = set_owned_string(&client->hash_sig_key_dir, derived);
+            free(derived);
+            if (rc != 0) {
+                return -1;
+            }
+        }
+    }
+
+    const char *resolved_public_template = hash_sig_non_empty(options->hash_sig_public_template);
+    if (!resolved_public_template) {
+        resolved_public_template = env_public_template;
+    }
+    if (resolved_public_template) {
+        if (set_owned_string(&client->hash_sig_public_template, resolved_public_template) != 0) {
+            return -1;
+        }
+    }
+
+    const char *resolved_secret_template = hash_sig_non_empty(options->hash_sig_secret_template);
+    if (!resolved_secret_template) {
+        resolved_secret_template = env_secret_template;
+    }
+    if (resolved_secret_template) {
+        if (set_owned_string(&client->hash_sig_secret_template, resolved_secret_template) != 0) {
+            return -1;
+        }
+    }
+
+    const char *resolved_public_path = hash_sig_non_empty(options->hash_sig_public_path);
+    if (!resolved_public_path) {
+        resolved_public_path = env_public_path;
+    }
+    if (resolved_public_path) {
+        if (set_owned_string(&client->hash_sig_public_path, resolved_public_path) != 0) {
+            return -1;
+        }
+    }
+
+    const char *resolved_secret_path = hash_sig_non_empty(options->hash_sig_secret_path);
+    if (!resolved_secret_path) {
+        resolved_secret_path = env_secret_path;
+    }
+    if (resolved_secret_path) {
+        if (set_owned_string(&client->hash_sig_secret_path, resolved_secret_path) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 void lantern_client_options_init(struct lantern_client_options *options) {
     if (!options) {
         return;
@@ -1590,6 +2220,11 @@ void lantern_client_options_init(struct lantern_client_options *options) {
     options->metrics_port = LANTERN_DEFAULT_METRICS_PORT;
     options->devnet = LANTERN_DEFAULT_DEVNET;
     lantern_string_list_init(&options->bootnodes);
+    options->hash_sig_key_dir = NULL;
+    options->hash_sig_public_path = NULL;
+    options->hash_sig_secret_path = NULL;
+    options->hash_sig_public_template = NULL;
+    options->hash_sig_secret_template = NULL;
 }
 
 void lantern_client_options_free(struct lantern_client_options *options) {
@@ -1625,7 +2260,7 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     lantern_gossipsub_service_init(&client->gossip);
     lantern_reqresp_service_init(&client->reqresp);
     client->reqresp_running = false;
-    lantern_validator_assignment_init(&client->validator_assignment);
+    lantern_validator_assignment_reset(&client->validator_assignment);
     client->has_validator_assignment = false;
     lantern_consensus_runtime_reset(&client->runtime);
     client->has_runtime = false;
@@ -1704,6 +2339,28 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     }
 
     if (lantern_genesis_load(&client->genesis, &client->genesis_paths) != 0) {
+        goto error;
+    }
+    if (lantern_validator_config_assign_ranges(
+            &client->genesis.validator_config,
+            client->genesis.chain_config.validator_count)
+        != 0) {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "validator-config does not cover %" PRIu64 " validators",
+            client->genesis.chain_config.validator_count);
+        goto error;
+    }
+    if (lantern_validator_config_apply_assignments(
+            &client->genesis.validator_config,
+            client->genesis_paths.validator_registry_path,
+            client->genesis.chain_config.validator_count)
+        != 0) {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "validator assignment mapping invalid or incomplete");
         goto error;
     }
 
@@ -1961,6 +2618,13 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
             client->node_id);
         goto error;
     }
+    if (configure_hash_sig_sources(client, options) != 0) {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to configure hash-sig key sources");
+        goto error;
+    }
     adopt_validator_listen_address(client);
     if (compute_local_validator_assignment(client) != 0) {
         lantern_log_error(
@@ -1976,6 +2640,9 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to enumerate local validators for '%s'",
             client->node_id);
+        goto error;
+    }
+    if (load_hash_sig_keys(client) != 0) {
         goto error;
     }
     lantern_log_info(
@@ -2136,6 +2803,13 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
             "failed to start peer dialer thread");
     }
 
+    if (start_validator_service(client) != 0) {
+        lantern_log_warn(
+            "validator",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "validator duties inactive");
+    }
+
     struct lantern_http_server_config http_config;
     memset(&http_config, 0, sizeof(http_config));
     http_config.port = client->http_port;
@@ -2182,7 +2856,19 @@ void lantern_shutdown(struct lantern_client *client) {
         return;
     }
 
+    stop_validator_service(client);
     stop_peer_dialer(client);
+    free_hash_sig_pubkeys(client);
+    free(client->hash_sig_key_dir);
+    client->hash_sig_key_dir = NULL;
+    free(client->hash_sig_public_template);
+    client->hash_sig_public_template = NULL;
+    free(client->hash_sig_secret_template);
+    client->hash_sig_secret_template = NULL;
+    free(client->hash_sig_public_path);
+    client->hash_sig_public_path = NULL;
+    free(client->hash_sig_secret_path);
+    client->hash_sig_secret_path = NULL;
 
     lantern_metrics_server_stop(&client->metrics_server);
     lantern_metrics_server_init(&client->metrics_server);
@@ -2333,7 +3019,7 @@ void lantern_shutdown(struct lantern_client *client) {
     lantern_fork_choice_reset(&client->fork_choice);
     client->has_fork_choice = false;
     reset_local_validators(client);
-    lantern_validator_assignment_init(&client->validator_assignment);
+    lantern_validator_assignment_reset(&client->validator_assignment);
     client->has_validator_assignment = false;
     lantern_consensus_runtime_reset(&client->runtime);
     client->has_runtime = false;
@@ -2427,7 +3113,7 @@ static int compute_local_validator_assignment(struct lantern_client *client) {
     if (!client || !client->assigned_validators) {
         return -1;
     }
-    lantern_validator_assignment_init(&client->validator_assignment);
+    lantern_validator_assignment_reset(&client->validator_assignment);
     client->has_validator_assignment = false;
     if (lantern_validator_assignment_from_config(
             &client->genesis.validator_config,
@@ -2449,24 +3135,19 @@ static int populate_local_validators(struct lantern_client *client) {
     }
 
     uint64_t local_count = client->validator_assignment.count;
-    uint64_t start_index = client->validator_assignment.start_index;
-    if (local_count == 0) {
+    if (local_count == 0 || client->validator_assignment.length != local_count) {
+        return -1;
+    }
+    if (!client->validator_assignment.indices) {
         return -1;
     }
     if (local_count > SIZE_MAX) {
         return -1;
     }
-    if (local_count > UINT64_MAX - start_index) {
-        return -1;
-    }
 
-    uint64_t end_index = start_index + local_count;
     uint64_t total_validators = client->genesis.chain_config.validator_count;
-    if (end_index > total_validators) {
-        return -1;
-    }
     if (!client->genesis.validator_registry.records
-        || client->genesis.validator_registry.count < end_index) {
+        || client->genesis.validator_registry.count < total_validators) {
         return -1;
     }
 
@@ -2510,7 +3191,16 @@ static int populate_local_validators(struct lantern_client *client) {
     }
 
     for (size_t i = 0; i < count; ++i) {
-        uint64_t global_index = start_index + (uint64_t)i;
+        uint64_t global_index = client->validator_assignment.indices[i];
+        if (global_index >= total_validators) {
+            for (size_t j = 0; j < i; ++j) {
+                local_validator_cleanup(&validators[j]);
+            }
+            free(validators);
+            lantern_secure_zero(decoded_secret, decoded_len);
+            free(decoded_secret);
+            return -1;
+        }
         validators[i].global_index = global_index;
         validators[i].registry = &client->genesis.validator_registry.records[global_index];
         validators[i].secret_len = decoded_len;
@@ -2528,6 +3218,11 @@ static int populate_local_validators(struct lantern_client *client) {
             memcpy(validators[i].secret, decoded_secret, decoded_len);
             validators[i].has_secret = true;
         }
+        validators[i].last_proposed_slot = UINT64_MAX;
+        validators[i].last_attested_slot = UINT64_MAX;
+        validators[i].has_pending_attestation = false;
+        validators[i].pending_attestation_slot = UINT64_MAX;
+        memset(&validators[i].pending_attestation, 0, sizeof(validators[i].pending_attestation));
     }
 
     bool *enabled = calloc(count, sizeof(*enabled));
@@ -2598,6 +3293,488 @@ static int find_local_validator_index(const struct lantern_client *client, uint6
         }
     }
     return -1;
+}
+
+static void validator_duty_state_reset(struct lantern_validator_duty_state *state) {
+    if (!state) {
+        return;
+    }
+    memset(state, 0, sizeof(*state));
+}
+
+static uint64_t validator_wall_time_now_seconds(void) {
+#if defined(CLOCK_REALTIME)
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+        return (uint64_t)ts.tv_sec;
+    }
+#endif
+    time_t now = time(NULL);
+    return now > 0 ? (uint64_t)now : 0;
+}
+
+static void validator_sleep_ms(uint32_t ms) {
+    struct timespec ts;
+    ts.tv_sec = ms / 1000u;
+    ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
+    nanosleep(&ts, NULL);
+}
+
+static bool validator_service_should_run(const struct lantern_client *client) {
+    if (!client) {
+        return false;
+    }
+    if (!client->has_state || !client->has_runtime || !client->has_fork_choice) {
+        return false;
+    }
+    if (!client->gossip_running || client->local_validator_count == 0) {
+        return false;
+    }
+    return true;
+}
+
+static bool validator_is_enabled(const struct lantern_client *client, size_t local_index) {
+    if (!client || local_index >= client->local_validator_count) {
+        return false;
+    }
+    if (!client->validator_enabled) {
+        return true;
+    }
+    if (!client->validator_lock_initialized) {
+        return client->validator_enabled[local_index];
+    }
+    if (pthread_mutex_lock((pthread_mutex_t *)&client->validator_lock) != 0) {
+        return client->validator_enabled[local_index];
+    }
+    bool enabled = client->validator_enabled[local_index];
+    pthread_mutex_unlock((pthread_mutex_t *)&client->validator_lock);
+    return enabled;
+}
+
+static uint64_t validator_global_index(const struct lantern_client *client, size_t local_index) {
+    if (!client || !client->local_validators || local_index >= client->local_validator_count) {
+        return UINT64_MAX;
+    }
+    return client->local_validators[local_index].global_index;
+}
+
+static int validator_sign_vote(
+    struct lantern_local_validator *validator,
+    uint64_t slot,
+    LanternSignedVote *vote) {
+    if (!validator || !vote || !validator->secret_key) {
+        return -1;
+    }
+    if (slot > UINT32_MAX) {
+        return -1;
+    }
+    LanternRoot vote_root;
+    if (lantern_hash_tree_root_vote(&vote->data, &vote_root) != 0) {
+        return -1;
+    }
+    if (!lantern_signature_sign(
+            validator->secret_key,
+            (uint32_t)slot,
+            vote_root.bytes,
+            sizeof(vote_root.bytes),
+            &vote->signature)) {
+        return -1;
+    }
+    return 0;
+}
+
+static int validator_store_vote(struct lantern_client *client, const LanternSignedVote *vote) {
+    if (!client || !vote) {
+        return -1;
+    }
+    if (!client->has_state) {
+        return -1;
+    }
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked) {
+        return -1;
+    }
+    int rc = lantern_state_set_signed_validator_vote(
+        &client->state,
+        (size_t)vote->data.validator_id,
+        vote);
+    lantern_client_unlock_state(client, state_locked);
+    if (rc != 0) {
+        lantern_log_warn(
+            "validator",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to store attestation validator=%" PRIu64 " slot=%" PRIu64,
+            vote->data.validator_id,
+            vote->data.slot);
+        return -1;
+    }
+    return 0;
+}
+
+static int validator_publish_vote(struct lantern_client *client, const LanternSignedVote *vote) {
+    if (!client || !vote) {
+        return -1;
+    }
+    struct lantern_log_metadata meta = {.validator = client->node_id};
+    if (client->has_fork_choice) {
+        if (lantern_fork_choice_add_vote(&client->fork_choice, vote, false) != 0) {
+            lantern_log_debug(
+                "validator",
+                &meta,
+                "failed to enqueue vote into fork choice validator=%" PRIu64 " slot=%" PRIu64,
+                vote->data.validator_id,
+                vote->data.slot);
+        }
+    }
+    int rc = lantern_gossipsub_service_publish_vote(&client->gossip, vote);
+    if (rc != 0) {
+        lantern_log_warn(
+            "gossip",
+            &meta,
+            "failed to publish attestation validator=%" PRIu64 " slot=%" PRIu64,
+            vote->data.validator_id,
+            vote->data.slot);
+        return -1;
+    }
+    lantern_log_info(
+        "gossip",
+        &meta,
+        "published attestation validator=%" PRIu64 " slot=%" PRIu64,
+        vote->data.validator_id,
+        vote->data.slot);
+    return 0;
+}
+
+static int validator_build_block(
+    struct lantern_client *client,
+    uint64_t slot,
+    size_t local_index,
+    LanternSignedBlock *out_block,
+    LanternSignedVote *out_proposer_vote) {
+    if (!client || !out_block || !out_proposer_vote) {
+        return -1;
+    }
+    if (local_index >= client->local_validator_count || !client->local_validators) {
+        return -1;
+    }
+    struct lantern_local_validator *local = &client->local_validators[local_index];
+    lantern_signed_block_with_attestation_init(out_block);
+    memset(out_proposer_vote, 0, sizeof(*out_proposer_vote));
+
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked) {
+        lantern_signed_block_with_attestation_reset(out_block);
+        return -1;
+    }
+    if (!client->has_state) {
+        lantern_client_unlock_state(client, state_locked);
+        lantern_signed_block_with_attestation_reset(out_block);
+        return -1;
+    }
+
+    LanternRoot parent_root;
+    if (lantern_state_select_block_parent(&client->state, &parent_root) != 0) {
+        lantern_client_unlock_state(client, state_locked);
+        lantern_signed_block_with_attestation_reset(out_block);
+        return -1;
+    }
+
+    LanternAttestations att_list;
+    lantern_attestations_init(&att_list);
+    if (lantern_state_collect_attestations_for_block(&client->state, &att_list) != 0) {
+        lantern_attestations_reset(&att_list);
+        lantern_client_unlock_state(client, state_locked);
+        lantern_signed_block_with_attestation_reset(out_block);
+        return -1;
+    }
+
+    LanternCheckpoint head_cp;
+    LanternCheckpoint target_cp;
+    LanternCheckpoint source_cp;
+    if (lantern_state_compute_vote_checkpoints(&client->state, &head_cp, &target_cp, &source_cp) != 0) {
+        lantern_attestations_reset(&att_list);
+        lantern_client_unlock_state(client, state_locked);
+        lantern_signed_block_with_attestation_reset(out_block);
+        return -1;
+    }
+
+    lantern_client_unlock_state(client, state_locked);
+    state_locked = false;
+
+    out_proposer_vote->data.validator_id = local->global_index;
+    out_proposer_vote->data.slot = slot;
+    out_proposer_vote->data.head = head_cp;
+    out_proposer_vote->data.target = target_cp;
+    out_proposer_vote->data.source = source_cp;
+    if (validator_sign_vote(local, slot, out_proposer_vote) != 0) {
+        lantern_attestations_reset(&att_list);
+        lantern_signed_block_with_attestation_reset(out_block);
+        return -1;
+    }
+
+    LanternBlock *message_block = &out_block->message.block;
+    message_block->slot = slot;
+    message_block->proposer_index = local->global_index;
+    message_block->parent_root = parent_root;
+    memset(&message_block->state_root, 0, sizeof(message_block->state_root));
+
+    if (lantern_attestations_copy(&message_block->body.attestations, &att_list) != 0) {
+        lantern_attestations_reset(&att_list);
+        lantern_signed_block_with_attestation_reset(out_block);
+        return -1;
+    }
+    lantern_attestations_reset(&att_list);
+
+    out_block->message.proposer_attestation = *out_proposer_vote;
+
+    size_t signature_count = message_block->body.attestations.length + 1u;
+    if (lantern_block_signatures_resize(&out_block->signatures, signature_count) != 0) {
+        lantern_signed_block_with_attestation_reset(out_block);
+        return -1;
+    }
+    for (size_t i = 0; i < message_block->body.attestations.length; ++i) {
+        out_block->signatures.data[i] = message_block->body.attestations.data[i].signature;
+    }
+    out_block->signatures.data[signature_count - 1u] = out_proposer_vote->signature;
+
+    LanternRoot computed_state_root;
+    state_locked = lantern_client_lock_state(client);
+    if (!state_locked) {
+        lantern_signed_block_with_attestation_reset(out_block);
+        return -1;
+    }
+    int preview_rc = lantern_state_preview_post_state_root(&client->state, out_block, &computed_state_root);
+    lantern_client_unlock_state(client, state_locked);
+    if (preview_rc != 0) {
+        lantern_signed_block_with_attestation_reset(out_block);
+        return -1;
+    }
+    message_block->state_root = computed_state_root;
+    return 0;
+}
+
+static int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t local_index) {
+    if (!validator_service_should_run(client)) {
+        return -1;
+    }
+    LanternSignedBlock block;
+    LanternSignedVote proposer_vote;
+    lantern_signed_block_with_attestation_init(&block);
+    memset(&proposer_vote, 0, sizeof(proposer_vote));
+
+    int rc = validator_build_block(client, slot, local_index, &block, &proposer_vote);
+    if (rc != 0) {
+        lantern_signed_block_with_attestation_reset(&block);
+        return -1;
+    }
+
+    struct lantern_log_metadata meta = {.validator = client->node_id};
+    lantern_log_info(
+        "validator",
+        &meta,
+        "proposing block slot=%" PRIu64 " proposer=%" PRIu64,
+        slot,
+        block.message.block.proposer_index);
+
+    lantern_client_record_block(client, &block, NULL, NULL);
+    if (lantern_client_publish_block(client, &block) != 0) {
+        lantern_signed_block_with_attestation_reset(&block);
+        return -1;
+    }
+
+    if (client->validator_lock_initialized && pthread_mutex_lock(&client->validator_lock) == 0) {
+        if (local_index < client->local_validator_count) {
+            struct lantern_local_validator *local = &client->local_validators[local_index];
+            local->last_proposed_slot = slot;
+            local->pending_attestation = proposer_vote;
+            local->pending_attestation_slot = slot;
+            local->has_pending_attestation = true;
+        }
+        pthread_mutex_unlock(&client->validator_lock);
+    }
+
+    lantern_signed_block_with_attestation_reset(&block);
+    return 0;
+}
+
+static int validator_publish_attestations(struct lantern_client *client, uint64_t slot) {
+    if (!validator_service_should_run(client)) {
+        return -1;
+    }
+    if (!client->local_validators || client->local_validator_count == 0) {
+        return -1;
+    }
+
+    LanternCheckpoint head_cp;
+    LanternCheckpoint target_cp;
+    LanternCheckpoint source_cp;
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked) {
+        return -1;
+    }
+    if (lantern_state_compute_vote_checkpoints(&client->state, &head_cp, &target_cp, &source_cp) != 0) {
+        lantern_client_unlock_state(client, state_locked);
+        return -1;
+    }
+    lantern_client_unlock_state(client, state_locked);
+
+    bool have_lock = false;
+    if (client->validator_lock_initialized) {
+        if (pthread_mutex_lock(&client->validator_lock) != 0) {
+            return -1;
+        }
+        have_lock = true;
+    }
+
+    for (size_t i = 0; i < client->local_validator_count; ++i) {
+        bool enabled = client->validator_enabled ? client->validator_enabled[i] : true;
+        if (!enabled) {
+            continue;
+        }
+        struct lantern_local_validator *validator = &client->local_validators[i];
+        if (validator->last_attested_slot == slot) {
+            continue;
+        }
+        LanternSignedVote vote;
+        if (validator->has_pending_attestation && validator->pending_attestation_slot == slot) {
+            vote = validator->pending_attestation;
+        } else {
+            memset(&vote, 0, sizeof(vote));
+            vote.data.validator_id = validator->global_index;
+            vote.data.slot = slot;
+            vote.data.head = head_cp;
+            vote.data.target = target_cp;
+            vote.data.source = source_cp;
+            if (validator_sign_vote(validator, slot, &vote) != 0) {
+                continue;
+            }
+        }
+        validator->last_attested_slot = slot;
+        validator->has_pending_attestation = false;
+
+        (void)validator_store_vote(client, &vote);
+        (void)validator_publish_vote(client, &vote);
+    }
+
+    if (have_lock) {
+        pthread_mutex_unlock(&client->validator_lock);
+    }
+    return 0;
+}
+
+static void *validator_thread(void *arg) {
+    struct lantern_client *client = arg;
+    if (!client) {
+        return NULL;
+    }
+
+    while (__atomic_load_n(&client->validator_stop_flag, __ATOMIC_RELAXED) == 0) {
+        if (!validator_service_should_run(client)) {
+            validator_sleep_ms(200);
+            continue;
+        }
+
+        uint64_t now = validator_wall_time_now_seconds();
+        if (client->has_runtime) {
+            if (lantern_consensus_runtime_update_time(&client->runtime, now) != 0) {
+                validator_sleep_ms(50);
+                continue;
+            }
+        }
+
+        const struct lantern_slot_timepoint *tp = lantern_consensus_runtime_current_timepoint(&client->runtime);
+        if (!tp) {
+            validator_sleep_ms(50);
+            continue;
+        }
+
+        struct lantern_validator_duty_state *duty = &client->validator_duty;
+        if (!duty->have_timepoint || duty->last_slot != tp->slot) {
+            duty->have_timepoint = true;
+            duty->last_slot = tp->slot;
+            duty->slot_proposed = false;
+            duty->slot_attested = false;
+            duty->pending_local_proposal = false;
+            duty->pending_local_index = 0;
+
+            bool is_local = false;
+            uint64_t local_index = 0;
+            if (lantern_consensus_runtime_local_proposer(&client->runtime, tp->slot, &is_local, &local_index) == 0
+                && is_local
+                && local_index < client->local_validator_count) {
+                duty->pending_local_proposal = true;
+                duty->pending_local_index = local_index;
+            }
+        }
+        duty->last_interval = tp->interval_index;
+
+        if (client->has_fork_choice) {
+            bool has_proposal = duty->slot_proposed;
+            (void)lantern_fork_choice_advance_time(&client->fork_choice, now, has_proposal);
+        }
+
+        switch (tp->phase) {
+        case LANTERN_DUTY_PHASE_PROPOSAL:
+            if (duty->pending_local_proposal && !duty->slot_proposed) {
+                if (validator_propose_block(client, tp->slot, (size_t)duty->pending_local_index) == 0) {
+                    duty->slot_proposed = true;
+                }
+            }
+            break;
+        case LANTERN_DUTY_PHASE_VOTE:
+            if (!duty->slot_attested) {
+                if (validator_publish_attestations(client, tp->slot) == 0) {
+                    duty->slot_attested = true;
+                }
+            }
+            break;
+        default:
+            break;
+        }
+
+        validator_sleep_ms(50);
+    }
+    return NULL;
+}
+
+static int start_validator_service(struct lantern_client *client) {
+    if (!client) {
+        return -1;
+    }
+    if (client->validator_thread_started) {
+        return 0;
+    }
+    if (client->local_validator_count == 0 || !client->has_runtime) {
+        return 0;
+    }
+    validator_duty_state_reset(&client->validator_duty);
+    __atomic_store_n(&client->validator_stop_flag, 0, __ATOMIC_RELAXED);
+    if (pthread_create(&client->validator_thread, NULL, validator_thread, client) != 0) {
+        lantern_log_warn(
+            "validator",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to start validator service thread");
+        return -1;
+    }
+    client->validator_thread_started = true;
+    lantern_log_info(
+        "validator",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "validator service started");
+    return 0;
+}
+
+static void stop_validator_service(struct lantern_client *client) {
+    if (!client || !client->validator_thread_started) {
+        return;
+    }
+    __atomic_store_n(&client->validator_stop_flag, 1, __ATOMIC_RELAXED);
+    (void)pthread_join(client->validator_thread, NULL);
+    client->validator_thread_started = false;
+    lantern_log_info(
+        "validator",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "validator service stopped");
 }
 
 static int http_snapshot_head(void *context, struct lantern_http_head_snapshot *out_snapshot) {
@@ -2831,13 +4008,25 @@ static bool lantern_client_verify_vote_signature(
         lantern_log_warn("state", meta, "failed to hash attestation for validator=%" PRIu64, vote->data.validator_id);
         return false;
     }
-    bool ok = lantern_signature_verify(
-        record->pubkey_bytes,
-        sizeof(record->pubkey_bytes),
-        (uint32_t)vote->data.slot,
-        signature,
-        vote_root.bytes,
-        sizeof(vote_root.bytes));
+    const struct PQSignatureSchemePublicKey *pubkey_handle =
+        lantern_client_pubkey_handle(client, vote->data.validator_id);
+    bool ok = false;
+    if (pubkey_handle) {
+        ok = lantern_signature_verify_pk(
+            pubkey_handle,
+            (uint32_t)vote->data.slot,
+            signature,
+            vote_root.bytes,
+            sizeof(vote_root.bytes));
+    } else {
+        ok = lantern_signature_verify(
+            record->pubkey_bytes,
+            sizeof(record->pubkey_bytes),
+            (uint32_t)vote->data.slot,
+            signature,
+            vote_root.bytes,
+            sizeof(vote_root.bytes));
+    }
     if (!ok) {
         lantern_log_warn(
             "state",

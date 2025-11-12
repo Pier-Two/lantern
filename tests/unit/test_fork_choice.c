@@ -28,6 +28,16 @@ static bool roots_equal(const LanternRoot *a, const LanternRoot *b) {
     return memcmp(a->bytes, b->bytes, sizeof(a->bytes)) == 0;
 }
 
+static bool checkpoints_equal(const LanternCheckpoint *a, const LanternCheckpoint *b) {
+    if (!a || !b) {
+        return false;
+    }
+    if (a->slot != b->slot) {
+        return false;
+    }
+    return roots_equal(&a->root, &b->root);
+}
+
 static void init_block(
     LanternBlock *block,
     uint64_t slot,
@@ -84,6 +94,183 @@ static LanternSignedVote make_vote(
         vote.data.head.slot = 0;
     }
     return vote;
+}
+
+static int test_fork_choice_proposer_attestation_sequence(void) {
+    LanternForkChoice store;
+    lantern_fork_choice_init(&store);
+
+    LanternConfig config = {.num_validators = 1, .genesis_time = 10};
+    assert(lantern_fork_choice_configure(&store, &config) == 0);
+
+    LanternBlock genesis;
+    init_block(&genesis, 0, 0, NULL, 0xAA);
+    LanternRoot genesis_root;
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
+    assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
+
+    LanternBlock block_one;
+    init_block(&block_one, 1, 0, &genesis_root, 0xBB);
+    LanternRoot block_one_root;
+    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
+    LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
+    LanternSignedVote proposer_vote_one = make_vote(0, &genesis_cp, &block_one_cp);
+    assert(
+        lantern_fork_choice_add_block(
+            &store,
+            &block_one,
+            &proposer_vote_one,
+            NULL,
+            NULL,
+            &block_one_root)
+        == 0);
+
+    assert(store.new_votes);
+    assert(store.known_votes);
+    assert(store.new_votes[0].has_checkpoint);
+    assert(roots_equal(&store.new_votes[0].checkpoint.root, &block_one_root));
+    assert(store.new_votes[0].checkpoint.slot == block_one.slot);
+    assert(!store.known_votes[0].has_checkpoint);
+
+    assert(lantern_fork_choice_update_safe_target(&store) == 0);
+    const LanternRoot *safe_target = lantern_fork_choice_safe_target(&store);
+    assert(safe_target && roots_equal(safe_target, &block_one_root));
+
+    LanternRoot head;
+    assert(lantern_fork_choice_current_head(&store, &head) == 0);
+    assert(roots_equal(&head, &genesis_root));
+
+    assert(lantern_fork_choice_accept_new_votes(&store) == 0);
+    assert(!store.new_votes[0].has_checkpoint);
+    assert(store.known_votes[0].has_checkpoint);
+    assert(store.known_votes[0].checkpoint.slot == block_one.slot);
+    assert(roots_equal(&store.known_votes[0].checkpoint.root, &block_one_root));
+    assert(lantern_fork_choice_current_head(&store, &head) == 0);
+    assert(roots_equal(&head, &block_one_root));
+
+    LanternBlock block_two;
+    init_block(&block_two, 2, 0, &block_one_root, 0xCC);
+    LanternRoot block_two_root;
+    assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == 0);
+    LanternCheckpoint block_two_cp = make_checkpoint(&block_two_root, block_two.slot);
+    LanternSignedVote proposer_vote_two = make_vote(0, &block_one_cp, &block_two_cp);
+    assert(
+        lantern_fork_choice_add_block(
+            &store,
+            &block_two,
+            &proposer_vote_two,
+            NULL,
+            NULL,
+            &block_two_root)
+        == 0);
+
+    assert(store.new_votes[0].has_checkpoint);
+    assert(store.new_votes[0].checkpoint.slot == block_two.slot);
+    assert(roots_equal(&store.new_votes[0].checkpoint.root, &block_two_root));
+    assert(store.known_votes[0].checkpoint.slot == block_one.slot);
+
+    assert(lantern_fork_choice_update_safe_target(&store) == 0);
+    safe_target = lantern_fork_choice_safe_target(&store);
+    assert(safe_target && roots_equal(safe_target, &block_two_root));
+
+    assert(lantern_fork_choice_current_head(&store, &head) == 0);
+    assert(roots_equal(&head, &block_one_root));
+
+    assert(lantern_fork_choice_accept_new_votes(&store) == 0);
+    assert(!store.new_votes[0].has_checkpoint);
+    assert(store.known_votes[0].checkpoint.slot == block_two.slot);
+    assert(roots_equal(&store.known_votes[0].checkpoint.root, &block_two_root));
+    assert(lantern_fork_choice_current_head(&store, &head) == 0);
+    assert(roots_equal(&head, &block_two_root));
+
+    lantern_fork_choice_reset(&store);
+    reset_block(&block_two);
+    reset_block(&block_one);
+    reset_block(&genesis);
+    return 0;
+}
+
+static int test_fork_choice_block_updates_checkpoints(void) {
+    LanternForkChoice store;
+    lantern_fork_choice_init(&store);
+
+    LanternConfig config = {.num_validators = 3, .genesis_time = 50};
+    assert(lantern_fork_choice_configure(&store, &config) == 0);
+
+    LanternBlock genesis;
+    init_block(&genesis, 0, 0, NULL, 0x10);
+    LanternRoot genesis_root;
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
+    assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
+
+    LanternBlock block_one;
+    init_block(&block_one, 1, 0, &genesis_root, 0x11);
+    LanternRoot block_one_root;
+    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
+    LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
+    assert(
+        lantern_fork_choice_add_block(
+            &store,
+            &block_one,
+            NULL,
+            &block_one_cp,
+            NULL,
+            &block_one_root)
+        == 0);
+
+    const LanternCheckpoint *latest_justified = lantern_fork_choice_latest_justified(&store);
+    assert(checkpoints_equal(latest_justified, &block_one_cp));
+    const LanternCheckpoint *latest_finalized = lantern_fork_choice_latest_finalized(&store);
+    assert(checkpoints_equal(latest_finalized, &genesis_cp));
+
+    LanternBlock block_two;
+    init_block(&block_two, 2, 1, &block_one_root, 0x22);
+    LanternRoot block_two_root;
+    assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == 0);
+    LanternCheckpoint block_two_cp = make_checkpoint(&block_two_root, block_two.slot);
+    assert(
+        lantern_fork_choice_add_block(
+            &store,
+            &block_two,
+            NULL,
+            &block_two_cp,
+            &block_one_cp,
+            &block_two_root)
+        == 0);
+
+    latest_justified = lantern_fork_choice_latest_justified(&store);
+    assert(checkpoints_equal(latest_justified, &block_two_cp));
+    latest_finalized = lantern_fork_choice_latest_finalized(&store);
+    assert(checkpoints_equal(latest_finalized, &block_one_cp));
+
+    LanternBlock block_three;
+    init_block(&block_three, 3, 2, &block_two_root, 0x33);
+    LanternRoot block_three_root;
+    assert(lantern_hash_tree_root_block(&block_three, &block_three_root) == 0);
+    LanternCheckpoint block_three_cp = make_checkpoint(&block_three_root, block_three.slot);
+    assert(
+        lantern_fork_choice_add_block(
+            &store,
+            &block_three,
+            NULL,
+            &block_three_cp,
+            &block_two_cp,
+            &block_three_root)
+        == 0);
+
+    latest_justified = lantern_fork_choice_latest_justified(&store);
+    assert(checkpoints_equal(latest_justified, &block_three_cp));
+    latest_finalized = lantern_fork_choice_latest_finalized(&store);
+    assert(checkpoints_equal(latest_finalized, &block_two_cp));
+
+    lantern_fork_choice_reset(&store);
+    reset_block(&block_three);
+    reset_block(&block_two);
+    reset_block(&block_one);
+    reset_block(&genesis);
+    return 0;
 }
 
 static int test_fork_choice_vote_flow(void) {
@@ -325,6 +512,12 @@ static int test_fork_choice_advance_time_schedules_votes(void) {
 }
 
 int main(void) {
+    if (test_fork_choice_proposer_attestation_sequence() != 0) {
+        return 1;
+    }
+    if (test_fork_choice_block_updates_checkpoints() != 0) {
+        return 1;
+    }
     if (test_fork_choice_vote_flow() != 0) {
         return 1;
     }

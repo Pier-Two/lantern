@@ -62,7 +62,15 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
 int lantern_state_prepare_validator_votes(LanternState *state, uint64_t validator_count);
 size_t lantern_state_validator_capacity(const LanternState *state);
 bool lantern_state_validator_has_vote(const LanternState *state, size_t index);
+int lantern_state_get_signed_validator_vote(
+    const LanternState *state,
+    size_t index,
+    LanternSignedVote *out_vote);
 int lantern_state_get_validator_vote(const LanternState *state, size_t index, LanternVote *out_vote);
+int lantern_state_set_signed_validator_vote(
+    LanternState *state,
+    size_t index,
+    const LanternSignedVote *vote);
 int lantern_state_set_validator_vote(LanternState *state, size_t index, const LanternVote *vote);
 void lantern_state_clear_validator_vote(LanternState *state, size_t index);
 int lantern_state_select_block_parent(const LanternState *state, LanternRoot *out_parent_root);
@@ -74,6 +82,10 @@ int lantern_state_compute_vote_checkpoints(
     LanternCheckpoint *out_head,
     LanternCheckpoint *out_target,
     LanternCheckpoint *out_source);
+int lantern_state_preview_post_state_root(
+    const LanternState *state,
+    const LanternSignedBlock *block,
+    LanternRoot *out_state_root);
 void lantern_state_profile_dump(void);
 
 #endif /* LANTERN_CONSENSUS_STATE_H */

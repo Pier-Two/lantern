@@ -26,7 +26,7 @@
 #include "ssz_constants.h"
 
 #define LANTERN_STORAGE_VOTES_MAGIC "LNVOTES\0"
-#define LANTERN_STORAGE_VOTES_VERSION 1u
+#define LANTERN_STORAGE_VOTES_VERSION 2u
 #define LANTERN_STORAGE_BLOCKS_DIR "blocks"
 #define LANTERN_STORAGE_STATE_FILE "state.ssz"
 #define LANTERN_STORAGE_VOTES_FILE "votes.bin"
@@ -381,7 +381,7 @@ int lantern_storage_save_votes(const char *data_dir, const LanternState *state) 
     header.validator_count = capacity;
     header.record_count = present;
 
-    size_t payload_size = present * (sizeof(uint64_t) + LANTERN_VOTE_SSZ_SIZE);
+    size_t payload_size = present * (sizeof(uint64_t) + LANTERN_SIGNED_VOTE_SSZ_SIZE);
     size_t total_size = sizeof(header) + payload_size;
     uint8_t *buffer = malloc(total_size);
     if (!buffer) {
@@ -402,18 +402,23 @@ int lantern_storage_save_votes(const char *data_dir, const LanternState *state) 
         }
         memcpy(cursor, index_bytes, sizeof(index_bytes));
         cursor += sizeof(index_bytes);
-        LanternVote vote;
-        if (lantern_state_get_validator_vote(state, i, &vote) != 0) {
+        LanternSignedVote signed_vote;
+        if (lantern_state_get_signed_validator_vote(state, i, &signed_vote) != 0) {
             free(buffer);
             return -1;
         }
         size_t vote_written = 0;
-        if (lantern_ssz_encode_vote(&vote, cursor, LANTERN_VOTE_SSZ_SIZE, &vote_written) != 0
-            || vote_written != LANTERN_VOTE_SSZ_SIZE) {
+        if (lantern_ssz_encode_signed_vote(
+                &signed_vote,
+                cursor,
+                LANTERN_SIGNED_VOTE_SSZ_SIZE,
+                &vote_written)
+                != 0
+            || vote_written != LANTERN_SIGNED_VOTE_SSZ_SIZE) {
             free(buffer);
             return -1;
         }
-        cursor += LANTERN_VOTE_SSZ_SIZE;
+        cursor += LANTERN_SIGNED_VOTE_SSZ_SIZE;
     }
 
     char *votes_path = NULL;
@@ -452,7 +457,12 @@ int lantern_storage_load_votes(const char *data_dir, LanternState *state) {
         free(data);
         return -1;
     }
-    if (header.version != LANTERN_STORAGE_VOTES_VERSION) {
+    bool has_signatures = false;
+    if (header.version == 1u) {
+        has_signatures = false;
+    } else if (header.version >= 2u) {
+        has_signatures = true;
+    } else {
         free(data);
         return -1;
     }
@@ -479,8 +489,9 @@ int lantern_storage_load_votes(const char *data_dir, LanternState *state) {
     const uint8_t *cursor = data + sizeof(header);
     size_t remaining = data_len - sizeof(header);
     size_t records_read = 0;
+    const size_t encoded_vote_size = has_signatures ? LANTERN_SIGNED_VOTE_SSZ_SIZE : LANTERN_VOTE_SSZ_SIZE;
     while (records_read < header.record_count) {
-        if (remaining < sizeof(uint64_t) + LANTERN_VOTE_SSZ_SIZE) {
+        if (remaining < sizeof(uint64_t) + encoded_vote_size) {
             free(data);
             return -1;
         }
@@ -494,17 +505,32 @@ int lantern_storage_load_votes(const char *data_dir, LanternState *state) {
             free(data);
             return -1;
         }
-        LanternVote vote;
-        memset(&vote, 0, sizeof(vote));
-        if (lantern_ssz_decode_vote(&vote, cursor, LANTERN_VOTE_SSZ_SIZE) != 0) {
-            free(data);
-            return -1;
-        }
-        cursor += LANTERN_VOTE_SSZ_SIZE;
-        remaining -= LANTERN_VOTE_SSZ_SIZE;
-        if (lantern_state_set_validator_vote(state, (size_t)validator_index, &vote) != 0) {
-            free(data);
-            return -1;
+        if (has_signatures) {
+            LanternSignedVote signed_vote;
+            memset(&signed_vote, 0, sizeof(signed_vote));
+            if (lantern_ssz_decode_signed_vote(&signed_vote, cursor, LANTERN_SIGNED_VOTE_SSZ_SIZE) != 0) {
+                free(data);
+                return -1;
+            }
+            cursor += LANTERN_SIGNED_VOTE_SSZ_SIZE;
+            remaining -= LANTERN_SIGNED_VOTE_SSZ_SIZE;
+            if (lantern_state_set_signed_validator_vote(state, (size_t)validator_index, &signed_vote) != 0) {
+                free(data);
+                return -1;
+            }
+        } else {
+            LanternVote vote;
+            memset(&vote, 0, sizeof(vote));
+            if (lantern_ssz_decode_vote(&vote, cursor, LANTERN_VOTE_SSZ_SIZE) != 0) {
+                free(data);
+                return -1;
+            }
+            cursor += LANTERN_VOTE_SSZ_SIZE;
+            remaining -= LANTERN_VOTE_SSZ_SIZE;
+            if (lantern_state_set_validator_vote(state, (size_t)validator_index, &vote) != 0) {
+                free(data);
+                return -1;
+            }
         }
         records_read++;
     }

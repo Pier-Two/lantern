@@ -417,6 +417,76 @@ static int lantern_fixture_parse_bitlist_field(
     return 0;
 }
 
+static int lantern_fixture_parse_attestation_message(
+    const struct lantern_fixture_document *doc,
+    int attestation_idx,
+    LanternSignedVote *vote) {
+    if (!doc || !vote) {
+        return -1;
+    }
+    memset(vote, 0, sizeof(*vote));
+
+    int validator_idx = lantern_fixture_object_get_field(doc, attestation_idx, "validator_id");
+    if (validator_idx < 0) {
+        return -1;
+    }
+    if (lantern_fixture_token_to_uint64(doc, validator_idx, &vote->data.validator_id) != 0) {
+        return -1;
+    }
+
+    int data_obj_idx = lantern_fixture_object_get_field(doc, attestation_idx, "data");
+    if (data_obj_idx < 0) {
+        return -1;
+    }
+
+    int field_idx = lantern_fixture_object_get_field(doc, data_obj_idx, "slot");
+    if (lantern_fixture_token_to_uint64(doc, field_idx, &vote->data.slot) != 0) {
+        return -1;
+    }
+
+    field_idx = lantern_fixture_object_get_field(doc, data_obj_idx, "head");
+    if (field_idx < 0) {
+        return -1;
+    }
+    int root_idx = lantern_fixture_object_get_field(doc, field_idx, "root");
+    if (lantern_fixture_token_to_root(doc, root_idx, &vote->data.head.root) != 0) {
+        return -1;
+    }
+    root_idx = lantern_fixture_object_get_field(doc, field_idx, "slot");
+    if (lantern_fixture_token_to_uint64(doc, root_idx, &vote->data.head.slot) != 0) {
+        return -1;
+    }
+
+    field_idx = lantern_fixture_object_get_field(doc, data_obj_idx, "target");
+    if (field_idx < 0) {
+        return -1;
+    }
+    root_idx = lantern_fixture_object_get_field(doc, field_idx, "root");
+    if (lantern_fixture_token_to_root(doc, root_idx, &vote->data.target.root) != 0) {
+        return -1;
+    }
+    root_idx = lantern_fixture_object_get_field(doc, field_idx, "slot");
+    if (lantern_fixture_token_to_uint64(doc, root_idx, &vote->data.target.slot) != 0) {
+        return -1;
+    }
+
+    field_idx = lantern_fixture_object_get_field(doc, data_obj_idx, "source");
+    if (field_idx < 0) {
+        return -1;
+    }
+    root_idx = lantern_fixture_object_get_field(doc, field_idx, "root");
+    if (lantern_fixture_token_to_root(doc, root_idx, &vote->data.source.root) != 0) {
+        return -1;
+    }
+    root_idx = lantern_fixture_object_get_field(doc, field_idx, "slot");
+    if (lantern_fixture_token_to_uint64(doc, root_idx, &vote->data.source.slot) != 0) {
+        return -1;
+    }
+
+    memset(vote->signature.bytes, 0, sizeof(vote->signature.bytes));
+    return 0;
+}
+
 static int lantern_fixture_parse_attestations(
     const struct lantern_fixture_document *doc,
     int body_idx,
@@ -443,67 +513,81 @@ static int lantern_fixture_parse_attestations(
             return -1;
         }
         LanternSignedVote vote;
-        memset(&vote, 0, sizeof(vote));
-
-        int validator_idx = lantern_fixture_object_get_field(doc, entry_idx, "validator_id");
-        if (validator_idx < 0) {
-            return -1;
-        }
-        if (lantern_fixture_token_to_uint64(doc, validator_idx, &vote.data.validator_id) != 0) {
+        if (lantern_fixture_parse_attestation_message(doc, entry_idx, &vote) != 0) {
             return -1;
         }
 
-        int data_obj_idx = lantern_fixture_object_get_field(doc, entry_idx, "data");
-        if (data_obj_idx < 0) {
-            return -1;
-        }
-
-        int field_idx = lantern_fixture_object_get_field(doc, data_obj_idx, "slot");
-        if (lantern_fixture_token_to_uint64(doc, field_idx, &vote.data.slot) != 0) {
-            return -1;
-        }
-
-        field_idx = lantern_fixture_object_get_field(doc, data_obj_idx, "head");
-        if (field_idx < 0) {
-            return -1;
-        }
-        int root_idx = lantern_fixture_object_get_field(doc, field_idx, "root");
-        if (lantern_fixture_token_to_root(doc, root_idx, &vote.data.head.root) != 0) {
-            return -1;
-        }
-        root_idx = lantern_fixture_object_get_field(doc, field_idx, "slot");
-        if (lantern_fixture_token_to_uint64(doc, root_idx, &vote.data.head.slot) != 0) {
-            return -1;
-        }
-
-        field_idx = lantern_fixture_object_get_field(doc, data_obj_idx, "target");
-        if (field_idx < 0) {
-            return -1;
-        }
-        root_idx = lantern_fixture_object_get_field(doc, field_idx, "root");
-        if (lantern_fixture_token_to_root(doc, root_idx, &vote.data.target.root) != 0) {
-            return -1;
-        }
-        root_idx = lantern_fixture_object_get_field(doc, field_idx, "slot");
-        if (lantern_fixture_token_to_uint64(doc, root_idx, &vote.data.target.slot) != 0) {
-            return -1;
-        }
-
-        field_idx = lantern_fixture_object_get_field(doc, data_obj_idx, "source");
-        if (field_idx < 0) {
-            return -1;
-        }
-        root_idx = lantern_fixture_object_get_field(doc, field_idx, "root");
-        if (lantern_fixture_token_to_root(doc, root_idx, &vote.data.source.root) != 0) {
-            return -1;
-        }
-        root_idx = lantern_fixture_object_get_field(doc, field_idx, "slot");
-        if (lantern_fixture_token_to_uint64(doc, root_idx, &vote.data.source.slot) != 0) {
-            return -1;
-        }
-
-        memset(vote.signature.bytes, 0, sizeof(vote.signature.bytes));
         if (lantern_attestations_append(&body->attestations, &vote) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int lantern_fixture_token_to_signature(
+    const struct lantern_fixture_document *doc,
+    int index,
+    LanternSignature *signature) {
+    if (!signature) {
+        return -1;
+    }
+    size_t len = 0;
+    const char *str = lantern_fixture_token_string(doc, index, &len);
+    if (!str) {
+        return -1;
+    }
+    if (len < 2 || str[0] != '0' || (str[1] != 'x' && str[1] != 'X')) {
+        return -1;
+    }
+    size_t hex_len = len - 2u;
+    if ((hex_len % 2u) != 0) {
+        return -1;
+    }
+    size_t byte_len = hex_len / 2u;
+    if (byte_len > LANTERN_SIGNATURE_SIZE) {
+        return -1;
+    }
+    uint8_t buffer[LANTERN_SIGNATURE_SIZE];
+    if (byte_len > 0) {
+        if (lantern_fixture_parse_hex_bytes(str, len, buffer, byte_len) != 0) {
+            return -1;
+        }
+    }
+    memset(signature->bytes, 0, sizeof(signature->bytes));
+    if (byte_len > 0) {
+        memcpy(signature->bytes, buffer, byte_len);
+    }
+    return 0;
+}
+
+static int lantern_fixture_parse_signature_list(
+    const struct lantern_fixture_document *doc,
+    int signatures_idx,
+    LanternBlockSignatures *signatures,
+    size_t expected_count) {
+    if (!doc || !signatures) {
+        return -1;
+    }
+    int data_idx = lantern_fixture_object_get_field(doc, signatures_idx, "data");
+    if (data_idx < 0) {
+        return -1;
+    }
+    int length = lantern_fixture_array_get_length(doc, data_idx);
+    if (length < 0) {
+        return -1;
+    }
+    if ((size_t)length != expected_count) {
+        return -1;
+    }
+    if (lantern_block_signatures_resize(signatures, (size_t)length) != 0) {
+        return -1;
+    }
+    for (int i = 0; i < length; ++i) {
+        int entry_idx = lantern_fixture_array_get_element(doc, data_idx, i);
+        if (entry_idx < 0) {
+            return -1;
+        }
+        if (lantern_fixture_token_to_signature(doc, entry_idx, &signatures->data[i]) != 0) {
             return -1;
         }
     }
@@ -563,15 +647,68 @@ int lantern_fixture_parse_signed_block(
     const struct lantern_fixture_document *doc,
     int object_index,
     LanternSignedBlock *signed_block) {
-    if (!signed_block) {
+    if (!doc || !signed_block) {
         return -1;
     }
     lantern_signed_block_with_attestation_init(signed_block);
-    if (lantern_fixture_parse_block(doc, object_index, &signed_block->message.block) != 0) {
-        return -1;
+    int message_idx = lantern_fixture_object_get_field(doc, object_index, "message");
+    if (message_idx < 0) {
+        goto error;
     }
-    lantern_block_signatures_resize(&signed_block->signatures, 0);
+
+    int block_idx = lantern_fixture_object_get_field(doc, message_idx, "block");
+    if (block_idx < 0) {
+        goto error;
+    }
+    if (lantern_fixture_parse_block(doc, block_idx, &signed_block->message.block) != 0) {
+        goto error;
+    }
+
+    int proposer_idx = lantern_fixture_object_get_field(doc, message_idx, "proposer_attestation");
+    if (proposer_idx < 0) {
+        goto error;
+    }
+    if (lantern_fixture_parse_attestation_message(doc, proposer_idx, &signed_block->message.proposer_attestation) != 0) {
+        goto error;
+    }
+
+    size_t attestation_count = signed_block->message.block.body.attestations.length;
+    size_t expected_signatures = attestation_count + 1u;
+    if (expected_signatures == 0) {
+        goto error;
+    }
+
+    int signatures_idx = lantern_fixture_object_get_field(doc, object_index, "signature");
+    if (signatures_idx < 0) {
+        goto error;
+    }
+    if (lantern_fixture_parse_signature_list(
+            doc,
+            signatures_idx,
+            &signed_block->signatures,
+            expected_signatures)
+        != 0) {
+        goto error;
+    }
+    if (!signed_block->signatures.data) {
+        goto error;
+    }
+
+    if (attestation_count > 0) {
+        if (!signed_block->message.block.body.attestations.data) {
+            goto error;
+        }
+        for (size_t i = 0; i < attestation_count; ++i) {
+            signed_block->message.block.body.attestations.data[i].signature = signed_block->signatures.data[i];
+        }
+    }
+    signed_block->message.proposer_attestation.signature =
+        signed_block->signatures.data[attestation_count];
     return 0;
+
+error:
+    lantern_signed_block_with_attestation_reset(signed_block);
+    return -1;
 }
 
 int lantern_fixture_parse_anchor_state(

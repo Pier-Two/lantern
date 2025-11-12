@@ -2,6 +2,7 @@
 #define LANTERN_CONSENSUS_DUTIES_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "lantern/genesis/genesis.h"
@@ -13,9 +14,15 @@ extern "C" {
 struct lantern_validator_assignment {
     uint64_t start_index;
     uint64_t count;
+    uint64_t *indices;
+    size_t length;
 };
 
 void lantern_validator_assignment_init(struct lantern_validator_assignment *assignment);
+void lantern_validator_assignment_reset(struct lantern_validator_assignment *assignment);
+int lantern_validator_assignment_copy(
+    struct lantern_validator_assignment *dst,
+    const struct lantern_validator_assignment *src);
 bool lantern_validator_assignment_is_valid(const struct lantern_validator_assignment *assignment);
 int lantern_validator_assignment_from_config(
     const struct lantern_validator_config *config,

@@ -67,6 +67,7 @@ target_include_directories(lantern
         ${PROJECT_SOURCE_DIR}/include
     PRIVATE
         ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/external/jsmn
         ${PROJECT_SOURCE_DIR}/external/c-hash-sig
         ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/secp256k1/include
         ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/libtomcrypt/src/headers
@@ -126,6 +127,15 @@ if(LANTERN_BUILD_TESTS)
     add_executable(lantern_duties_test tests/unit/test_duties.c)
     target_link_libraries(lantern_duties_test PRIVATE lantern)
     add_test(NAME lantern_duties COMMAND lantern_duties_test)
+
+    add_executable(lantern_signature_test tests/unit/test_signature.c)
+    target_link_libraries(lantern_signature_test PRIVATE lantern)
+    target_include_directories(
+        lantern_signature_test
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/external/c-hash-sig/include
+    )
+    add_test(NAME lantern_signature COMMAND lantern_signature_test)
 
     add_executable(lantern_consensus_runtime_test tests/unit/test_consensus_runtime.c)
     target_link_libraries(lantern_consensus_runtime_test PRIVATE lantern)
@@ -226,6 +236,7 @@ if(LANTERN_BUILD_TESTS)
         lantern_enr
         lantern_ssz
         lantern_duties
+        lantern_signature
         lantern_consensus_runtime
         lantern_state
         lantern_slot_clock

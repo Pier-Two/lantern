@@ -37,27 +37,72 @@ bool lantern_signature_verify(
     const LanternSignature *signature,
     const uint8_t *message,
     size_t message_len) {
-    if (!pubkey_bytes || pubkey_len == 0 || !signature || !message) {
+    if (!pubkey_bytes || pubkey_len == 0) {
+        return false;
+    }
+    struct PQSignatureSchemePublicKey *pq_pubkey = NULL;
+    enum PQSigningError pk_err = pq_public_key_deserialize(pubkey_bytes, pubkey_len, &pq_pubkey);
+    if (pk_err != Success || !pq_pubkey) {
+        return false;
+    }
+    bool ok = lantern_signature_verify_pk(pq_pubkey, epoch, signature, message, message_len);
+    pq_public_key_free(pq_pubkey);
+    return ok;
+}
+
+bool lantern_signature_verify_pk(
+    const struct PQSignatureSchemePublicKey *pubkey,
+    uint32_t epoch,
+    const LanternSignature *signature,
+    const uint8_t *message,
+    size_t message_len) {
+    if (!pubkey || !signature || !message) {
         return false;
     }
     if (message_len != LANTERN_ROOT_SIZE) {
         return false;
     }
-
-    struct PQSignatureSchemePublicKey *pq_pubkey = NULL;
     struct PQSignature *pq_signature = NULL;
-    enum PQSigningError pk_err = pq_public_key_deserialize(pubkey_bytes, pubkey_len, &pq_pubkey);
-    if (pk_err != Success || !pq_pubkey) {
-        return false;
-    }
     enum PQSigningError sig_err =
         pq_signature_deserialize(signature->bytes, sizeof(signature->bytes), &pq_signature);
     if (sig_err != Success || !pq_signature) {
-        pq_public_key_free(pq_pubkey);
         return false;
     }
-    int verify_rc = pq_verify(pq_pubkey, epoch, message, message_len, pq_signature);
+    int verify_rc = pq_verify(pubkey, epoch, message, message_len, pq_signature);
     pq_signature_free(pq_signature);
-    pq_public_key_free(pq_pubkey);
     return verify_rc == 1;
+}
+
+bool lantern_signature_sign(
+    const struct PQSignatureSchemeSecretKey *secret_key,
+    uint32_t epoch,
+    const uint8_t *message,
+    size_t message_len,
+    LanternSignature *out_signature) {
+    if (!secret_key || !message || !out_signature) {
+        return false;
+    }
+    if (message_len != LANTERN_ROOT_SIZE) {
+        return false;
+    }
+    struct PQSignature *pq_signature = NULL;
+    enum PQSigningError sign_err = pq_sign(secret_key, epoch, message, message_len, &pq_signature);
+    if (sign_err != Success || !pq_signature) {
+        return false;
+    }
+
+    uintptr_t written = 0;
+    enum PQSigningError serialize_err = pq_signature_serialize(
+        pq_signature,
+        out_signature->bytes,
+        sizeof(out_signature->bytes),
+        &written);
+    pq_signature_free(pq_signature);
+    if (serialize_err != Success || written == 0 || written > sizeof(out_signature->bytes)) {
+        return false;
+    }
+    if (written < sizeof(out_signature->bytes)) {
+        memset(out_signature->bytes + written, 0, sizeof(out_signature->bytes) - written);
+    }
+    return true;
 }

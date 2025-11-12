@@ -186,7 +186,7 @@ static int test_state_transition_applies_block(void) {
 
     LanternSignedBlock signed_block;
     memset(&signed_block, 0, sizeof(signed_block));
-    signed_block.message = block;
+    signed_block.message.block = block;
 
     expect_zero(lantern_state_transition(&state, &signed_block), "state transition");
     LanternRoot post_root;
