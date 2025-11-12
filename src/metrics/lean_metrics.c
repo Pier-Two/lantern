@@ -1,0 +1,183 @@
+#include "lantern/metrics/lean_metrics.h"
+
+#include <pthread.h>
+#include <string.h>
+
+#define ARRAY_LEN(x) (sizeof(x) / sizeof((x)[0]))
+
+struct lean_histogram {
+    const double *bounds;
+    size_t bucket_count;
+    uint64_t counts[LEAN_METRICS_MAX_BUCKETS + 1u];
+    double sum;
+    uint64_t total;
+};
+
+static const double kDefaultShortBuckets[] = {0.005, 0.01, 0.025, 0.05, 0.1, 1.0};
+static const double kStateTransitionBuckets[] = {0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0};
+
+static pthread_mutex_t g_metrics_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_attestations_valid_total = 0;
+static uint64_t g_attestations_invalid_total = 0;
+static uint64_t g_state_slots_processed_total = 0;
+static uint64_t g_state_attestations_processed_total = 0;
+
+static struct lean_histogram g_hist_fork_choice_block = {
+    .bounds = kDefaultShortBuckets,
+    .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
+};
+static struct lean_histogram g_hist_attestation_validation = {
+    .bounds = kDefaultShortBuckets,
+    .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
+};
+static struct lean_histogram g_hist_state_transition = {
+    .bounds = kStateTransitionBuckets,
+    .bucket_count = ARRAY_LEN(kStateTransitionBuckets),
+};
+static struct lean_histogram g_hist_state_slots = {
+    .bounds = kDefaultShortBuckets,
+    .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
+};
+static struct lean_histogram g_hist_state_block = {
+    .bounds = kDefaultShortBuckets,
+    .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
+};
+static struct lean_histogram g_hist_state_attestations = {
+    .bounds = kDefaultShortBuckets,
+    .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
+};
+
+static double sanitize_duration(double seconds) {
+    if (seconds < 0.0) {
+        return 0.0;
+    }
+    return seconds;
+}
+
+static void histogram_reset(struct lean_histogram *hist) {
+    if (!hist) {
+        return;
+    }
+    memset(hist->counts, 0, sizeof(hist->counts));
+    hist->sum = 0.0;
+    hist->total = 0;
+}
+
+static void histogram_observe(struct lean_histogram *hist, double value) {
+    if (!hist) {
+        return;
+    }
+    double sample = sanitize_duration(value);
+    size_t bucket = hist->bucket_count;
+    for (size_t i = 0; i < hist->bucket_count; ++i) {
+        if (sample <= hist->bounds[i]) {
+            bucket = i;
+            break;
+        }
+    }
+    if (bucket < hist->bucket_count) {
+        hist->counts[bucket] += 1;
+    } else {
+        hist->counts[hist->bucket_count] += 1;
+    }
+    hist->sum += sample;
+    hist->total += 1;
+}
+
+static void histogram_snapshot(struct lean_metrics_histogram_snapshot *dest, const struct lean_histogram *src) {
+    if (!dest || !src) {
+        return;
+    }
+    size_t bucket_count = src->bucket_count;
+    if (bucket_count > LEAN_METRICS_MAX_BUCKETS) {
+        bucket_count = LEAN_METRICS_MAX_BUCKETS;
+    }
+    dest->bucket_count = bucket_count;
+    memset(dest->buckets, 0, sizeof(dest->buckets));
+    memset(dest->counts, 0, sizeof(dest->counts));
+    for (size_t i = 0; i < bucket_count; ++i) {
+        dest->buckets[i] = src->bounds[i];
+    }
+    for (size_t i = 0; i < bucket_count; ++i) {
+        dest->counts[i] = src->counts[i];
+    }
+    dest->counts[bucket_count] = src->counts[src->bucket_count];
+    dest->sum = src->sum;
+    dest->total = src->total;
+}
+
+void lean_metrics_reset(void) {
+    pthread_mutex_lock(&g_metrics_lock);
+    g_attestations_valid_total = 0;
+    g_attestations_invalid_total = 0;
+    g_state_slots_processed_total = 0;
+    g_state_attestations_processed_total = 0;
+    histogram_reset(&g_hist_fork_choice_block);
+    histogram_reset(&g_hist_attestation_validation);
+    histogram_reset(&g_hist_state_transition);
+    histogram_reset(&g_hist_state_slots);
+    histogram_reset(&g_hist_state_block);
+    histogram_reset(&g_hist_state_attestations);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_fork_choice_block_time(double seconds) {
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(&g_hist_fork_choice_block, seconds);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_attestation_validation(double seconds, bool valid) {
+    pthread_mutex_lock(&g_metrics_lock);
+    if (valid) {
+        g_attestations_valid_total += 1;
+    } else {
+        g_attestations_invalid_total += 1;
+    }
+    histogram_observe(&g_hist_attestation_validation, seconds);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_state_transition(double seconds) {
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(&g_hist_state_transition, seconds);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_state_transition_slots(uint64_t slots_processed, double seconds) {
+    pthread_mutex_lock(&g_metrics_lock);
+    g_state_slots_processed_total += slots_processed;
+    histogram_observe(&g_hist_state_slots, seconds);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_state_transition_block(double seconds) {
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(&g_hist_state_block, seconds);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_state_transition_attestations(uint64_t count, double seconds) {
+    pthread_mutex_lock(&g_metrics_lock);
+    g_state_attestations_processed_total += count;
+    histogram_observe(&g_hist_state_attestations, seconds);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
+    if (!out) {
+        return;
+    }
+    pthread_mutex_lock(&g_metrics_lock);
+    out->attestations_valid_total = g_attestations_valid_total;
+    out->attestations_invalid_total = g_attestations_invalid_total;
+    out->state_transition_slots_processed_total = g_state_slots_processed_total;
+    out->state_transition_attestations_processed_total = g_state_attestations_processed_total;
+    histogram_snapshot(&out->fork_choice_block_time, &g_hist_fork_choice_block);
+    histogram_snapshot(&out->attestation_validation_time, &g_hist_attestation_validation);
+    histogram_snapshot(&out->state_transition_time, &g_hist_state_transition);
+    histogram_snapshot(&out->state_slots_time, &g_hist_state_slots);
+    histogram_snapshot(&out->state_block_time, &g_hist_state_block);
+    histogram_snapshot(&out->state_attestations_time, &g_hist_state_attestations);
+    pthread_mutex_unlock(&g_metrics_lock);
+}

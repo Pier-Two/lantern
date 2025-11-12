@@ -46,6 +46,7 @@ add_library(lantern STATIC
     src/networking/reqresp_service.c
     src/networking/messages.c
     src/encoding/rlp.c
+    src/metrics/lean_metrics.c
     src/http/common.c
     src/http/metrics.c
     src/http/server.c
@@ -53,6 +54,7 @@ add_library(lantern STATIC
     src/support/log.c
     src/support/string_list.c
     src/support/strings.c
+    src/support/time.c
     src/support/secure_mem.c
     src/crypto/hash_sig.c
     src/internal/yaml_parser.c
@@ -171,6 +173,10 @@ if(LANTERN_BUILD_TESTS)
     target_link_libraries(lantern_storage_test PRIVATE lantern)
     add_test(NAME lantern_storage COMMAND lantern_storage_test)
 
+    add_executable(lantern_metrics_test tests/unit/test_metrics.c)
+    target_link_libraries(lantern_metrics_test PRIVATE lantern)
+    add_test(NAME lantern_metrics COMMAND lantern_metrics_test)
+
     add_executable(lantern_validator_duties_integration_test tests/integration/test_validator_duties.c)
     target_link_libraries(lantern_validator_duties_integration_test PRIVATE lantern)
     add_test(NAME lantern_validator_duties_integration COMMAND lantern_validator_duties_integration_test)
@@ -228,6 +234,7 @@ if(LANTERN_BUILD_TESTS)
         lantern_libp2p
         lantern_fork_choice
         lantern_storage
+        lantern_metrics
         lantern_validator_duties_integration
     )
     set_property(TEST ${_lantern_ctest_targets} PROPERTY TIMEOUT 30)

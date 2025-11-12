@@ -5,6 +5,8 @@
 #include <string.h>
 
 #include "lantern/consensus/hash.h"
+#include "lantern/metrics/lean_metrics.h"
+#include "lantern/support/time.h"
 
 #define LANTERN_FORK_CHOICE_DEFAULT_SECONDS_PER_SLOT 4u
 #define LANTERN_FORK_CHOICE_DEFAULT_INTERVALS_PER_SLOT 4u
@@ -411,6 +413,7 @@ int lantern_fork_choice_add_block(
     if (!store || !store->initialized || !store->has_anchor || !block) {
         return -1;
     }
+    double metrics_start = lantern_time_now_seconds();
     LanternRoot block_root;
     if (block_root_hint) {
         block_root = *block_root_hint;
@@ -435,6 +438,7 @@ int lantern_fork_choice_add_block(
     if (lantern_fork_choice_recompute_head(store) != 0) {
         return -1;
     }
+    lean_metrics_record_fork_choice_block_time(lantern_time_now_seconds() - metrics_start);
     return 0;
 }
 

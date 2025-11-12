@@ -5,24 +5,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "lantern/consensus/containers.h"
+#include "lantern/metrics/lean_metrics.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 struct lantern_metrics_snapshot {
-    char node_id[64];
-    uint64_t head_slot;
-    LanternRoot head_root;
-    LanternCheckpoint justified;
-    LanternCheckpoint finalized;
-    size_t known_peers;
-    size_t connected_peers;
-    size_t gossip_topics;
-    size_t gossip_validation_failures;
-    size_t validators_total;
-    size_t validators_active;
+    uint64_t lean_head_slot;
+    uint64_t lean_latest_justified_slot;
+    uint64_t lean_latest_finalized_slot;
+    size_t lean_validators_count;
+    struct lean_metrics_snapshot lean_metrics;
 };
 
 struct lantern_metrics_callbacks {

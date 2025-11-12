@@ -11,6 +11,7 @@
 #include "lantern/storage/storage.h"
 #include "lantern/http/server.h"
 #include "lantern/support/strings.h"
+#include "lantern/metrics/lean_metrics.h"
 #include "lantern/support/log.h"
 #include "lantern/support/secure_mem.h"
 #include "lantern/networking/messages.h"
@@ -1625,6 +1626,7 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     lantern_http_server_init(&client->http_server);
     client->http_running = false;
     lantern_state_init(&client->state);
+    lean_metrics_reset();
     client->state_lock_initialized = false;
     lantern_fork_choice_init(&client->fork_choice);
     client->has_fork_choice = false;
@@ -2686,65 +2688,38 @@ static int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *o
     struct lantern_client *client = context;
     memset(out_snapshot, 0, sizeof(*out_snapshot));
 
-    if (client->node_id) {
-        snprintf(out_snapshot->node_id, sizeof(out_snapshot->node_id), "%s", client->node_id);
-    }
-
-    size_t connected = 0;
-    if (client->connection_lock_initialized) {
-        if (pthread_mutex_lock(&client->connection_lock) == 0) {
-            connected = client->connected_peers;
-            pthread_mutex_unlock(&client->connection_lock);
+    bool have_fork_head = false;
+    LanternRoot fork_head_root;
+    memset(&fork_head_root, 0, sizeof(fork_head_root));
+    uint64_t fork_head_slot = 0;
+    if (client->has_fork_choice) {
+        if (lantern_fork_choice_current_head(&client->fork_choice, &fork_head_root) == 0) {
+            uint64_t slot = 0;
+            if (lantern_fork_choice_block_info(&client->fork_choice, &fork_head_root, &slot, NULL, NULL) == 0) {
+                fork_head_slot = slot;
+                have_fork_head = true;
+            }
         }
     }
 
+    uint64_t state_head_slot = 0;
+    LanternCheckpoint state_justified;
+    LanternCheckpoint state_finalized;
+    memset(&state_justified, 0, sizeof(state_justified));
+    memset(&state_finalized, 0, sizeof(state_finalized));
     bool state_locked = lantern_client_lock_state(client);
     if (client->has_state) {
-        out_snapshot->head_slot = client->state.slot;
-        if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &out_snapshot->head_root) != 0) {
-            memset(&out_snapshot->head_root, 0, sizeof(out_snapshot->head_root));
-        }
-        out_snapshot->justified = client->state.latest_justified;
-        out_snapshot->finalized = client->state.latest_finalized;
-    } else {
-        memset(&out_snapshot->head_root, 0, sizeof(out_snapshot->head_root));
-        memset(&out_snapshot->justified, 0, sizeof(out_snapshot->justified));
-        memset(&out_snapshot->finalized, 0, sizeof(out_snapshot->finalized));
-        out_snapshot->head_slot = 0;
+        state_head_slot = client->state.slot;
+        state_justified = client->state.latest_justified;
+        state_finalized = client->state.latest_finalized;
     }
     lantern_client_unlock_state(client, state_locked);
 
-    out_snapshot->known_peers = client->bootnodes.len;
-    out_snapshot->connected_peers = connected;
-    out_snapshot->gossip_topics = 2;
-    out_snapshot->gossip_validation_failures = 0;
-    out_snapshot->validators_total = client->local_validator_count;
-
-    size_t active = 0;
-    if (client->validator_enabled && client->local_validator_count > 0) {
-        bool counted = false;
-        if (client->validator_lock_initialized) {
-            if (pthread_mutex_lock(&client->validator_lock) == 0) {
-                for (size_t i = 0; i < client->local_validator_count; ++i) {
-                    if (client->validator_enabled[i]) {
-                        active++;
-                    }
-                }
-                pthread_mutex_unlock(&client->validator_lock);
-                counted = true;
-            }
-        }
-        if (!counted) {
-            for (size_t i = 0; i < client->local_validator_count; ++i) {
-                if (client->validator_enabled[i]) {
-                    active++;
-                }
-            }
-        }
-    } else {
-        active = client->local_validator_count;
-    }
-    out_snapshot->validators_active = active;
+    out_snapshot->lean_head_slot = have_fork_head ? fork_head_slot : state_head_slot;
+    out_snapshot->lean_latest_justified_slot = state_justified.slot;
+    out_snapshot->lean_latest_finalized_slot = state_finalized.slot;
+    out_snapshot->lean_validators_count = client->local_validator_count;
+    lean_metrics_snapshot(&out_snapshot->lean_metrics);
     return 0;
 }
 

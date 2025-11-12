@@ -2,7 +2,6 @@
 
 #include "lantern/http/common.h"
 #include "lantern/support/log.h"
-#include "lantern/support/strings.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -10,6 +9,7 @@
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -18,6 +18,129 @@
 
 #define LANTERN_METRICS_BUFFER_SIZE 4096
 
+struct metrics_buffer {
+    char *data;
+    size_t len;
+    size_t cap;
+};
+
+static int metrics_buffer_init(struct metrics_buffer *buf, size_t initial_cap) {
+    if (!buf) {
+        return -1;
+    }
+    size_t capacity = initial_cap ? initial_cap : 1024;
+    buf->data = malloc(capacity);
+    if (!buf->data) {
+        return -1;
+    }
+    buf->len = 0;
+    buf->cap = capacity;
+    buf->data[0] = '\0';
+    return 0;
+}
+
+static void metrics_buffer_free(struct metrics_buffer *buf) {
+    if (!buf) {
+        return;
+    }
+    free(buf->data);
+    buf->data = NULL;
+    buf->len = 0;
+    buf->cap = 0;
+}
+
+static int metrics_buffer_reserve(struct metrics_buffer *buf, size_t extra) {
+    if (!buf || extra == 0) {
+        return 0;
+    }
+    size_t required = buf->len + extra + 1;
+    if (required <= buf->cap) {
+        return 0;
+    }
+    size_t new_cap = buf->cap ? buf->cap : 1024;
+    while (new_cap < required) {
+        if (new_cap > (SIZE_MAX / 2)) {
+            return -1;
+        }
+        new_cap *= 2;
+    }
+    char *data = realloc(buf->data, new_cap);
+    if (!data) {
+        return -1;
+    }
+    buf->data = data;
+    buf->cap = new_cap;
+    return 0;
+}
+
+static int metrics_buffer_appendf(struct metrics_buffer *buf, const char *fmt, ...) {
+    if (!buf || !fmt) {
+        return -1;
+    }
+    va_list args;
+    va_start(args, fmt);
+    va_list measure;
+    va_copy(measure, args);
+    int needed = vsnprintf(NULL, 0, fmt, measure);
+    va_end(measure);
+    if (needed < 0) {
+        va_end(args);
+        return -1;
+    }
+    if (metrics_buffer_reserve(buf, (size_t)needed) != 0) {
+        va_end(args);
+        return -1;
+    }
+    int written = vsnprintf(buf->data + buf->len, buf->cap - buf->len, fmt, args);
+    va_end(args);
+    if (written < 0 || (size_t)written != (size_t)needed) {
+        return -1;
+    }
+    buf->len += (size_t)written;
+    return 0;
+}
+
+static int append_histogram_metrics(
+    struct metrics_buffer *buf,
+    const char *name,
+    const char *help,
+    const struct lean_metrics_histogram_snapshot *hist) {
+    if (!buf || !name || !help || !hist) {
+        return -1;
+    }
+    if (metrics_buffer_appendf(buf, "# HELP %s %s\n# TYPE %s histogram\n", name, help, name) != 0) {
+        return -1;
+    }
+    size_t bucket_count = hist->bucket_count;
+    if (bucket_count > LEAN_METRICS_MAX_BUCKETS) {
+        bucket_count = LEAN_METRICS_MAX_BUCKETS;
+    }
+    for (size_t i = 0; i < bucket_count; ++i) {
+        double bound = hist->buckets[i];
+        if (metrics_buffer_appendf(
+                buf,
+                "%s_bucket{le=\"%.9g\"} %" PRIu64 "\n",
+                name,
+                bound,
+                hist->counts[i])
+            != 0) {
+            return -1;
+        }
+    }
+    if (metrics_buffer_appendf(
+            buf,
+            "%s_bucket{le=\"+Inf\"} %" PRIu64 "\n",
+            name,
+            hist->counts[bucket_count])
+        != 0) {
+        return -1;
+    }
+    if (metrics_buffer_appendf(buf, "%s_sum %.9f\n%s_count %" PRIu64 "\n", name, hist->sum, name, hist->total) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static int format_metrics_body(
     const struct lantern_metrics_snapshot *snapshot,
     char **out_body,
@@ -25,167 +148,94 @@ static int format_metrics_body(
     if (!snapshot || !out_body || !out_len) {
         return -1;
     }
-    char node_label[64];
-    if (snapshot->node_id[0] != '\0') {
-        snprintf(node_label, sizeof(node_label), "%s", snapshot->node_id);
-    } else {
-        strncpy(node_label, "lantern", sizeof(node_label));
-        node_label[sizeof(node_label) - 1] = '\0';
-    }
 
-    char head_hex[2 * LANTERN_ROOT_SIZE + 3];
-    char justified_hex[2 * LANTERN_ROOT_SIZE + 3];
-    char finalized_hex[2 * LANTERN_ROOT_SIZE + 3];
-
-    if (lantern_bytes_to_hex(snapshot->head_root.bytes, LANTERN_ROOT_SIZE, head_hex, sizeof(head_hex), 1) != 0) {
-        head_hex[0] = '\0';
-    }
-    if (lantern_bytes_to_hex(snapshot->justified.root.bytes, LANTERN_ROOT_SIZE, justified_hex, sizeof(justified_hex), 1) != 0) {
-        justified_hex[0] = '\0';
-    }
-    if (lantern_bytes_to_hex(snapshot->finalized.root.bytes, LANTERN_ROOT_SIZE, finalized_hex, sizeof(finalized_hex), 1) != 0) {
-        finalized_hex[0] = '\0';
-    }
-
-    size_t needed = (size_t)snprintf(
-        NULL,
-        0,
-        "# HELP lantern_slot_current Current head slot for this node\n"
-        "# TYPE lantern_slot_current gauge\n"
-        "lantern_slot_current{node=\"%s\"} %" PRIu64 "\n"
-        "# HELP lantern_slot_justified Last justified slot observed by fork choice\n"
-        "# TYPE lantern_slot_justified gauge\n"
-        "lantern_slot_justified{node=\"%s\"} %" PRIu64 "\n"
-        "# HELP lantern_slot_finalized Last finalized slot observed by fork choice\n"
-        "# TYPE lantern_slot_finalized gauge\n"
-        "lantern_slot_finalized{node=\"%s\"} %" PRIu64 "\n"
-        "# HELP lantern_forkchoice_head_root Fork choice head root (hex label)\n"
-        "# TYPE lantern_forkchoice_head_root gauge\n"
-        "lantern_forkchoice_head_root{node=\"%s\",root=\"%s\"} 1\n"
-        "# HELP lantern_forkchoice_justified_root Latest justified checkpoint root (hex label)\n"
-        "# TYPE lantern_forkchoice_justified_root gauge\n"
-        "lantern_forkchoice_justified_root{node=\"%s\",root=\"%s\"} 1\n"
-        "# HELP lantern_forkchoice_finalized_root Latest finalized checkpoint root (hex label)\n"
-        "# TYPE lantern_forkchoice_finalized_root gauge\n"
-        "lantern_forkchoice_finalized_root{node=\"%s\",root=\"%s\"} 1\n"
-        "# HELP lantern_peer_known_total Known peers (bootnodes + configured)\n"
-        "# TYPE lantern_peer_known_total gauge\n"
-        "lantern_peer_known_total{node=\"%s\"} %zu\n"
-        "# HELP lantern_peer_connected_total Active libp2p peers currently connected\n"
-        "# TYPE lantern_peer_connected_total gauge\n"
-        "lantern_peer_connected_total{node=\"%s\"} %zu\n"
-        "# HELP lantern_gossip_topics_subscribed Gossip topics with active subscriptions\n"
-        "# TYPE lantern_gossip_topics_subscribed gauge\n"
-        "lantern_gossip_topics_subscribed{node=\"%s\"} %zu\n"
-        "# HELP lantern_gossip_validation_failures_total Gossip payloads rejected by validation\n"
-        "# TYPE lantern_gossip_validation_failures_total counter\n"
-        "lantern_gossip_validation_failures_total{node=\"%s\"} %zu\n"
-        "# HELP lantern_validator_local_total Validators assigned to this process\n"
-        "# TYPE lantern_validator_local_total gauge\n"
-        "lantern_validator_local_total{node=\"%s\"} %zu\n"
-        "# HELP lantern_validator_active_total Validators currently enabled for duties\n"
-        "# TYPE lantern_validator_active_total gauge\n"
-        "lantern_validator_active_total{node=\"%s\"} %zu\n",
-        node_label,
-        snapshot->head_slot,
-        node_label,
-        snapshot->justified.slot,
-        node_label,
-        snapshot->finalized.slot,
-        node_label,
-        head_hex[0] ? head_hex : "0x0",
-        node_label,
-        justified_hex[0] ? justified_hex : "0x0",
-        node_label,
-        finalized_hex[0] ? finalized_hex : "0x0",
-        node_label,
-        snapshot->known_peers,
-        node_label,
-        snapshot->connected_peers,
-        node_label,
-        snapshot->gossip_topics,
-        node_label,
-        snapshot->gossip_validation_failures,
-        node_label,
-        snapshot->validators_total,
-        node_label,
-        snapshot->validators_active);
-    if (needed == 0) {
+    struct metrics_buffer buf;
+    if (metrics_buffer_init(&buf, 2048) != 0) {
         return -1;
     }
-    char *body = malloc(needed + 1);
-    if (!body) {
+
+    const struct lean_metrics_snapshot *lean = &snapshot->lean_metrics;
+    if (metrics_buffer_appendf(
+            &buf,
+            "# HELP lean_head_slot Latest slot of the lean chain\n"
+            "# TYPE lean_head_slot gauge\n"
+            "lean_head_slot %" PRIu64 "\n"
+            "# HELP lean_latest_justified_slot Latest justified slot observed by state transition\n"
+            "# TYPE lean_latest_justified_slot gauge\n"
+            "lean_latest_justified_slot %" PRIu64 "\n"
+            "# HELP lean_latest_finalized_slot Latest finalized slot observed by state transition\n"
+            "# TYPE lean_latest_finalized_slot gauge\n"
+            "lean_latest_finalized_slot %" PRIu64 "\n"
+            "# HELP lean_validators_count Number of validators connected to this client\n"
+            "# TYPE lean_validators_count gauge\n"
+            "lean_validators_count %zu\n"
+            "# HELP lean_attestations_valid_total Total number of valid attestations\n"
+            "# TYPE lean_attestations_valid_total counter\n"
+            "lean_attestations_valid_total %" PRIu64 "\n"
+            "# HELP lean_attestations_invalid_total Total number of invalid attestations\n"
+            "# TYPE lean_attestations_invalid_total counter\n"
+            "lean_attestations_invalid_total %" PRIu64 "\n"
+            "# HELP lean_state_transition_slots_processed_total Total number of processed slots during state transitions\n"
+            "# TYPE lean_state_transition_slots_processed_total counter\n"
+            "lean_state_transition_slots_processed_total %" PRIu64 "\n"
+            "# HELP lean_state_transition_attestations_processed_total Total number of attestations processed during state transitions\n"
+            "# TYPE lean_state_transition_attestations_processed_total counter\n"
+            "lean_state_transition_attestations_processed_total %" PRIu64 "\n",
+            snapshot->lean_head_slot,
+            snapshot->lean_latest_justified_slot,
+            snapshot->lean_latest_finalized_slot,
+            snapshot->lean_validators_count,
+            lean->attestations_valid_total,
+            lean->attestations_invalid_total,
+            lean->state_transition_slots_processed_total,
+            lean->state_transition_attestations_processed_total)
+        != 0) {
+        metrics_buffer_free(&buf);
         return -1;
     }
-    int written = snprintf(
-        body,
-        needed + 1,
-        "# HELP lantern_slot_current Current head slot for this node\n"
-        "# TYPE lantern_slot_current gauge\n"
-        "lantern_slot_current{node=\"%s\"} %" PRIu64 "\n"
-        "# HELP lantern_slot_justified Last justified slot observed by fork choice\n"
-        "# TYPE lantern_slot_justified gauge\n"
-        "lantern_slot_justified{node=\"%s\"} %" PRIu64 "\n"
-        "# HELP lantern_slot_finalized Last finalized slot observed by fork choice\n"
-        "# TYPE lantern_slot_finalized gauge\n"
-        "lantern_slot_finalized{node=\"%s\"} %" PRIu64 "\n"
-        "# HELP lantern_forkchoice_head_root Fork choice head root (hex label)\n"
-        "# TYPE lantern_forkchoice_head_root gauge\n"
-        "lantern_forkchoice_head_root{node=\"%s\",root=\"%s\"} 1\n"
-        "# HELP lantern_forkchoice_justified_root Latest justified checkpoint root (hex label)\n"
-        "# TYPE lantern_forkchoice_justified_root gauge\n"
-        "lantern_forkchoice_justified_root{node=\"%s\",root=\"%s\"} 1\n"
-        "# HELP lantern_forkchoice_finalized_root Latest finalized checkpoint root (hex label)\n"
-        "# TYPE lantern_forkchoice_finalized_root gauge\n"
-        "lantern_forkchoice_finalized_root{node=\"%s\",root=\"%s\"} 1\n"
-        "# HELP lantern_peer_known_total Known peers (bootnodes + configured)\n"
-        "# TYPE lantern_peer_known_total gauge\n"
-        "lantern_peer_known_total{node=\"%s\"} %zu\n"
-        "# HELP lantern_peer_connected_total Active libp2p peers currently connected\n"
-        "# TYPE lantern_peer_connected_total gauge\n"
-        "lantern_peer_connected_total{node=\"%s\"} %zu\n"
-        "# HELP lantern_gossip_topics_subscribed Gossip topics with active subscriptions\n"
-        "# TYPE lantern_gossip_topics_subscribed gauge\n"
-        "lantern_gossip_topics_subscribed{node=\"%s\"} %zu\n"
-        "# HELP lantern_gossip_validation_failures_total Gossip payloads rejected by validation\n"
-        "# TYPE lantern_gossip_validation_failures_total counter\n"
-        "lantern_gossip_validation_failures_total{node=\"%s\"} %zu\n"
-        "# HELP lantern_validator_local_total Validators assigned to this process\n"
-        "# TYPE lantern_validator_local_total gauge\n"
-        "lantern_validator_local_total{node=\"%s\"} %zu\n"
-        "# HELP lantern_validator_active_total Validators currently enabled for duties\n"
-        "# TYPE lantern_validator_active_total gauge\n"
-        "lantern_validator_active_total{node=\"%s\"} %zu\n",
-        node_label,
-        snapshot->head_slot,
-        node_label,
-        snapshot->justified.slot,
-        node_label,
-        snapshot->finalized.slot,
-        node_label,
-        head_hex[0] ? head_hex : "0x0",
-        node_label,
-        justified_hex[0] ? justified_hex : "0x0",
-        node_label,
-        finalized_hex[0] ? finalized_hex : "0x0",
-        node_label,
-        snapshot->known_peers,
-        node_label,
-        snapshot->connected_peers,
-        node_label,
-        snapshot->gossip_topics,
-        node_label,
-        snapshot->gossip_validation_failures,
-        node_label,
-        snapshot->validators_total,
-        node_label,
-        snapshot->validators_active);
-    if (written < 0 || (size_t)written > needed) {
-        free(body);
+
+    if (append_histogram_metrics(
+            &buf,
+            "lean_fork_choice_block_processing_time_seconds",
+            "Time taken to process block in fork choice",
+            &lean->fork_choice_block_time)
+        != 0
+        || append_histogram_metrics(
+               &buf,
+               "lean_attestation_validation_time_seconds",
+               "Time taken to validate attestation",
+               &lean->attestation_validation_time)
+            != 0
+        || append_histogram_metrics(
+               &buf,
+               "lean_state_transition_time_seconds",
+               "Time to process state transition",
+               &lean->state_transition_time)
+            != 0
+        || append_histogram_metrics(
+               &buf,
+               "lean_state_transition_slots_processing_time_seconds",
+               "Time taken to process slots during state transition",
+               &lean->state_slots_time)
+            != 0
+        || append_histogram_metrics(
+               &buf,
+               "lean_state_transition_block_processing_time_seconds",
+               "Time taken to process block during state transition",
+               &lean->state_block_time)
+            != 0
+        || append_histogram_metrics(
+               &buf,
+               "lean_state_transition_attestations_processing_time_seconds",
+               "Time taken to process attestations during state transition",
+               &lean->state_attestations_time)
+            != 0) {
+        metrics_buffer_free(&buf);
         return -1;
     }
-    *out_body = body;
-    *out_len = (size_t)written;
+
+    *out_body = buf.data;
+    *out_len = buf.len;
     return 0;
 }
 
