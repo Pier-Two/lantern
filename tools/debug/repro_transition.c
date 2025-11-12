@@ -148,23 +148,24 @@ int main(int argc, char **argv) {
     }
 
     LanternSignedBlock signed_block;
-    memset(&signed_block, 0, sizeof(signed_block));
+    lantern_signed_block_with_attestation_init(&signed_block);
     if (lantern_ssz_decode_signed_block(&signed_block, data, data_len) != 0) {
         fprintf(stderr, "failed to decode signed block\\n");
         free(data);
+        lantern_signed_block_with_attestation_reset(&signed_block);
         lantern_state_reset(&state);
         return 1;
     }
     free(data);
-    lantern_signature_zero(&signed_block.signature);
+    (void)lantern_block_signatures_resize(&signed_block.signatures, 0);
 
-    LanternRoot decoded_parent = signed_block.message.parent_root;
-    LanternRoot decoded_state_root = signed_block.message.state_root;
+    LanternRoot decoded_parent = signed_block.message.block.parent_root;
+    LanternRoot decoded_state_root = signed_block.message.block.state_root;
     LanternRoot decoded_root;
     memset(&decoded_root, 0, sizeof(decoded_root));
-    if (lantern_hash_tree_root_block(&signed_block.message, &decoded_root) != 0) {
+    if (lantern_hash_tree_root_block(&signed_block.message.block, &decoded_root) != 0) {
         fprintf(stderr, "failed to hash decoded block\\n");
-        lantern_block_body_reset(&signed_block.message.body);
+        lantern_signed_block_with_attestation_reset(&signed_block);
         lantern_state_reset(&state);
         return 1;
     }
@@ -180,13 +181,14 @@ int main(int argc, char **argv) {
     fprintf(
         stderr,
         "decoded block slot=%" PRIu64 " proposer=%" PRIu64 "\\n",
-        signed_block.message.slot,
-        signed_block.message.proposer_index);
+        signed_block.message.block.slot,
+        signed_block.message.block.proposer_index);
     fprintf(stderr, "decoded parent_root=%s\\n", parent_hex[0] ? parent_hex : "0x0");
     fprintf(stderr, "decoded state_root=%s\\n", state_hex[0] ? state_hex : "0x0");
     fprintf(stderr, "decoded block_root=%s\\n", root_hex[0] ? root_hex : "0x0");
 
     int rc = lantern_state_transition(&state, &signed_block);
+    lantern_signed_block_with_attestation_reset(&signed_block);
     fprintf(stderr, "lantern_state_transition -> %d\\n", rc);
 
     lantern_state_reset(&state);

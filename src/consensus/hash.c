@@ -343,6 +343,49 @@ static int hash_attestations(const LanternAttestations *attestations, LanternRoo
     return err == SSZ_SUCCESS ? 0 : -1;
 }
 
+static int hash_block_signatures(const LanternBlockSignatures *signatures, LanternRoot *out_root) {
+    if (!signatures || !out_root) {
+        return -1;
+    }
+    size_t count = signatures->length;
+    uint8_t *chunks = NULL;
+    if (count > 0) {
+        if (!signatures->data) {
+            return -1;
+        }
+        if (count > LANTERN_MAX_BLOCK_SIGNATURES) {
+            return -1;
+        }
+        if (count > SIZE_MAX / SSZ_BYTES_PER_CHUNK) {
+            return -1;
+        }
+        size_t total_bytes = count * SSZ_BYTES_PER_CHUNK;
+        chunks = malloc(total_bytes);
+        if (!chunks) {
+            return -1;
+        }
+        for (size_t i = 0; i < count; ++i) {
+            LanternRoot sig_root;
+            if (hash_byte_vector(signatures->data[i].bytes, LANTERN_SIGNATURE_SIZE, &sig_root) != 0) {
+                free(chunks);
+                return -1;
+            }
+            memcpy(chunks + (i * SSZ_BYTES_PER_CHUNK), sig_root.bytes, SSZ_BYTES_PER_CHUNK);
+        }
+    }
+    uint8_t temp_root[SSZ_BYTES_PER_CHUNK];
+    memset(temp_root, 0, sizeof(temp_root));
+    ssz_error_t err = ssz_merkleize(chunks, signatures->length, LANTERN_MAX_BLOCK_SIGNATURES, temp_root);
+    if (chunks) {
+        free(chunks);
+    }
+    if (err != SSZ_SUCCESS) {
+        return -1;
+    }
+    err = ssz_mix_in_length(temp_root, (uint64_t)signatures->length, out_root->bytes);
+    return err == SSZ_SUCCESS ? 0 : -1;
+}
+
 int lantern_hash_tree_root_block_body(const LanternBlockBody *body, LanternRoot *out_root) {
     if (!body || !out_root) {
         return -1;
@@ -386,17 +429,41 @@ int lantern_hash_tree_root_block(const LanternBlock *block, LanternRoot *out_roo
     return merkleize_chunks(&chunks[0][0], 5, 0, out_root);
 }
 
-int lantern_hash_tree_root_signed_block(const LanternSignedBlock *block, LanternRoot *out_root) {
+int lantern_hash_tree_root_block_with_attestation(
+    const LanternBlockWithAttestation *block,
+    LanternRoot *out_root) {
     if (!block || !out_root) {
         return -1;
     }
     LanternRoot block_root;
-    if (lantern_hash_tree_root_block(&block->message, &block_root) != 0) {
+    LanternRoot proposer_root;
+    if (lantern_hash_tree_root_block(&block->block, &block_root) != 0) {
+        return -1;
+    }
+    if (lantern_hash_tree_root_signed_vote(&block->proposer_attestation, &proposer_root) != 0) {
         return -1;
     }
     uint8_t chunks[2][SSZ_BYTES_PER_CHUNK];
     memcpy(chunks[0], block_root.bytes, SSZ_BYTES_PER_CHUNK);
-    memcpy(chunks[1], block->signature.bytes, SSZ_BYTES_PER_CHUNK);
+    memcpy(chunks[1], proposer_root.bytes, SSZ_BYTES_PER_CHUNK);
+    return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
+}
+
+int lantern_hash_tree_root_signed_block(const LanternSignedBlock *block, LanternRoot *out_root) {
+    if (!block || !out_root) {
+        return -1;
+    }
+    LanternRoot message_root;
+    if (lantern_hash_tree_root_block_with_attestation(&block->message, &message_root) != 0) {
+        return -1;
+    }
+    LanternRoot signatures_root;
+    if (hash_block_signatures(&block->signatures, &signatures_root) != 0) {
+        return -1;
+    }
+    uint8_t chunks[2][SSZ_BYTES_PER_CHUNK];
+    memcpy(chunks[0], message_root.bytes, SSZ_BYTES_PER_CHUNK);
+    memcpy(chunks[1], signatures_root.bytes, SSZ_BYTES_PER_CHUNK);
     return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
 }
 

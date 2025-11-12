@@ -165,7 +165,7 @@ void lantern_blocks_by_root_response_reset(LanternBlocksByRootResponse *resp) {
     }
     if (resp->blocks) {
         for (size_t i = 0; i < resp->length; ++i) {
-            lantern_block_body_reset(&resp->blocks[i].message.body);
+            lantern_signed_block_with_attestation_reset(&resp->blocks[i]);
         }
     }
     free(resp->blocks);
@@ -181,7 +181,7 @@ int lantern_blocks_by_root_response_resize(LanternBlocksByRootResponse *resp, si
     if (new_length == 0) {
         if (resp->blocks) {
             for (size_t i = 0; i < resp->length; ++i) {
-                lantern_block_body_reset(&resp->blocks[i].message.body);
+                lantern_signed_block_with_attestation_reset(&resp->blocks[i]);
             }
         }
         resp->length = 0;
@@ -196,12 +196,11 @@ int lantern_blocks_by_root_response_resize(LanternBlocksByRootResponse *resp, si
     size_t old_length = resp->length;
     if (new_length > old_length) {
         for (size_t i = old_length; i < new_length; ++i) {
-            memset(&resp->blocks[i], 0, sizeof(resp->blocks[i]));
-            lantern_block_body_init(&resp->blocks[i].message.body);
+            lantern_signed_block_with_attestation_init(&resp->blocks[i]);
         }
     } else if (new_length < old_length) {
         for (size_t i = new_length; i < old_length; ++i) {
-            lantern_block_body_reset(&resp->blocks[i].message.body);
+            lantern_signed_block_with_attestation_reset(&resp->blocks[i]);
         }
     }
     resp->length = new_length;

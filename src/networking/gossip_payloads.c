@@ -17,11 +17,14 @@ static uint8_t *alloc_buffer(size_t size) {
 }
 
 static size_t signed_block_base_ssz_size(void) {
-    return (SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE)
-        + (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
+    size_t block_fixed = (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
         + (LANTERN_ROOT_SIZE * 2u)
-        + SSZ_BYTE_SIZE_OF_UINT32 /* block body offset */
-        + SSZ_BYTE_SIZE_OF_UINT32; /* attestations offset */
+        + SSZ_BYTE_SIZE_OF_UINT32;
+    size_t message_base = SSZ_BYTE_SIZE_OF_UINT32 /* block offset */
+        + LANTERN_SIGNED_VOTE_SSZ_SIZE /* proposer attestation */
+        + block_fixed;
+    size_t offsets = SSZ_BYTE_SIZE_OF_UINT32 * 2u; /* message + signatures */
+    return offsets + message_base;
 }
 
 static size_t signed_block_max_ssz_size(void) {
@@ -30,20 +33,34 @@ static size_t signed_block_max_ssz_size(void) {
     if (attestations_max > SIZE_MAX - base) {
         return SIZE_MAX;
     }
-    return base + attestations_max;
+    size_t total = base + attestations_max;
+    size_t signatures_max = (size_t)LANTERN_MAX_BLOCK_SIGNATURES * LANTERN_SIGNATURE_SIZE;
+    if (signatures_max > SIZE_MAX - total) {
+        return SIZE_MAX;
+    }
+    return total + signatures_max;
 }
 
 static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
+    if (!block) {
+        return 0;
+    }
     size_t base = signed_block_base_ssz_size();
-    size_t att_count = block->message.body.attestations.length;
+    size_t att_count = block->message.block.body.attestations.length;
     if (att_count > LANTERN_MAX_ATTESTATIONS) {
         return 0;
     }
     size_t att_bytes = att_count * LANTERN_SIGNED_VOTE_SSZ_SIZE;
-    if (att_bytes > SIZE_MAX - base) {
+    size_t total = base;
+    if (att_bytes > SIZE_MAX - total) {
         return 0;
     }
-    return base + att_bytes;
+    total += att_bytes;
+    size_t signature_bytes = block->signatures.length * LANTERN_SIGNATURE_SIZE;
+    if (signature_bytes > SIZE_MAX - total) {
+        return 0;
+    }
+    return total + signature_bytes;
 }
 
 static int basic_vote_sanity(const LanternSignedVote *vote) {
@@ -64,7 +81,7 @@ static int basic_block_sanity(const LanternSignedBlock *block) {
     if (!block) {
         return -1;
     }
-    const LanternBlock *message = &block->message;
+    const LanternBlock *message = &block->message.block;
     for (size_t i = 0; i < message->body.attestations.length; ++i) {
         const LanternSignedVote *att = &message->body.attestations.data[i];
         if (att->data.slot > message->slot) {
@@ -73,6 +90,17 @@ static int basic_block_sanity(const LanternSignedBlock *block) {
         if (basic_vote_sanity(att) != 0) {
             return -1;
         }
+    }
+    if (basic_vote_sanity(&block->message.proposer_attestation) != 0) {
+        return -1;
+    }
+    if (block->message.proposer_attestation.data.slot < message->slot) {
+        return -1;
+    }
+    size_t expected_signatures = message->body.attestations.length + 1u;
+    if (block->signatures.length != expected_signatures
+        || block->signatures.length > LANTERN_MAX_BLOCK_SIGNATURES) {
+        return -1;
     }
     return 0;
 }

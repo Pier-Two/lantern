@@ -150,12 +150,29 @@ static size_t block_encoded_size(const LanternBlock *block) {
     return fixed + block_body_encoded_size(&block->body);
 }
 
+static size_t block_with_attestation_encoded_size(const LanternBlockWithAttestation *block) {
+    size_t fixed = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    if (!block) {
+        return fixed;
+    }
+    return fixed + block_encoded_size(&block->block);
+}
+
+static size_t block_signatures_encoded_size(const LanternBlockSignatures *signatures) {
+    if (!signatures) {
+        return 0;
+    }
+    return signatures->length * LANTERN_SIGNATURE_SIZE;
+}
+
 static size_t signed_block_encoded_size(const LanternSignedBlock *block) {
     if (!block) {
         return 0;
     }
-    size_t header = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE;
-    return header + block_encoded_size(&block->message);
+    size_t offset_section = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
+    return offset_section
+        + block_with_attestation_encoded_size(&block->message)
+        + block_signatures_encoded_size(&block->signatures);
 }
 
 static int write_atomic_file(const char *path, const uint8_t *data, size_t data_len) {
@@ -508,7 +525,7 @@ int lantern_storage_store_block(const char *data_dir, const LanternSignedBlock *
         return -1;
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_block(&block->message, &root) != 0) {
+    if (lantern_hash_tree_root_block(&block->message.block, &root) != 0) {
         free_path(blocks_dir);
         return -1;
     }
@@ -609,7 +626,7 @@ int lantern_storage_collect_blocks(
             return -1;
         }
         LanternRoot computed;
-        if (lantern_hash_tree_root_block(&dest->message, &computed) != 0) {
+        if (lantern_hash_tree_root_block(&dest->message.block, &computed) != 0) {
             free(data);
             free_path(blocks_dir);
             return -1;
@@ -668,23 +685,22 @@ int lantern_storage_iterate_blocks(
             break;
         }
         LanternSignedBlock block;
-        memset(&block, 0, sizeof(block));
-        lantern_block_body_init(&block.message.body);
+        lantern_signed_block_with_attestation_init(&block);
         if (lantern_ssz_decode_signed_block(&block, data, data_len) != 0) {
-            lantern_block_body_reset(&block.message.body);
+            lantern_signed_block_with_attestation_reset(&block);
             free(data);
             rc = -1;
             break;
         }
         LanternRoot root;
-        if (lantern_hash_tree_root_block(&block.message, &root) != 0) {
-            lantern_block_body_reset(&block.message.body);
+        if (lantern_hash_tree_root_block(&block.message.block, &root) != 0) {
+            lantern_signed_block_with_attestation_reset(&block);
             free(data);
             rc = -1;
             break;
         }
         int visit_rc = visitor(&block, &root, context);
-        lantern_block_body_reset(&block.message.body);
+        lantern_signed_block_with_attestation_reset(&block);
         free(data);
         if (visit_rc != 0) {
             rc = visit_rc;

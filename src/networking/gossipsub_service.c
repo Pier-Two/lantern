@@ -38,20 +38,31 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
     if (!block) {
         return 0;
     }
-    size_t base = (SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE)
-        + (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
+    size_t offsets = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
+    size_t block_fixed = (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
         + (LANTERN_ROOT_SIZE * 2u)
-        + SSZ_BYTE_SIZE_OF_UINT32
         + SSZ_BYTE_SIZE_OF_UINT32;
-    size_t att_count = block->message.body.attestations.length;
+    size_t att_count = block->message.block.body.attestations.length;
     if (att_count > LANTERN_MAX_ATTESTATIONS) {
         return 0;
     }
     size_t att_bytes = att_count * LANTERN_SIGNED_VOTE_SSZ_SIZE;
-    if (att_bytes > SIZE_MAX - base) {
+    size_t proposer_bytes = LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    size_t signatures_bytes = block->signatures.length * LANTERN_SIGNATURE_SIZE;
+    size_t total = offsets + block_fixed;
+    if (total > SIZE_MAX - proposer_bytes) {
         return 0;
     }
-    return base + att_bytes;
+    total += proposer_bytes;
+    if (att_bytes > SIZE_MAX - total) {
+        return 0;
+    }
+    total += att_bytes;
+    if (signatures_bytes > SIZE_MAX - total) {
+        return 0;
+    }
+    total += signatures_bytes;
+    return total;
 }
 
 static libp2p_err_t lantern_gossipsub_message_id_cb(
@@ -139,8 +150,7 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
     }
 
     LanternSignedBlock block;
-    memset(&block, 0, sizeof(block));
-    lantern_block_body_init(&block.message.body);
+    lantern_signed_block_with_attestation_init(&block);
 
     libp2p_gossipsub_validation_result_t result = LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
     char peer_text[128];
@@ -167,7 +177,7 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
     }
     char block_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     if (lantern_bytes_to_hex(
-            block.message.parent_root.bytes,
+            block.message.block.parent_root.bytes,
             LANTERN_ROOT_SIZE,
             block_root_hex,
             sizeof(block_root_hex),
@@ -179,12 +189,12 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
         "gossip",
         &meta,
         "accepted block gossip slot=%" PRIu64 " proposer=%" PRIu64 " parent=%s",
-        block.message.slot,
-        block.message.proposer_index,
+        block.message.block.slot,
+        block.message.block.proposer_index,
         block_root_hex[0] ? block_root_hex : "0x0");
 
 cleanup:
-    lantern_block_body_reset(&block.message.body);
+    lantern_signed_block_with_attestation_reset(&block);
     return result;
 }
 

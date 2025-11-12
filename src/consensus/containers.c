@@ -222,3 +222,35 @@ void lantern_block_body_reset(LanternBlockBody *body) {
     }
     lantern_attestations_reset(&body->attestations);
 }
+
+void lantern_block_with_attestation_init(LanternBlockWithAttestation *block) {
+    if (!block) {
+        return;
+    }
+    memset(block, 0, sizeof(*block));
+    lantern_block_body_init(&block->block.body);
+}
+
+void lantern_block_with_attestation_reset(LanternBlockWithAttestation *block) {
+    if (!block) {
+        return;
+    }
+    lantern_block_body_reset(&block->block.body);
+    memset(block, 0, sizeof(*block));
+}
+
+void lantern_signed_block_with_attestation_init(LanternSignedBlockWithAttestation *block) {
+    if (!block) {
+        return;
+    }
+    lantern_block_with_attestation_init(&block->message);
+    lantern_block_signatures_init(&block->signatures);
+}
+
+void lantern_signed_block_with_attestation_reset(LanternSignedBlockWithAttestation *block) {
+    if (!block) {
+        return;
+    }
+    lantern_block_with_attestation_reset(&block->message);
+    lantern_block_signatures_reset(&block->signatures);
+}

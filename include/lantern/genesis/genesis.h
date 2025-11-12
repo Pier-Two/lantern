@@ -3,6 +3,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
+
+#include "lantern/consensus/containers.h"
 
 #include "lantern/networking/enr.h"
 #include "lantern/support/string_list.h"
@@ -28,6 +31,8 @@ struct lantern_validator_record {
     uint64_t index;
     char *pubkey_hex;
     char *withdrawal_credentials_hex;
+    uint8_t pubkey_bytes[LANTERN_VALIDATOR_PUBKEY_SIZE];
+    bool has_pubkey_bytes;
 };
 
 struct lantern_validator_registry {

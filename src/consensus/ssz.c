@@ -127,6 +127,61 @@ static int decode_attestations(LanternAttestations *attestations, const uint8_t 
     return 0;
 }
 
+static int encode_block_signatures(
+    const LanternBlockSignatures *signatures,
+    uint8_t *out,
+    size_t remaining,
+    size_t *written) {
+    if (!signatures) {
+        return -1;
+    }
+    if (signatures->length > LANTERN_MAX_BLOCK_SIGNATURES) {
+        return -1;
+    }
+    if (signatures->length > 0 && !signatures->data) {
+        return -1;
+    }
+
+    size_t required = signatures->length * LANTERN_SIGNATURE_SIZE;
+    if (remaining < required) {
+        return -1;
+    }
+
+    size_t offset = 0;
+    for (size_t i = 0; i < signatures->length; ++i) {
+        memcpy(out + offset, signatures->data[i].bytes, LANTERN_SIGNATURE_SIZE);
+        offset += LANTERN_SIGNATURE_SIZE;
+    }
+    set_written(written, offset);
+    return 0;
+}
+
+static int decode_block_signatures(
+    LanternBlockSignatures *signatures,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!signatures) {
+        return -1;
+    }
+    if (data_len == 0) {
+        return lantern_block_signatures_resize(signatures, 0);
+    }
+    if (!data || data_len % LANTERN_SIGNATURE_SIZE != 0) {
+        return -1;
+    }
+    size_t count = data_len / LANTERN_SIGNATURE_SIZE;
+    if (count > LANTERN_MAX_BLOCK_SIGNATURES) {
+        return -1;
+    }
+    if (lantern_block_signatures_resize(signatures, count) != 0) {
+        return -1;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        memcpy(signatures->data[i].bytes, data + (i * LANTERN_SIGNATURE_SIZE), LANTERN_SIGNATURE_SIZE);
+    }
+    return 0;
+}
+
 static int encode_root_list(const struct lantern_root_list *list, uint8_t *out, size_t remaining, size_t *written) {
     if (!list || !out) {
         return -1;
@@ -599,32 +654,47 @@ int lantern_ssz_decode_block(LanternBlock *block, const uint8_t *data, size_t da
     return 0;
 }
 
-int lantern_ssz_encode_signed_block(const LanternSignedBlock *block, uint8_t *out, size_t out_len, size_t *written) {
+int lantern_ssz_encode_block_with_attestation(
+    const LanternBlockWithAttestation *block,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
     if (!block || !out) {
         return -1;
     }
 
-    const size_t header_size = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE;
-    if (header_size > UINT32_MAX) {
+    const size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    if (fixed_section > UINT32_MAX) {
         return -1;
     }
-    if (out_len < header_size) {
-        return -1;
-    }
-
-    uint32_t message_offset = (uint32_t)header_size;
-    if (write_u32(out, out_len, message_offset) != 0) {
+    if (out_len < fixed_section) {
         return -1;
     }
 
-    memcpy(out + SSZ_BYTE_SIZE_OF_UINT32, block->signature.bytes, LANTERN_SIGNATURE_SIZE);
-
-    size_t message_written = 0;
-    if (lantern_ssz_encode_block(&block->message, out + message_offset, out_len - message_offset, &message_written) != 0) {
+    uint32_t block_offset = (uint32_t)fixed_section;
+    if (write_u32(out, out_len, block_offset) != 0) {
         return -1;
     }
 
-    size_t total = message_offset + message_written;
+    size_t proposer_written = 0;
+    if (lantern_ssz_encode_signed_vote(
+            &block->proposer_attestation,
+            out + SSZ_BYTE_SIZE_OF_UINT32,
+            out_len - SSZ_BYTE_SIZE_OF_UINT32,
+            &proposer_written)
+        != 0) {
+        return -1;
+    }
+    if (proposer_written != LANTERN_SIGNED_VOTE_SSZ_SIZE) {
+        return -1;
+    }
+
+    size_t block_written = 0;
+    if (lantern_ssz_encode_block(&block->block, out + block_offset, out_len - block_offset, &block_written) != 0) {
+        return -1;
+    }
+
+    size_t total = block_offset + block_written;
     if (total > UINT32_MAX) {
         return -1;
     }
@@ -632,8 +702,120 @@ int lantern_ssz_encode_signed_block(const LanternSignedBlock *block, uint8_t *ou
     return 0;
 }
 
-int lantern_ssz_decode_signed_block(LanternSignedBlock *block, const uint8_t *data, size_t data_len) {
-    if (!block || !data || data_len < SSZ_BYTE_SIZE_OF_UINT32) {
+int lantern_ssz_decode_block_with_attestation(
+    LanternBlockWithAttestation *block,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!block || !data) {
+        return -1;
+    }
+
+    const size_t min_size = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    if (data_len < min_size) {
+        return -1;
+    }
+
+    uint32_t block_offset = 0;
+    if (read_u32(data, data_len, &block_offset) != 0) {
+        return -1;
+    }
+    if (block_offset < min_size || block_offset > data_len) {
+        return -1;
+    }
+
+    if (lantern_ssz_decode_signed_vote(
+            &block->proposer_attestation,
+            data + SSZ_BYTE_SIZE_OF_UINT32,
+            LANTERN_SIGNED_VOTE_SSZ_SIZE)
+        != 0) {
+        return -1;
+    }
+
+    size_t block_len = data_len - block_offset;
+    if (block_len == 0) {
+        return -1;
+    }
+    if (lantern_ssz_decode_block(&block->block, data + block_offset, block_len) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int lantern_ssz_encode_signed_block_with_attestation(
+    const LanternSignedBlockWithAttestation *block,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
+    if (!block || !out) {
+        return -1;
+    }
+
+    const size_t offset_section = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
+    if (offset_section > UINT32_MAX) {
+        return -1;
+    }
+    if (out_len < offset_section) {
+        return -1;
+    }
+
+    size_t payload_offset = offset_section;
+    size_t message_written = 0;
+    if (lantern_ssz_encode_block_with_attestation(
+            &block->message,
+            out + payload_offset,
+            out_len - payload_offset,
+            &message_written)
+        != 0) {
+        return -1;
+    }
+
+    size_t message_region_end = payload_offset + message_written;
+    if (message_region_end < payload_offset || message_region_end > out_len) {
+        return -1;
+    }
+
+    size_t signatures_written = 0;
+    if (encode_block_signatures(
+            &block->signatures,
+            out + message_region_end,
+            out_len - message_region_end,
+            &signatures_written)
+        != 0) {
+        return -1;
+    }
+
+    size_t total = message_region_end + signatures_written;
+    if (total < message_region_end || total > UINT32_MAX) {
+        return -1;
+    }
+
+    if (payload_offset > UINT32_MAX || message_region_end > UINT32_MAX) {
+        return -1;
+    }
+    uint32_t message_offset = (uint32_t)payload_offset;
+    uint32_t signatures_offset = (uint32_t)message_region_end;
+
+    if (write_u32(out, out_len, message_offset) != 0) {
+        return -1;
+    }
+    if (write_u32(out + SSZ_BYTE_SIZE_OF_UINT32, out_len - SSZ_BYTE_SIZE_OF_UINT32, signatures_offset) != 0) {
+        return -1;
+    }
+
+    set_written(written, total);
+    return 0;
+}
+
+int lantern_ssz_decode_signed_block_with_attestation(
+    LanternSignedBlockWithAttestation *block,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!block || !data) {
+        return -1;
+    }
+
+    const size_t offset_section = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
+    if (data_len < offset_section) {
         return -1;
     }
 
@@ -641,20 +823,47 @@ int lantern_ssz_decode_signed_block(LanternSignedBlock *block, const uint8_t *da
     if (read_u32(data, data_len, &message_offset) != 0) {
         return -1;
     }
-    if (message_offset > data_len || message_offset < SSZ_BYTE_SIZE_OF_UINT32) {
+    uint32_t signatures_offset = 0;
+    if (read_u32(data + SSZ_BYTE_SIZE_OF_UINT32, data_len - SSZ_BYTE_SIZE_OF_UINT32, &signatures_offset) != 0) {
         return -1;
     }
 
-    if (message_offset >= SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE) {
-        memcpy(block->signature.bytes, data + SSZ_BYTE_SIZE_OF_UINT32, LANTERN_SIGNATURE_SIZE);
-    } else {
-        memset(block->signature.bytes, 0, LANTERN_SIGNATURE_SIZE);
+    if (message_offset < offset_section || signatures_offset < offset_section) {
+        return -1;
+    }
+    if (message_offset > data_len || signatures_offset > data_len) {
+        return -1;
+    }
+    if (signatures_offset < message_offset) {
+        return -1;
     }
 
-    if (lantern_ssz_decode_block(&block->message, data + message_offset, data_len - message_offset) != 0) {
+    size_t message_len = signatures_offset - message_offset;
+    if (message_len == 0 || message_len > data_len - message_offset) {
+        return -1;
+    }
+
+    if (lantern_ssz_decode_block_with_attestation(
+            &block->message,
+            data + message_offset,
+            message_len)
+        != 0) {
+        return -1;
+    }
+
+    size_t signatures_len = data_len - signatures_offset;
+    if (decode_block_signatures(&block->signatures, data + signatures_offset, signatures_len) != 0) {
         return -1;
     }
     return 0;
+}
+
+int lantern_ssz_encode_signed_block(const LanternSignedBlock *block, uint8_t *out, size_t out_len, size_t *written) {
+    return lantern_ssz_encode_signed_block_with_attestation(block, out, out_len, written);
+}
+
+int lantern_ssz_decode_signed_block(LanternSignedBlock *block, const uint8_t *data, size_t data_len) {
+    return lantern_ssz_decode_signed_block_with_attestation(block, data, data_len);
 }
 
 int lantern_ssz_encode_state(const LanternState *state, uint8_t *out, size_t out_len, size_t *written) {

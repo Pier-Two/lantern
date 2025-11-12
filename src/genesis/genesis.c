@@ -31,6 +31,8 @@ static const char *yaml_object_value(const LanternYamlObject *object, const char
 static int read_scalar_value(const char *path, const char *key, char **out_value);
 static enum lantern_validator_client_kind classify_validator_client(const char *name);
 static int derive_peer_id_from_privkey_hex(const char *hex, char **out_peer_id);
+static int decode_validator_pubkey_hex(const char *hex, uint8_t out[LANTERN_VALIDATOR_PUBKEY_SIZE]);
+static int set_record_pubkey(struct lantern_validator_record *record);
 
 void lantern_genesis_artifacts_init(struct lantern_genesis_artifacts *artifacts) {
     if (!artifacts) {
@@ -240,6 +242,42 @@ static int derive_peer_id_from_privkey_hex(const char *hex, char **out_peer_id) 
     return 0;
 }
 
+static const char *strip_hex_prefix(const char *hex) {
+    if (!hex) {
+        return NULL;
+    }
+    if (hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X')) {
+        return hex + 2;
+    }
+    return hex;
+}
+
+static int decode_validator_pubkey_hex(const char *hex, uint8_t out[LANTERN_VALIDATOR_PUBKEY_SIZE]) {
+    if (!hex || !out) {
+        return -1;
+    }
+    const char *trimmed = strip_hex_prefix(hex);
+    if (!trimmed) {
+        return -1;
+    }
+    size_t len = strlen(trimmed);
+    if (len != (size_t)LANTERN_VALIDATOR_PUBKEY_SIZE * 2u) {
+        return -1;
+    }
+    return lantern_hex_decode(trimmed, out, LANTERN_VALIDATOR_PUBKEY_SIZE);
+}
+
+static int set_record_pubkey(struct lantern_validator_record *record) {
+    if (!record || !record->pubkey_hex) {
+        return -1;
+    }
+    if (decode_validator_pubkey_hex(record->pubkey_hex, record->pubkey_bytes) != 0) {
+        return -1;
+    }
+    record->has_pubkey_bytes = true;
+    return 0;
+}
+
 static int parse_chain_config(const char *path, struct lantern_chain_config *config) {
     FILE *fp = fopen(path, "r");
     if (!fp) {
@@ -388,6 +426,12 @@ static int parse_validator_registry(const char *path, struct lantern_validator_r
         records[slot].index = (uint64_t)slot;
         records[slot].pubkey_hex = pubkey_hex;
         records[slot].withdrawal_credentials_hex = withdrawal_hex;
+        if (set_record_pubkey(&records[slot]) != 0) {
+            free(assigned);
+            free_validator_registry(&(struct lantern_validator_registry){.records = records, .count = record_count});
+            lantern_yaml_free_objects(objects, count);
+            return -1;
+        }
         assigned[slot] = true;
     }
 
@@ -483,6 +527,7 @@ static int parse_validator_registry_mapping(const char *path, struct lantern_val
             free(indices);
             return -1;
         }
+        (void)set_record_pubkey(&records[i]);
     }
 
     registry->records = records;

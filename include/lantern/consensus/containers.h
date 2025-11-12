@@ -8,6 +8,7 @@
 #define LANTERN_ROOT_SIZE 32
 #define LANTERN_SIGNATURE_SIZE 4000
 #define LANTERN_MAX_ATTESTATIONS 4096
+#define LANTERN_MAX_BLOCK_SIGNATURES (LANTERN_MAX_ATTESTATIONS + 1)
 #define LANTERN_VALIDATOR_PUBKEY_SIZE 52
 #define LANTERN_VALIDATOR_REGISTRY_LIMIT 4096
 #define LANTERN_HISTORICAL_ROOTS_LIMIT 262144
@@ -81,12 +82,20 @@ typedef struct {
 } LanternBlock;
 
 typedef struct {
-    LanternBlock message;
-    LanternSignature signature;
-} LanternSignedBlock;
-
-typedef struct {
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+    union {
+        LanternBlock block;
+        struct {
+            uint64_t slot;
+            uint64_t proposer_index;
+            LanternRoot parent_root;
+            LanternRoot state_root;
+            LanternBlockBody body;
+        };
+    };
+#else
     LanternBlock block;
+#endif
     LanternSignedVote proposer_attestation;
 } LanternBlockWithAttestation;
 
@@ -94,6 +103,8 @@ typedef struct {
     LanternBlockWithAttestation message;
     LanternBlockSignatures signatures;
 } LanternSignedBlockWithAttestation;
+
+typedef LanternSignedBlockWithAttestation LanternSignedBlock;
 
 void lantern_attestations_init(LanternAttestations *list);
 void lantern_attestations_reset(LanternAttestations *list);
@@ -109,5 +120,10 @@ int lantern_block_signatures_resize(LanternBlockSignatures *list, size_t new_len
 
 void lantern_block_body_init(LanternBlockBody *body);
 void lantern_block_body_reset(LanternBlockBody *body);
+
+void lantern_block_with_attestation_init(LanternBlockWithAttestation *block);
+void lantern_block_with_attestation_reset(LanternBlockWithAttestation *block);
+void lantern_signed_block_with_attestation_init(LanternSignedBlockWithAttestation *block);
+void lantern_signed_block_with_attestation_reset(LanternSignedBlockWithAttestation *block);
 
 #endif /* LANTERN_CONSENSUS_CONTAINERS_H */

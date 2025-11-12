@@ -566,10 +566,11 @@ int lantern_fixture_parse_signed_block(
     if (!signed_block) {
         return -1;
     }
-    if (lantern_fixture_parse_block(doc, object_index, &signed_block->message) != 0) {
+    lantern_signed_block_with_attestation_init(signed_block);
+    if (lantern_fixture_parse_block(doc, object_index, &signed_block->message.block) != 0) {
         return -1;
     }
-    memset(signed_block->signature.bytes, 0, sizeof(signed_block->signature.bytes));
+    lantern_block_signatures_resize(&signed_block->signatures, 0);
     return 0;
 }
 

@@ -39,5 +39,5 @@ The consensus JSON and SSZ fixtures live in `tests/fixtures`. To refresh them fr
 
 ## License
 
-Lantern is released under the terms of the Apache 2.0 license. See
+Lantern is released under the terms of the MIT license. See
 [LICENSE](LICENSE) for details.

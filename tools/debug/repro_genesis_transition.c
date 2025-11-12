@@ -116,27 +116,27 @@ int main(int argc, char **argv) {
     }
 
     LanternSignedBlock signed_block;
-    memset(&signed_block, 0, sizeof(signed_block));
+    lantern_signed_block_with_attestation_init(&signed_block);
     if (lantern_ssz_decode_signed_block(&signed_block, block_bytes, block_len) != 0) {
         fprintf(stderr, "failed to decode signed block\n");
         free(block_bytes);
-        lantern_block_body_reset(&signed_block.message.body);
+        lantern_signed_block_with_attestation_reset(&signed_block);
         lantern_state_reset(&state);
         return 1;
     }
     free(block_bytes);
-    lantern_signature_zero(&signed_block.signature);
+    (void)lantern_block_signatures_resize(&signed_block.signatures, 0);
 
     fprintf(
         stderr,
         "decoded block slot=%" PRIu64 " proposer=%" PRIu64 "\n",
-        signed_block.message.slot,
-        signed_block.message.proposer_index);
-    log_root("block_parent_root", &signed_block.message.parent_root);
-    log_root("block_state_root", &signed_block.message.state_root);
+        signed_block.message.block.slot,
+        signed_block.message.block.proposer_index);
+    log_root("block_parent_root", &signed_block.message.block.parent_root);
+    log_root("block_state_root", &signed_block.message.block.state_root);
 
     LanternRoot block_root;
-    if (lantern_hash_tree_root_block(&signed_block.message, &block_root) == 0) {
+    if (lantern_hash_tree_root_block(&signed_block.message.block, &block_root) == 0) {
         log_root("block_root", &block_root);
     }
     log_root("pre.latest_justified_root", &state.latest_justified.root);
@@ -157,7 +157,7 @@ int main(int argc, char **argv) {
         LanternRoot alt_root;
         if (state.historical_block_hashes.length > 0 && state.historical_block_hashes.items) {
             LanternRoot saved = state.historical_block_hashes.items[0];
-            state.historical_block_hashes.items[0] = signed_block.message.parent_root;
+            state.historical_block_hashes.items[0] = signed_block.message.block.parent_root;
             if (lantern_hash_tree_root_state(&state, &alt_root) == 0) {
                 log_root("patched_hist_state_root", &alt_root);
             }
@@ -169,8 +169,8 @@ int main(int argc, char **argv) {
         }
         LanternCheckpoint saved_justified = state.latest_justified;
         LanternCheckpoint saved_finalized = state.latest_finalized;
-        state.latest_justified.root = signed_block.message.parent_root;
-        state.latest_finalized.root = signed_block.message.parent_root;
+        state.latest_justified.root = signed_block.message.block.parent_root;
+        state.latest_finalized.root = signed_block.message.block.parent_root;
         if (lantern_hash_tree_root_state(&state, &alt_root) == 0) {
             log_root("patched_checkpoint_state_root", &alt_root);
         }
@@ -178,7 +178,7 @@ int main(int argc, char **argv) {
         state.latest_finalized = saved_finalized;
     }
 
-    lantern_block_body_reset(&signed_block.message.body);
+    lantern_signed_block_with_attestation_reset(&signed_block);
     lantern_state_reset(&state);
     return rc == 0 ? 0 : 2;
 }

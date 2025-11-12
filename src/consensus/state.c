@@ -1018,7 +1018,7 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
     if (!state || !signed_block) {
         return -1;
     }
-    const LanternBlock *block = &signed_block->message;
+    const LanternBlock *block = &signed_block->message.block;
     bool profiling = state_profile_enabled();
     double transition_metrics_start = lantern_time_now_seconds();
 #define STATE_FAIL(fmt, ...)                                                                 \
