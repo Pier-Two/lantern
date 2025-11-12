@@ -71,5 +71,6 @@ int lantern_state_compute_vote_checkpoints(
     LanternCheckpoint *out_head,
     LanternCheckpoint *out_target,
     LanternCheckpoint *out_source);
+void lantern_state_profile_dump(void);
 
 #endif /* LANTERN_CONSENSUS_STATE_H */

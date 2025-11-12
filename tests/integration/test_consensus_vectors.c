@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include <limits.h>
+#include <sys/time.h>
 
 #ifndef LANTERN_TEST_FIXTURE_DIR
 #error "LANTERN_TEST_FIXTURE_DIR must be defined"
@@ -24,6 +25,41 @@
 
 #define LABEL_MAX_LENGTH 64
 #define MAX_LABELS 128
+
+struct profile_metric {
+    double seconds;
+    size_t calls;
+};
+
+static bool profile_enabled(void) {
+    static bool initialized = false;
+    static bool enabled = false;
+    if (!initialized) {
+        const char *env = getenv("LANTERN_PROFILE_CONSENSUS_VECTORS");
+        enabled = env && env[0] != '\0' && env[0] != '0';
+        initialized = true;
+    }
+    return enabled;
+}
+
+static double profile_now(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
+}
+
+static void profile_record(struct profile_metric *metric, double delta) {
+    if (!metric) {
+        return;
+    }
+    metric->seconds += delta;
+    metric->calls += 1;
+}
+
+static struct profile_metric g_profile_encode_state;
+static struct profile_metric g_profile_store_state;
+static struct profile_metric g_profile_restore_state;
+static struct profile_metric g_profile_state_transition;
 
 static void configure_logging(void) {
     const char *env_level = getenv("LANTERN_LOG_LEVEL");
@@ -145,11 +181,14 @@ static int encode_state_to_buffer(const LanternState *state, uint8_t **out_data,
     if (!state || !out_data || !out_len) {
         return -1;
     }
+    bool profiling = profile_enabled();
+    double start = profiling ? profile_now() : 0.0;
     size_t buffer_size = 1u << 18; /* 256 KiB initial */
     uint8_t *buffer = malloc(buffer_size);
     if (!buffer) {
         return -1;
     }
+    int rc = -1;
     while (true) {
         size_t written = 0;
         int status = lantern_ssz_encode_state(state, buffer, buffer_size, &written);
@@ -157,27 +196,33 @@ static int encode_state_to_buffer(const LanternState *state, uint8_t **out_data,
             uint8_t *copy = malloc(written);
             if (!copy) {
                 free(buffer);
-                return -1;
+                break;
             }
             memcpy(copy, buffer, written);
             free(buffer);
             *out_data = copy;
             *out_len = written;
-            return 0;
+            rc = 0;
+            break;
         }
         if (buffer_size > (1u << 24)) { /* 16 MiB cap to avoid runaway */
             free(buffer);
-            return -1;
+            break;
         }
         size_t new_size = buffer_size * 2u;
         uint8_t *resized = realloc(buffer, new_size);
         if (!resized) {
             free(buffer);
-            return -1;
+            break;
         }
         buffer = resized;
         buffer_size = new_size;
     }
+
+    if (profiling) {
+        profile_record(&g_profile_encode_state, profile_now() - start);
+    }
+    return rc;
 }
 
 static int stored_state_save(
@@ -191,8 +236,11 @@ static int stored_state_save(
     }
     uint8_t *encoded = NULL;
     size_t encoded_len = 0;
+    bool profiling = profile_enabled();
+    double start = profiling ? profile_now() : 0.0;
+    int rc = -1;
     if (encode_state_to_buffer(state, &encoded, &encoded_len) != 0) {
-        return -1;
+        goto done;
     }
 
     size_t vote_capacity = lantern_state_validator_capacity(state);
@@ -264,12 +312,19 @@ static int stored_state_save(
         }
     }
 
-    if (stored_state_add(entries_ptr, count_ptr, cap_ptr, root, encoded, encoded_len, votes, vote_capacity) != 0) {
+    int add_status = stored_state_add(entries_ptr, count_ptr, cap_ptr, root, encoded, encoded_len, votes, vote_capacity);
+    if (add_status != 0) {
         free(votes);
         free(encoded);
-        return -1;
+        goto done;
     }
-    return 0;
+    rc = 0;
+
+done:
+    if (profiling) {
+        profile_record(&g_profile_store_state, profile_now() - start);
+    }
+    return rc;
 }
 
 static int stored_state_restore(
@@ -284,15 +339,18 @@ static int stored_state_restore(
     if (!entry) {
         return -1;
     }
+    bool profiling = profile_enabled();
+    double start = profiling ? profile_now() : 0.0;
+    int rc = -1;
     if (lantern_ssz_decode_state(state, entry->data, entry->length) != 0) {
-        return -1;
+        goto done;
     }
     uint64_t validator_count = state->config.num_validators;
     if (validator_count == 0) {
-        return -1;
+        goto done;
     }
     if (lantern_state_prepare_validator_votes(state, validator_count) != 0) {
-        return -1;
+        goto done;
     }
     size_t capacity = lantern_state_validator_capacity(state);
     size_t copy_count = entry->vote_count < capacity ? entry->vote_count : capacity;
@@ -302,12 +360,18 @@ static int stored_state_restore(
                 continue;
             }
             if (lantern_state_set_validator_vote(state, i, &entry->votes[i].vote) != 0) {
-                return -1;
+                goto done;
             }
         }
     }
+    rc = 0;
+
+done:
+    if (profiling) {
+        profile_record(&g_profile_restore_state, profile_now() - start);
+    }
     const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
-    if (debug_hash && debug_hash[0] != '\0') {
+    if (rc == 0 && debug_hash && debug_hash[0] != '\0') {
         LanternRoot restored_root;
         if (lantern_hash_tree_root_state(state, &restored_root) == 0) {
             char restored_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
@@ -326,7 +390,17 @@ static int stored_state_restore(
             }
         }
     }
-    return 0;
+    return rc;
+}
+
+static int profile_state_transition(LanternState *state, const LanternSignedBlock *block) {
+    if (!profile_enabled()) {
+        return lantern_state_transition(state, block);
+    }
+    double start = profile_now();
+    int rc = lantern_state_transition(state, block);
+    profile_record(&g_profile_state_transition, profile_now() - start);
+    return rc;
 }
 
 static int sync_state_to_fork_choice_head(
@@ -356,6 +430,34 @@ static int sync_state_to_fork_choice_head(
     lantern_state_attach_fork_choice(state, store);
     *current_head_root = head_root;
     return 0;
+}
+
+static void profile_report(void) {
+    if (!profile_enabled()) {
+        return;
+    }
+    lantern_state_profile_dump();
+    const struct {
+        const char *label;
+        const struct profile_metric *metric;
+    } rows[] = {
+        {"encode_state", &g_profile_encode_state},
+        {"store_state", &g_profile_store_state},
+        {"restore_state", &g_profile_restore_state},
+        {"state_transition", &g_profile_state_transition},
+    };
+    fprintf(stderr, "\n[lantern_profile] consensus vectors timing:\n");
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
+        const struct profile_metric *metric = rows[i].metric;
+        double avg_ms = metric->calls ? (metric->seconds / (double)metric->calls) * 1000.0 : 0.0;
+        fprintf(
+            stderr,
+            "  %-17s %8zu calls  %10.3f s total  %8.3f ms avg\n",
+            rows[i].label,
+            metric->calls,
+            metric->seconds,
+            avg_ms);
+    }
 }
 
 struct label_entry {
@@ -552,7 +654,7 @@ static int run_state_transition_fixture(const char *path) {
             return -1;
         }
 
-        int status = lantern_state_transition(&state, &signed_block);
+        int status = profile_state_transition(&state, &signed_block);
         reset_block(&signed_block.message);
 
         if (status != 0) {
@@ -823,7 +925,7 @@ static int run_fork_choice_fixture(const char *path) {
 
         if (extends_canonical) {
             if (signed_block.message.slot > state.slot) {
-                if (lantern_state_transition(&state, &signed_block) != 0) {
+                if (profile_state_transition(&state, &signed_block) != 0) {
                     reset_block(&signed_block.message);
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
@@ -880,7 +982,7 @@ static int run_fork_choice_fixture(const char *path) {
                 return -1;
             }
             active_state = &branch_state;
-            if (lantern_state_transition(active_state, &signed_block) != 0) {
+            if (profile_state_transition(active_state, &signed_block) != 0) {
                 lantern_state_reset(&branch_state);
                 reset_block(&signed_block.message);
                 reset_block(&anchor_block);
@@ -1441,5 +1543,6 @@ int main(void) {
     }
 
     puts("lantern_consensus_vectors OK");
+    profile_report();
     return 0;
 }
