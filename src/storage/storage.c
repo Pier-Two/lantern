@@ -119,14 +119,24 @@ static size_t state_encoded_size(const LanternState *state) {
     if (!state) {
         return 0;
     }
+    if (state->config.num_validators != (uint64_t)state->validator_count) {
+        return 0;
+    }
     size_t fixed = LANTERN_CONFIG_SSZ_SIZE
         + SSZ_BYTE_SIZE_OF_UINT64
         + LANTERN_BLOCK_HEADER_SSZ_SIZE
         + (2u * LANTERN_CHECKPOINT_SSZ_SIZE)
-        + LANTERN_ROOT_SIZE
-        + (4u * SSZ_BYTE_SIZE_OF_UINT32);
+        + (5u * SSZ_BYTE_SIZE_OF_UINT32);
+    size_t validator_bytes = 0;
+    if (state->validator_count > 0) {
+        if (!state->validators || state->validator_count > SIZE_MAX / LANTERN_VALIDATOR_PUBKEY_SIZE) {
+            return 0;
+        }
+        validator_bytes = state->validator_count * LANTERN_VALIDATOR_PUBKEY_SIZE;
+    }
     size_t variable = root_list_encoded_size(&state->historical_block_hashes)
         + bitlist_encoded_size(&state->justified_slots)
+        + validator_bytes
         + root_list_encoded_size(&state->justification_roots)
         + bitlist_encoded_size(&state->justification_validators);
     return fixed + variable;
@@ -136,7 +146,7 @@ static size_t block_body_encoded_size(const LanternBlockBody *body) {
     if (!body) {
         return SSZ_BYTE_SIZE_OF_UINT32;
     }
-    size_t attestations_bytes = body->attestations.length * LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    size_t attestations_bytes = body->attestations.length * LANTERN_VOTE_SSZ_SIZE;
     return SSZ_BYTE_SIZE_OF_UINT32 + attestations_bytes;
 }
 
@@ -151,7 +161,7 @@ static size_t block_encoded_size(const LanternBlock *block) {
 }
 
 static size_t block_with_attestation_encoded_size(const LanternBlockWithAttestation *block) {
-    size_t fixed = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    size_t fixed = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_VOTE_SSZ_SIZE;
     if (!block) {
         return fixed;
     }

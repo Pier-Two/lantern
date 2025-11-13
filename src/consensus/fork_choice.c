@@ -433,7 +433,10 @@ int lantern_fork_choice_add_block(
 
     const LanternAttestations *att = &block->body.attestations;
     for (size_t i = 0; i < att->length; ++i) {
-        if (lantern_fork_choice_add_vote(store, &att->data[i], true) != 0) {
+        LanternSignedVote wrapped_vote;
+        memset(&wrapped_vote, 0, sizeof(wrapped_vote));
+        wrapped_vote.data = att->data[i];
+        if (lantern_fork_choice_add_vote(store, &wrapped_vote, true) != 0) {
             return -1;
         }
     }

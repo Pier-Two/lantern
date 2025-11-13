@@ -52,7 +52,7 @@ typedef struct {
 } LanternBlockSignatures;
 
 typedef struct {
-    LanternSignedVote *data;
+    LanternVote *data;
     size_t length;
     size_t capacity;
 } LanternAttestations;
@@ -96,7 +96,7 @@ typedef struct {
 #else
     LanternBlock block;
 #endif
-    LanternSignedVote proposer_attestation;
+    LanternVote proposer_attestation;
 } LanternBlockWithAttestation;
 
 typedef struct {
@@ -108,7 +108,7 @@ typedef LanternSignedBlockWithAttestation LanternSignedBlock;
 
 void lantern_attestations_init(LanternAttestations *list);
 void lantern_attestations_reset(LanternAttestations *list);
-int lantern_attestations_append(LanternAttestations *list, const LanternSignedVote *vote);
+int lantern_attestations_append(LanternAttestations *list, const LanternVote *vote);
 int lantern_attestations_copy(LanternAttestations *dst, const LanternAttestations *src);
 int lantern_attestations_resize(LanternAttestations *list, size_t new_length);
 

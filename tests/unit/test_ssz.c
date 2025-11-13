@@ -55,12 +55,17 @@ static void expect_bytes_equal(
     }
 }
 
-static void maybe_dump_state_vector(const uint8_t *data, size_t len) {
-    const char *dump_env = getenv("LANTERN_DUMP_SSZ_STATE");
+static void maybe_dump_vector(
+    const char *env_var,
+    const char *label,
+    const uint8_t *data,
+    size_t len) {
+    const char *dump_env = getenv(env_var);
     if (!dump_env || dump_env[0] == '\0') {
         return;
     }
-    printf("static const uint8_t LANTERN_SSZ_VECTOR_STATE[] = {\n");
+    printf("// %s length=%zu\n", label, len);
+    printf("static const uint8_t %s[] = {\n", label);
     for (size_t i = 0; i < len; ++i) {
         if (i % 12 == 0) {
             printf("    ");
@@ -76,6 +81,10 @@ static void maybe_dump_state_vector(const uint8_t *data, size_t len) {
     printf("};\n");
     fflush(stdout);
     exit(0);
+}
+
+static void maybe_dump_state_vector(const uint8_t *data, size_t len) {
+    maybe_dump_vector("LANTERN_DUMP_SSZ_STATE", "LANTERN_SSZ_VECTOR_STATE", data, len);
 }
 
 static LanternCheckpoint checkpoint_from_vector(const uint8_t *root_bytes, uint64_t slot) {
@@ -94,7 +103,7 @@ static void assert_checkpoint_equal(const LanternCheckpoint *lhs, const LanternC
 }
 
 static void assert_vote_equal(const LanternVote *lhs, const LanternVote *rhs) {
-    if (lhs->slot != rhs->slot) {
+    if (lhs->validator_id != rhs->validator_id || lhs->slot != rhs->slot) {
         fprintf(stderr, "vote slot mismatch\n");
         abort();
     }
@@ -255,12 +264,13 @@ static void test_block_body_roundtrip(void) {
 
     LanternSignedVote vote_a = build_signed_vote(1, 5, 0x50);
     LanternSignedVote vote_b = build_signed_vote(2, 6, 0x60);
-    assert(lantern_attestations_append(&body.attestations, &vote_a) == 0);
-    assert(lantern_attestations_append(&body.attestations, &vote_b) == 0);
+    assert(lantern_attestations_append(&body.attestations, &vote_a.data) == 0);
+    assert(lantern_attestations_append(&body.attestations, &vote_b.data) == 0);
 
     uint8_t buffer[1024];
     size_t written = 0;
     assert(lantern_ssz_encode_block_body(&body, buffer, sizeof(buffer), &written) == 0);
+    maybe_dump_vector("LANTERN_DUMP_SSZ_BLOCK_BODY", "LANTERN_SSZ_VECTOR_BLOCK_BODY", buffer, written);
 
     LanternBlockBody decoded;
     lantern_block_body_init(&decoded);
@@ -268,11 +278,7 @@ static void test_block_body_roundtrip(void) {
     assert(decoded.attestations.length == body.attestations.length);
 
     for (size_t i = 0; i < body.attestations.length; ++i) {
-        assert(decoded.attestations.data[i].data.validator_id == body.attestations.data[i].data.validator_id);
-        assert(memcmp(decoded.attestations.data[i].signature.bytes,
-                      body.attestations.data[i].signature.bytes,
-                      LANTERN_SIGNATURE_SIZE)
-               == 0);
+        assert_vote_equal(&decoded.attestations.data[i], &body.attestations.data[i]);
     }
 
     lantern_block_body_reset(&body);
@@ -289,8 +295,8 @@ static void populate_block(LanternBlock *block) {
 
     LanternSignedVote vote_a = build_signed_vote(11, 15, 0x70);
     LanternSignedVote vote_b = build_signed_vote(22, 16, 0x80);
-    assert(lantern_attestations_append(&block->body.attestations, &vote_a) == 0);
-    assert(lantern_attestations_append(&block->body.attestations, &vote_b) == 0);
+    assert(lantern_attestations_append(&block->body.attestations, &vote_a.data) == 0);
+    assert(lantern_attestations_append(&block->body.attestations, &vote_b.data) == 0);
 }
 
 static void reset_block(LanternBlock *block) {
@@ -367,11 +373,11 @@ static void build_block_body_vector(LanternBlockBody *body) {
     lantern_block_body_init(body);
     LanternSignedVote vote_a;
     build_signed_vote_vector_a(&vote_a);
-    expect_ok(lantern_attestations_append(&body->attestations, &vote_a), "append vote A");
+    expect_ok(lantern_attestations_append(&body->attestations, &vote_a.data), "append vote A");
 
     LanternSignedVote vote_b;
     build_signed_vote_vector_b(&vote_b);
-    expect_ok(lantern_attestations_append(&body->attestations, &vote_b), "append vote B");
+    expect_ok(lantern_attestations_append(&body->attestations, &vote_b.data), "append vote B");
 }
 
 static void build_block_vector(LanternBlock *block) {
@@ -390,16 +396,24 @@ static void build_signed_block_vector(LanternSignedBlock *signed_block) {
 
     LanternSignedVote proposer;
     build_signed_vote_vector_a(&proposer);
-    signed_block->message.proposer_attestation = proposer;
+    signed_block->message.proposer_attestation = proposer.data;
 
     size_t attestation_count = signed_block->message.block.body.attestations.length;
     size_t signature_count = attestation_count + 1u;
     expect_ok(
         lantern_block_signatures_resize(&signed_block->signatures, signature_count),
         "resize block signatures");
-    for (size_t i = 0; i < signature_count; ++i) {
-        fill_signature(&signed_block->signatures.data[i], (uint8_t)(0xC7 + (uint8_t)i));
+    LanternSignedVote vote_a;
+    build_signed_vote_vector_a(&vote_a);
+    LanternSignedVote vote_b;
+    build_signed_vote_vector_b(&vote_b);
+    if (attestation_count >= 1u) {
+        signed_block->signatures.data[0] = vote_a.signature;
     }
+    if (attestation_count >= 2u) {
+        signed_block->signatures.data[1] = vote_b.signature;
+    }
+    signed_block->signatures.data[signature_count - 1u] = proposer.signature;
 }
 
 static void build_state_vector(LanternState *state) {
@@ -439,6 +453,19 @@ static void build_state_vector(LanternState *state) {
     memcpy(state->justification_validators.bytes,
            LANTERN_VECTOR_STATE_JUSTIFICATION_VALIDATORS_BYTES,
            validators_bytes);
+
+    size_t validator_count = (size_t)LANTERN_VECTOR_CONFIG_NUM_VALIDATORS;
+    uint8_t validator_pubkeys[LANTERN_VALIDATOR_PUBKEY_SIZE * LANTERN_VECTOR_CONFIG_NUM_VALIDATORS];
+    for (size_t i = 0; i < validator_count; ++i) {
+        uint8_t seed = (uint8_t)(0x90 + (i * 0x10));
+        fill_bytes(
+            validator_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+            LANTERN_VALIDATOR_PUBKEY_SIZE,
+            seed);
+    }
+    expect_ok(
+        lantern_state_set_validator_pubkeys(state, validator_pubkeys, validator_count),
+        "set validator pubkeys");
 }
 static void test_block_roundtrip(void) {
     LanternBlock block;
@@ -447,6 +474,7 @@ static void test_block_roundtrip(void) {
     uint8_t buffer[SIGNED_BLOCK_TEST_BUFFER_SIZE];
     size_t written = 0;
     assert(lantern_ssz_encode_block(&block, buffer, sizeof(buffer), &written) == 0);
+    maybe_dump_vector("LANTERN_DUMP_SSZ_BLOCK", "LANTERN_SSZ_VECTOR_BLOCK", buffer, written);
 
     LanternBlock decoded;
     memset(&decoded, 0, sizeof(decoded));
@@ -460,10 +488,7 @@ static void test_block_roundtrip(void) {
     assert(decoded.body.attestations.length == block.body.attestations.length);
 
     for (size_t i = 0; i < block.body.attestations.length; ++i) {
-        assert(memcmp(decoded.body.attestations.data[i].signature.bytes,
-                      block.body.attestations.data[i].signature.bytes,
-                      LANTERN_SIGNATURE_SIZE)
-               == 0);
+        assert_vote_equal(&decoded.body.attestations.data[i], &block.body.attestations.data[i]);
     }
 
     reset_block(&block);
@@ -761,6 +786,11 @@ static void test_leanspec_vectors(void) {
     written = 0;
     expect_ok(lantern_ssz_encode_block_body(&body_expected, body_encoded, sizeof(body_encoded), &written),
               "block body encode");
+    maybe_dump_vector(
+        "LANTERN_DUMP_SSZ_BLOCK_BODY_ACTUAL",
+        "LANTERN_SSZ_VECTOR_BLOCK_BODY",
+        body_encoded,
+        written);
     expect_bytes_equal(LANTERN_SSZ_VECTOR_BLOCK_BODY,
                        sizeof(LANTERN_SSZ_VECTOR_BLOCK_BODY),
                        body_encoded,
@@ -772,8 +802,8 @@ static void test_leanspec_vectors(void) {
                                             sizeof(LANTERN_SSZ_VECTOR_BLOCK_BODY)),
               "block body decode");
     assert(body_decoded.attestations.length == LANTERN_VECTOR_BLOCK_BODY_ATTESTATION_COUNT);
-    assert_signed_vote_equal(&body_decoded.attestations.data[0], &signed_vote_a_expected);
-    assert_signed_vote_equal(&body_decoded.attestations.data[1], &signed_vote_b_expected);
+    assert_vote_equal(&body_decoded.attestations.data[0], &signed_vote_a_expected.data);
+    assert_vote_equal(&body_decoded.attestations.data[1], &signed_vote_b_expected.data);
 
     /* Block */
     LanternBlock block_expected;
@@ -794,8 +824,8 @@ static void test_leanspec_vectors(void) {
     assert(memcmp(block_decoded.parent_root.bytes, block_expected.parent_root.bytes, LANTERN_ROOT_SIZE) == 0);
     assert(memcmp(block_decoded.state_root.bytes, block_expected.state_root.bytes, LANTERN_ROOT_SIZE) == 0);
     assert(block_decoded.body.attestations.length == block_expected.body.attestations.length);
-    assert_signed_vote_equal(&block_decoded.body.attestations.data[0], &signed_vote_a_expected);
-    assert_signed_vote_equal(&block_decoded.body.attestations.data[1], &signed_vote_b_expected);
+    assert_vote_equal(&block_decoded.body.attestations.data[0], &signed_vote_a_expected.data);
+    assert_vote_equal(&block_decoded.body.attestations.data[1], &signed_vote_b_expected.data);
 
     /* Signed block */
     LanternSignedBlock signed_block_expected;
@@ -807,6 +837,11 @@ static void test_leanspec_vectors(void) {
                                               sizeof(signed_block_encoded),
                                               &written),
               "signed block encode");
+    maybe_dump_vector(
+        "LANTERN_DUMP_SSZ_SIGNED_BLOCK",
+        "LANTERN_SSZ_VECTOR_SIGNED_BLOCK",
+        signed_block_encoded,
+        written);
     expect_bytes_equal(LANTERN_SSZ_VECTOR_SIGNED_BLOCK,
                        sizeof(LANTERN_SSZ_VECTOR_SIGNED_BLOCK),
                        signed_block_encoded,
@@ -820,8 +855,12 @@ static void test_leanspec_vectors(void) {
     expect_block_signatures_equal(&signed_block_expected.signatures, &signed_block_decoded.signatures);
     assert(signed_block_decoded.message.block.body.attestations.length
            == signed_block_expected.message.block.body.attestations.length);
-    assert_signed_vote_equal(&signed_block_decoded.message.block.body.attestations.data[0], &signed_vote_a_expected);
-    assert_signed_vote_equal(&signed_block_decoded.message.block.body.attestations.data[1], &signed_vote_b_expected);
+    assert_vote_equal(
+        &signed_block_decoded.message.block.body.attestations.data[0],
+        &signed_vote_a_expected.data);
+    assert_vote_equal(
+        &signed_block_decoded.message.block.body.attestations.data[1],
+        &signed_vote_b_expected.data);
 
     /* State */
     LanternState state_expected;
@@ -867,6 +906,19 @@ static void test_leanspec_vectors(void) {
                   state_expected.justification_validators.bytes,
                   (state_expected.justification_validators.bit_length + 7) / 8)
            == 0);
+    assert(state_decoded.validator_count == state_expected.validator_count);
+    assert(memcmp(
+               state_decoded.validator_registry_root.bytes,
+               state_expected.validator_registry_root.bytes,
+               LANTERN_ROOT_SIZE)
+           == 0);
+    for (size_t i = 0; i < state_expected.validator_count; ++i) {
+        expect_bytes_equal(
+            state_expected.validators[i].pubkey,
+            LANTERN_VALIDATOR_PUBKEY_SIZE,
+            state_decoded.validators[i].pubkey,
+            LANTERN_VALIDATOR_PUBKEY_SIZE);
+    }
 
     /* Cleanup */
     lantern_block_body_reset(&body_expected);
@@ -883,8 +935,20 @@ static void test_state_accepts_empty_justification_validators_payload(void) {
     LanternState genesis_state;
     lantern_state_init(&genesis_state);
     expect_ok(lantern_state_generate_genesis(&genesis_state, 1234, 7), "genesis state");
+    size_t genesis_validator_count = (size_t)genesis_state.config.num_validators;
+    uint8_t *genesis_validator_pubkeys = calloc(
+        genesis_validator_count,
+        LANTERN_VALIDATOR_PUBKEY_SIZE);
+    assert(genesis_validator_pubkeys != NULL);
+    expect_ok(
+        lantern_state_set_validator_pubkeys(
+            &genesis_state,
+            genesis_validator_pubkeys,
+            genesis_validator_count),
+        "genesis validators");
+    free(genesis_validator_pubkeys);
 
-    uint8_t encoded[512];
+    uint8_t encoded[2048];
     size_t written = 0;
     expect_ok(
         lantern_ssz_encode_state(&genesis_state, encoded, sizeof(encoded), &written),
@@ -893,15 +957,15 @@ static void test_state_accepts_empty_justification_validators_payload(void) {
     /*
      * The offsets table for the State container begins immediately after the
      * fixed-size fields (config, slot, latest_block_header, latest_justified,
-     * latest_finalized, validator_registry_root). Do not skip any additional
-     * bytes here or the computed offsets will be garbage.
+     * latest_finalized). Do not skip any additional bytes here or the computed
+     * offsets will be garbage.
      */
     size_t offsets_offset = LANTERN_CONFIG_SSZ_SIZE + sizeof(uint64_t) + LANTERN_BLOCK_HEADER_SSZ_SIZE
-        + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + LANTERN_ROOT_SIZE;
-    uint32_t offsets[4];
+        + (2 * LANTERN_CHECKPOINT_SSZ_SIZE);
+    uint32_t offsets[5];
     memcpy(offsets, encoded + offsets_offset, sizeof(offsets));
 
-    size_t truncated_len = offsets[3];
+    size_t truncated_len = offsets[4];
     assert(truncated_len <= written);
 
     LanternState decoded;

@@ -17,6 +17,10 @@ int lantern_fixture_read_text_file(const char *path, char **out_buf) {
     }
     FILE *file = fopen(path, "rb");
     if (!file) {
+        const char *debug = getenv("LANTERN_DEBUG_FIXTURES");
+        if (debug && debug[0] != '\0') {
+            fprintf(stderr, "fixture fopen failed: %s\n", path);
+        }
         perror("fopen");
         return -1;
     }
@@ -517,7 +521,7 @@ static int lantern_fixture_parse_attestations(
             return -1;
         }
 
-        if (lantern_attestations_append(&body->attestations, &vote) != 0) {
+        if (lantern_attestations_append(&body->attestations, &vote.data) != 0) {
             return -1;
         }
     }
@@ -668,9 +672,11 @@ int lantern_fixture_parse_signed_block(
     if (proposer_idx < 0) {
         goto error;
     }
-    if (lantern_fixture_parse_attestation_message(doc, proposer_idx, &signed_block->message.proposer_attestation) != 0) {
+    LanternSignedVote proposer_vote;
+    if (lantern_fixture_parse_attestation_message(doc, proposer_idx, &proposer_vote) != 0) {
         goto error;
     }
+    signed_block->message.proposer_attestation = proposer_vote.data;
 
     size_t attestation_count = signed_block->message.block.body.attestations.length;
     size_t expected_signatures = attestation_count + 1u;
@@ -694,16 +700,6 @@ int lantern_fixture_parse_signed_block(
         goto error;
     }
 
-    if (attestation_count > 0) {
-        if (!signed_block->message.block.body.attestations.data) {
-            goto error;
-        }
-        for (size_t i = 0; i < attestation_count; ++i) {
-            signed_block->message.block.body.attestations.data[i].signature = signed_block->signatures.data[i];
-        }
-    }
-    signed_block->message.proposer_attestation.signature =
-        signed_block->signatures.data[attestation_count];
     return 0;
 
 error:
@@ -783,15 +779,6 @@ int lantern_fixture_parse_anchor_state(
             }
         }
     }
-    LanternRoot validators_root;
-    if (lantern_hash_tree_root_validators(
-            count > 0 ? validator_pubkeys : NULL,
-            (size_t)count,
-            &validators_root)
-        != 0) {
-        free(validator_pubkeys);
-        return -1;
-    }
     *validator_count = (uint64_t)count;
 
     lantern_state_init(state);
@@ -803,7 +790,10 @@ int lantern_fixture_parse_anchor_state(
         free(validator_pubkeys);
         return -1;
     }
-    state->validator_registry_root = validators_root;
+    if (lantern_state_set_validator_pubkeys(state, validator_pubkeys, (size_t)count) != 0) {
+        free(validator_pubkeys);
+        return -1;
+    }
     const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
     if (debug_hash && debug_hash[0] != '\0') {
         char validators_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];

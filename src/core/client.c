@@ -3477,9 +3477,12 @@ static int validator_build_block(
     }
 
     LanternAttestations att_list;
+    LanternBlockSignatures att_signatures;
     lantern_attestations_init(&att_list);
-    if (lantern_state_collect_attestations_for_block(&client->state, &att_list) != 0) {
+    lantern_block_signatures_init(&att_signatures);
+    if (lantern_state_collect_attestations_for_block(&client->state, &att_list, &att_signatures) != 0) {
         lantern_attestations_reset(&att_list);
+        lantern_block_signatures_reset(&att_signatures);
         lantern_client_unlock_state(client, state_locked);
         lantern_signed_block_with_attestation_reset(out_block);
         return -1;
@@ -3490,6 +3493,7 @@ static int validator_build_block(
     LanternCheckpoint source_cp;
     if (lantern_state_compute_vote_checkpoints(&client->state, &head_cp, &target_cp, &source_cp) != 0) {
         lantern_attestations_reset(&att_list);
+        lantern_block_signatures_reset(&att_signatures);
         lantern_client_unlock_state(client, state_locked);
         lantern_signed_block_with_attestation_reset(out_block);
         return -1;
@@ -3517,22 +3521,28 @@ static int validator_build_block(
 
     if (lantern_attestations_copy(&message_block->body.attestations, &att_list) != 0) {
         lantern_attestations_reset(&att_list);
+        lantern_block_signatures_reset(&att_signatures);
         lantern_signed_block_with_attestation_reset(out_block);
         return -1;
     }
     lantern_attestations_reset(&att_list);
 
-    out_block->message.proposer_attestation = *out_proposer_vote;
+    out_block->message.proposer_attestation = out_proposer_vote->data;
 
     size_t signature_count = message_block->body.attestations.length + 1u;
     if (lantern_block_signatures_resize(&out_block->signatures, signature_count) != 0) {
         lantern_signed_block_with_attestation_reset(out_block);
         return -1;
     }
-    for (size_t i = 0; i < message_block->body.attestations.length; ++i) {
-        out_block->signatures.data[i] = message_block->body.attestations.data[i].signature;
+    for (size_t i = 0; i < signature_count - 1u; ++i) {
+        if (i < att_signatures.length && att_signatures.data) {
+            out_block->signatures.data[i] = att_signatures.data[i];
+        } else {
+            memset(out_block->signatures.data[i].bytes, 0, LANTERN_SIGNATURE_SIZE);
+        }
     }
     out_block->signatures.data[signature_count - 1u] = out_proposer_vote->signature;
+    lantern_block_signatures_reset(&att_signatures);
 
     LanternRoot computed_state_root;
     state_locked = lantern_client_lock_state(client);
@@ -4136,19 +4146,27 @@ static bool lantern_client_verify_block_signatures(
         return false;
     }
     for (size_t i = 0; i < attestations->length; ++i) {
+        LanternSignedVote signed_vote;
+        memset(&signed_vote, 0, sizeof(signed_vote));
+        signed_vote.data = attestations->data[i];
+        signed_vote.signature = block->signatures.data[i];
         if (!lantern_client_verify_vote_signature(
                 client,
-                &attestations->data[i],
-                &block->signatures.data[i],
+                &signed_vote,
+                &signed_vote.signature,
                 meta,
                 "body")) {
             return false;
         }
     }
+    LanternSignedVote proposer_signed;
+    memset(&proposer_signed, 0, sizeof(proposer_signed));
+    proposer_signed.data = block->message.proposer_attestation;
+    proposer_signed.signature = block->signatures.data[attestations->length];
     return lantern_client_verify_vote_signature(
         client,
-        &block->message.proposer_attestation,
-        &block->signatures.data[attestations->length],
+        &proposer_signed,
+        &proposer_signed.signature,
         meta,
         "proposer");
 }
@@ -5447,7 +5465,7 @@ static void *block_request_worker(void *arg) {
 
     for (size_t i = 0; i < response_msg.length; ++i) {
         LanternRoot computed = {{0}};
-        if (lantern_hash_tree_root_block(&response_msg.blocks[i].message, &computed) != 0) {
+        if (lantern_hash_tree_root_block(&response_msg.blocks[i].message.block, &computed) != 0) {
             lantern_log_warn(
                 "reqresp",
                 &meta,
@@ -5799,7 +5817,6 @@ static void lantern_client_record_vote(
     char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     char source_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    LanternAttestations att_view;
     LanternSignedVote vote_copy = *vote;
     if (!lantern_client_verify_vote_signature(
             client,
@@ -5828,11 +5845,18 @@ static void lantern_client_record_vote(
         target_hex[0] ? target_hex : "0x0",
         vote_copy.data.target.slot);
 
-    att_view.data = &vote_copy;
-    att_view.length = 1;
-    att_view.capacity = 1;
+    LanternAttestations att_view = {
+        .data = &vote_copy.data,
+        .length = 1,
+        .capacity = 1,
+    };
+    LanternBlockSignatures sig_view = {
+        .data = &vote_copy.signature,
+        .length = 1,
+        .capacity = 1,
+    };
 
-    if (lantern_state_process_attestations(&client->state, &att_view) != 0) {
+    if (lantern_state_process_attestations(&client->state, &att_view, &sig_view) != 0) {
         lantern_log_debug(
             "state",
             &meta,
@@ -6062,10 +6086,17 @@ static int restore_persisted_blocks(struct lantern_client *client) {
 
     for (size_t i = 0; i < list.length; ++i) {
         const struct lantern_persisted_block *entry = &list.items[i];
+        LanternSignedVote persisted_proposer;
+        memset(&persisted_proposer, 0, sizeof(persisted_proposer));
+        persisted_proposer.data = entry->block.message.proposer_attestation;
+        size_t proposer_index = entry->block.message.block.body.attestations.length;
+        if (entry->block.signatures.length > proposer_index && entry->block.signatures.data) {
+            persisted_proposer.signature = entry->block.signatures.data[proposer_index];
+        }
         if (lantern_fork_choice_add_block(
                 &client->fork_choice,
                 &entry->block.message.block,
-                &entry->block.message.proposer_attestation,
+                &persisted_proposer,
                 &client->state.latest_justified,
                 &client->state.latest_finalized,
                 &entry->root)

@@ -22,7 +22,7 @@ static size_t signed_block_base_ssz_size(void) {
         + SSZ_BYTE_SIZE_OF_UINT32;
     size_t body_header = SSZ_BYTE_SIZE_OF_UINT32; /* block body attestation offset */
     size_t message_base = SSZ_BYTE_SIZE_OF_UINT32 /* block offset */
-        + LANTERN_SIGNED_VOTE_SSZ_SIZE /* proposer attestation */
+        + LANTERN_VOTE_SSZ_SIZE /* proposer attestation */
         + block_fixed
         + body_header;
     size_t offsets = SSZ_BYTE_SIZE_OF_UINT32 * 2u; /* message + signatures */
@@ -31,7 +31,7 @@ static size_t signed_block_base_ssz_size(void) {
 
 static size_t signed_block_max_ssz_size(void) {
     size_t base = signed_block_base_ssz_size();
-    size_t attestations_max = (size_t)LANTERN_MAX_ATTESTATIONS * LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    size_t attestations_max = (size_t)LANTERN_MAX_ATTESTATIONS * LANTERN_VOTE_SSZ_SIZE;
     if (attestations_max > SIZE_MAX - base) {
         return SIZE_MAX;
     }
@@ -52,7 +52,7 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
     if (att_count > LANTERN_MAX_ATTESTATIONS) {
         return 0;
     }
-    size_t att_bytes = att_count * LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    size_t att_bytes = att_count * LANTERN_VOTE_SSZ_SIZE;
     size_t total = base;
     if (att_bytes > SIZE_MAX - total) {
         return 0;
@@ -65,15 +65,14 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
     return total + signature_bytes;
 }
 
-static int basic_vote_sanity(const LanternSignedVote *vote) {
+static int basic_vote_sanity(const LanternVote *vote) {
     if (!vote) {
         return -1;
     }
-    const LanternVote *data = &vote->data;
-    if (data->target.slot < data->source.slot) {
+    if (vote->target.slot < vote->source.slot) {
         return -1;
     }
-    if (data->slot < data->target.slot) {
+    if (vote->slot < vote->target.slot) {
         return -1;
     }
     return 0;
@@ -85,8 +84,8 @@ static int basic_block_sanity(const LanternSignedBlock *block) {
     }
     const LanternBlock *message = &block->message.block;
     for (size_t i = 0; i < message->body.attestations.length; ++i) {
-        const LanternSignedVote *att = &message->body.attestations.data[i];
-        if (att->data.slot > message->slot) {
+        const LanternVote *att = &message->body.attestations.data[i];
+        if (att->slot > message->slot) {
             return -1;
         }
         if (basic_vote_sanity(att) != 0) {
@@ -96,7 +95,7 @@ static int basic_block_sanity(const LanternSignedBlock *block) {
     if (basic_vote_sanity(&block->message.proposer_attestation) != 0) {
         return -1;
     }
-    if (block->message.proposer_attestation.data.slot < message->slot) {
+    if (block->message.proposer_attestation.slot < message->slot) {
         return -1;
     }
     size_t expected_signatures = message->body.attestations.length + 1u;
@@ -176,7 +175,7 @@ int lantern_gossip_encode_signed_vote_snappy(
     if (!vote || !out || !written) {
         return -1;
     }
-    if (basic_vote_sanity(vote) != 0) {
+    if (basic_vote_sanity(&vote->data) != 0) {
         return -1;
     }
     uint8_t raw[LANTERN_SIGNED_VOTE_SSZ_SIZE];
@@ -214,7 +213,7 @@ int lantern_gossip_decode_signed_vote_snappy(
     if (lantern_ssz_decode_signed_vote(vote, raw, sizeof(raw)) != 0) {
         return -1;
     }
-    if (basic_vote_sanity(vote) != 0) {
+    if (basic_vote_sanity(&vote->data) != 0) {
         return -1;
     }
     return 0;

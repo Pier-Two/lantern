@@ -114,8 +114,8 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
     if (att_count > LANTERN_MAX_ATTESTATIONS) {
         return 0;
     }
-    size_t att_bytes = att_count * LANTERN_SIGNED_VOTE_SSZ_SIZE;
-    size_t proposer_bytes = LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    size_t att_bytes = att_count * LANTERN_VOTE_SSZ_SIZE;
+    size_t proposer_bytes = LANTERN_VOTE_SSZ_SIZE;
     size_t signatures_bytes = block->signatures.length * LANTERN_SIGNATURE_SIZE;
     size_t total = offsets + block_fixed;
     if (block_offset > SIZE_MAX - total) {

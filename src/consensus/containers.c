@@ -19,7 +19,7 @@ static int ensure_capacity(LanternAttestations *list, size_t required) {
         new_capacity *= 2;
     }
 
-    LanternSignedVote *items = realloc(list->data, new_capacity * sizeof(*items));
+    LanternVote *items = realloc(list->data, new_capacity * sizeof(*items));
     if (!items) {
         return -1;
     }
@@ -74,7 +74,7 @@ void lantern_attestations_reset(LanternAttestations *list) {
     list->capacity = 0;
 }
 
-int lantern_attestations_append(LanternAttestations *list, const LanternSignedVote *vote) {
+int lantern_attestations_append(LanternAttestations *list, const LanternVote *vote) {
     if (!list || !vote) {
         return -1;
     }

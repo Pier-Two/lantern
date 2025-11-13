@@ -85,7 +85,7 @@ static int encode_attestations(const LanternAttestations *attestations, uint8_t 
         return -1;
     }
 
-    size_t required = attestations->length * LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    size_t required = attestations->length * LANTERN_VOTE_SSZ_SIZE;
     if (remaining < required) {
         return -1;
     }
@@ -93,7 +93,7 @@ static int encode_attestations(const LanternAttestations *attestations, uint8_t 
     size_t offset = 0;
     for (size_t i = 0; i < attestations->length; ++i) {
         size_t vote_written = 0;
-        if (lantern_ssz_encode_signed_vote(&attestations->data[i], out + offset, remaining - offset, &vote_written) != 0) {
+        if (lantern_ssz_encode_vote(&attestations->data[i], out + offset, remaining - offset, &vote_written) != 0) {
             return -1;
         }
         offset += vote_written;
@@ -109,10 +109,10 @@ static int decode_attestations(LanternAttestations *attestations, const uint8_t 
     if (data_len == 0) {
         return lantern_attestations_resize(attestations, 0);
     }
-    if (data_len % LANTERN_SIGNED_VOTE_SSZ_SIZE != 0) {
+    if (data_len % LANTERN_VOTE_SSZ_SIZE != 0) {
         return -1;
     }
-    size_t count = data_len / LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    size_t count = data_len / LANTERN_VOTE_SSZ_SIZE;
     if (count > LANTERN_MAX_ATTESTATIONS) {
         return -1;
     }
@@ -120,7 +120,7 @@ static int decode_attestations(LanternAttestations *attestations, const uint8_t 
         return -1;
     }
     for (size_t i = 0; i < count; ++i) {
-        if (lantern_ssz_decode_signed_vote(&attestations->data[i], data + (i * LANTERN_SIGNED_VOTE_SSZ_SIZE), LANTERN_SIGNED_VOTE_SSZ_SIZE) != 0) {
+        if (lantern_ssz_decode_vote(&attestations->data[i], data + (i * LANTERN_VOTE_SSZ_SIZE), LANTERN_VOTE_SSZ_SIZE) != 0) {
             return -1;
         }
     }
@@ -216,6 +216,63 @@ static int decode_root_list(struct lantern_root_list *list, const uint8_t *data,
     }
     memcpy(list->items, data, data_len);
     return 0;
+}
+
+static int encode_validators_list(
+    const LanternValidator *validators,
+    size_t count,
+    uint8_t *out,
+    size_t remaining,
+    size_t *written) {
+    if (!out) {
+        return -1;
+    }
+    if (count == 0) {
+        set_written(written, 0);
+        return 0;
+    }
+    if (!validators) {
+        return -1;
+    }
+    if (count > SIZE_MAX / LANTERN_VALIDATOR_PUBKEY_SIZE) {
+        return -1;
+    }
+    size_t total = count * LANTERN_VALIDATOR_PUBKEY_SIZE;
+    if (total > remaining) {
+        return -1;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        memcpy(out + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), validators[i].pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE);
+    }
+    set_written(written, total);
+    return 0;
+}
+
+static int decode_validators_list(
+    LanternState *state,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!state) {
+        return -1;
+    }
+    uint64_t expected = state->config.num_validators;
+    if (expected == 0) {
+        if (data_len != 0) {
+            return -1;
+        }
+        return lantern_state_set_validator_pubkeys(state, NULL, 0);
+    }
+    if (!data) {
+        return -1;
+    }
+    if (expected > SIZE_MAX) {
+        return -1;
+    }
+    size_t expected_size = (size_t)expected * LANTERN_VALIDATOR_PUBKEY_SIZE;
+    if (data_len != expected_size) {
+        return -1;
+    }
+    return lantern_state_set_validator_pubkeys(state, data, (size_t)expected);
 }
 
 static int encode_bitlist(const struct lantern_bitlist *list, uint8_t *out, size_t remaining, size_t *written) {
@@ -514,7 +571,7 @@ int lantern_ssz_encode_block_body(const LanternBlockBody *body, uint8_t *out, si
     }
 
     uint32_t att_offset = SSZ_BYTE_SIZE_OF_UINT32;
-    size_t att_bytes = body->attestations.length * LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    size_t att_bytes = body->attestations.length * LANTERN_VOTE_SSZ_SIZE;
     if (att_bytes > UINT32_MAX) {
         return -1;
     }
@@ -663,7 +720,7 @@ int lantern_ssz_encode_block_with_attestation(
         return -1;
     }
 
-    const size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    const size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_VOTE_SSZ_SIZE;
     if (fixed_section > UINT32_MAX) {
         return -1;
     }
@@ -677,7 +734,7 @@ int lantern_ssz_encode_block_with_attestation(
     }
 
     size_t proposer_written = 0;
-    if (lantern_ssz_encode_signed_vote(
+    if (lantern_ssz_encode_vote(
             &block->proposer_attestation,
             out + SSZ_BYTE_SIZE_OF_UINT32,
             out_len - SSZ_BYTE_SIZE_OF_UINT32,
@@ -685,7 +742,7 @@ int lantern_ssz_encode_block_with_attestation(
         != 0) {
         return -1;
     }
-    if (proposer_written != LANTERN_SIGNED_VOTE_SSZ_SIZE) {
+    if (proposer_written != LANTERN_VOTE_SSZ_SIZE) {
         return -1;
     }
 
@@ -710,7 +767,7 @@ int lantern_ssz_decode_block_with_attestation(
         return -1;
     }
 
-    const size_t min_size = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    const size_t min_size = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_VOTE_SSZ_SIZE;
     if (data_len < min_size) {
         return -1;
     }
@@ -723,10 +780,10 @@ int lantern_ssz_decode_block_with_attestation(
         return -1;
     }
 
-    if (lantern_ssz_decode_signed_vote(
+    if (lantern_ssz_decode_vote(
             &block->proposer_attestation,
             data + SSZ_BYTE_SIZE_OF_UINT32,
-            LANTERN_SIGNED_VOTE_SSZ_SIZE)
+            LANTERN_VOTE_SSZ_SIZE)
         != 0) {
         return -1;
     }
@@ -871,7 +928,10 @@ int lantern_ssz_encode_state(const LanternState *state, uint8_t *out, size_t out
         return -1;
     }
 
-    const size_t var_field_count = 4;
+    if (state->config.num_validators != (uint64_t)state->validator_count) {
+        return -1;
+    }
+    const size_t var_field_count = 5;
     const char *debug_env = getenv("LANTERN_DEBUG_SSZ");
     bool debug_ssz = debug_env && debug_env[0] != '\0';
     int debug_stage = 0;
@@ -903,11 +963,6 @@ int lantern_ssz_encode_state(const LanternState *state, uint8_t *out, size_t out
     }
     offset += tmp;
 
-    if (write_root(out + offset, out_len - offset, &state->validator_registry_root) != 0) {
-        return -1;
-    }
-    offset += LANTERN_ROOT_SIZE;
-
     if (out_len < offset + (var_field_count * SSZ_BYTE_SIZE_OF_UINT32)) {
         return -1;
     }
@@ -936,6 +991,27 @@ int lantern_ssz_encode_state(const LanternState *state, uint8_t *out, size_t out
     }
     offset += SSZ_BYTE_SIZE_OF_UINT32;
     if (encode_bitlist(&state->justified_slots, out + variable_offset, out_len - variable_offset, &tmp) != 0) {
+        return -1;
+    }
+    variable_offset += tmp;
+    if (variable_offset > UINT32_MAX) {
+        return -1;
+    }
+
+    // Validators list
+    if (write_u32(out + offset, out_len - offset, (uint32_t)variable_offset) != 0) {
+        return -1;
+    }
+    offset += SSZ_BYTE_SIZE_OF_UINT32;
+    if (state->validator_count > 0 && state->validator_count > SIZE_MAX / LANTERN_VALIDATOR_PUBKEY_SIZE) {
+        return -1;
+    }
+    size_t validator_bytes = state->validator_count * LANTERN_VALIDATOR_PUBKEY_SIZE;
+    if (validator_bytes > out_len - variable_offset) {
+        return -1;
+    }
+    if (encode_validators_list(state->validators, state->validator_count, out + variable_offset, out_len - variable_offset, &tmp)
+        != 0) {
         return -1;
     }
     variable_offset += tmp;
@@ -975,16 +1051,16 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
         return -1;
     }
 
-    const size_t var_field_count = 4;
+    const size_t var_field_count = 5;
     const char *debug_env = getenv("LANTERN_DEBUG_SSZ");
     bool debug_ssz = debug_env && debug_env[0] != '\0';
     int debug_stage = 0;
     size_t offset = 0;
     const size_t offsets_size = var_field_count * SSZ_BYTE_SIZE_OF_UINT32;
     const size_t min_truncated_size =
-        LANTERN_CONFIG_SSZ_SIZE + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + LANTERN_ROOT_SIZE + offsets_size;
+        LANTERN_CONFIG_SSZ_SIZE + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + offsets_size;
     const size_t min_full_size = LANTERN_CONFIG_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT64 + LANTERN_BLOCK_HEADER_SSZ_SIZE
-        + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + LANTERN_ROOT_SIZE + offsets_size;
+        + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + offsets_size;
     bool truncated = false;
 
     if (data_len < min_full_size) {
@@ -1063,59 +1139,34 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
         fflush(stderr);
     }
 
-    if (data_len - offset < LANTERN_ROOT_SIZE) {
-        return -1;
-    }
-    if (read_root(data + offset, data_len - offset, &state->validator_registry_root) != 0) {
-        return -1;
-    }
-    offset += LANTERN_ROOT_SIZE;
-    if (debug_ssz) {
-        fprintf(stderr, "ssz decode state: stage %d validator root read\n", debug_stage++);
-        fflush(stderr);
-    }
-
     if (data_len - offset < offsets_size) {
         return -1;
     }
 
     size_t offsets_start = offset;
     size_t offsets[var_field_count];
-    bool offsets_valid = false;
-    for (int attempt = 0; attempt < 2; ++attempt) {
-        size_t read_pos = offsets_start;
-        for (size_t i = 0; i < var_field_count; ++i) {
-            uint32_t value = 0;
-            if (read_u32(data + read_pos, data_len - read_pos, &value) != 0) {
-                return -1;
-            }
-            offsets[i] = value;
-            read_pos += SSZ_BYTE_SIZE_OF_UINT32;
+    size_t read_pos = offsets_start;
+    for (size_t i = 0; i < var_field_count; ++i) {
+        uint32_t value = 0;
+        if (read_u32(data + read_pos, data_len - read_pos, &value) != 0) {
+            return -1;
         }
-        size_t table_end = offsets_start + offsets_size;
-        offsets_valid = true;
-        for (size_t i = 0; i < var_field_count; ++i) {
-            if (offsets[i] < table_end || offsets[i] > data_len || (i > 0 && offsets[i] < offsets[i - 1])) {
-                offsets_valid = false;
-                break;
-            }
-        }
-        if (offsets_valid) {
-            offset = table_end;
-            break;
-        }
-        if (attempt == 0 && data_len - offsets_start >= LANTERN_ROOT_SIZE + offsets_size) {
-            offsets_start += LANTERN_ROOT_SIZE;
-            continue;
-        }
-        return -1;
+        offsets[i] = value;
+        read_pos += SSZ_BYTE_SIZE_OF_UINT32;
     }
+    size_t table_end = offsets_start + offsets_size;
+    for (size_t i = 0; i < var_field_count; ++i) {
+        if (offsets[i] < table_end || offsets[i] > data_len) {
+            return -1;
+        }
+        if (i > 0 && offsets[i] < offsets[i - 1]) {
+            return -1;
+        }
+    }
+    offset = table_end;
     if (debug_ssz) {
         fprintf(stderr, "ssz decode state: stage %d offsets parsed (table_end=%zu)\n", debug_stage++, offset);
         fflush(stderr);
-    }
-    if (!offsets_valid) {
-        return -1;
     }
 
     size_t payload_start = offsets[0];
@@ -1150,11 +1201,12 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
             data_len);
         fprintf(
             stderr,
-            "ssz decode state: chunks hist=%zu slots=%zu roots=%zu validators=%zu\\n",
+            "ssz decode state: chunks hist=%zu slots=%zu validators=%zu roots=%zu just_validators=%zu\\n",
             chunk_sizes[0],
             chunk_sizes[1],
             chunk_sizes[2],
-            chunk_sizes[3]);
+            chunk_sizes[3],
+            chunk_sizes[4]);
         fflush(stderr);
     }
 
@@ -1170,15 +1222,21 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
         }
         return -1;
     }
-    if (decode_root_list(&state->justification_roots, data + offsets[2], chunk_sizes[2]) != 0) {
+    if (decode_validators_list(state, data + offsets[2], chunk_sizes[2]) != 0) {
         if (debug_ssz) {
-            fprintf(stderr, "ssz decode state: failed justification_roots len=%zu\\n", chunk_sizes[2]);
+            fprintf(stderr, "ssz decode state: failed validators len=%zu\\n", chunk_sizes[2]);
         }
         return -1;
     }
-    if (decode_bitlist(&state->justification_validators, data + offsets[3], chunk_sizes[3]) != 0) {
+    if (decode_root_list(&state->justification_roots, data + offsets[3], chunk_sizes[3]) != 0) {
         if (debug_ssz) {
-            fprintf(stderr, "ssz decode state: failed justification_validators len=%zu\\n", chunk_sizes[3]);
+            fprintf(stderr, "ssz decode state: failed justification_roots len=%zu\\n", chunk_sizes[3]);
+        }
+        return -1;
+    }
+    if (decode_bitlist(&state->justification_validators, data + offsets[4], chunk_sizes[4]) != 0) {
+        if (debug_ssz) {
+            fprintf(stderr, "ssz decode state: failed justification_validators len=%zu\\n", chunk_sizes[4]);
         }
         return -1;
     }

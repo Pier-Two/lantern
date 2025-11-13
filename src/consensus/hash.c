@@ -323,7 +323,7 @@ static int hash_attestations(const LanternAttestations *attestations, LanternRoo
         }
         for (size_t i = 0; i < count; ++i) {
             LanternRoot vote_root;
-            if (lantern_hash_tree_root_vote(&attestations->data[i].data, &vote_root) != 0) {
+            if (lantern_hash_tree_root_vote(&attestations->data[i], &vote_root) != 0) {
                 free(chunks);
                 return -1;
             }
@@ -440,7 +440,7 @@ int lantern_hash_tree_root_block_with_attestation(
     if (lantern_hash_tree_root_block(&block->block, &block_root) != 0) {
         return -1;
     }
-    if (lantern_hash_tree_root_signed_vote(&block->proposer_attestation, &proposer_root) != 0) {
+    if (lantern_hash_tree_root_vote(&block->proposer_attestation, &proposer_root) != 0) {
         return -1;
     }
     uint8_t chunks[2][SSZ_BYTES_PER_CHUNK];

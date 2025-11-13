@@ -1190,10 +1190,17 @@ static int run_fork_choice_fixture(const char *path) {
 
         LanternCheckpoint post_justified = block_justified;
         LanternCheckpoint post_finalized = block_finalized;
+        LanternSignedVote block_proposer_signed;
+        memset(&block_proposer_signed, 0, sizeof(block_proposer_signed));
+        block_proposer_signed.data = signed_block.message.proposer_attestation;
+        size_t proposer_sig_index = signed_block.message.block.body.attestations.length;
+        if (signed_block.signatures.length > proposer_sig_index && signed_block.signatures.data) {
+            block_proposer_signed.signature = signed_block.signatures.data[proposer_sig_index];
+        }
         if (lantern_fork_choice_add_block(
                 &store,
                 &signed_block.message.block,
-                &signed_block.message.proposer_attestation,
+                &block_proposer_signed,
                 &post_justified,
                 &post_finalized,
                 &block_root)
@@ -1210,8 +1217,7 @@ static int run_fork_choice_fixture(const char *path) {
             return -1;
         }
 
-        LanternSignedVote signed_proposer_vote;
-        memset(&signed_proposer_vote, 0, sizeof(signed_proposer_vote));
+        LanternSignedVote signed_proposer_vote = block_proposer_signed;
         signed_proposer_vote.data = proposer_vote;
         if (lantern_fork_choice_add_vote(&store, &signed_proposer_vote, false) != 0) {
             if (branch_state_initialized) {

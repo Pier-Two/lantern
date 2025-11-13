@@ -56,10 +56,14 @@ int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, u
 int lantern_state_process_slot(LanternState *state);
 int lantern_state_process_slots(LanternState *state, uint64_t target_slot);
 int lantern_state_process_block_header(LanternState *state, const LanternBlock *block);
-int lantern_state_process_attestations(LanternState *state, const LanternAttestations *attestations);
+int lantern_state_process_attestations(
+    LanternState *state,
+    const LanternAttestations *attestations,
+    const LanternBlockSignatures *signatures);
 int lantern_state_process_block(
     LanternState *state,
     const LanternBlock *block,
+    const LanternBlockSignatures *signatures,
     const LanternSignedVote *proposer_attestation);
 int lantern_state_transition(LanternState *state, const LanternSignedBlock *signed_block);
 int lantern_state_prepare_validator_votes(LanternState *state, uint64_t validator_count);
@@ -82,7 +86,8 @@ const uint8_t *lantern_state_validator_pubkey(const LanternState *state, size_t 
 int lantern_state_select_block_parent(const LanternState *state, LanternRoot *out_parent_root);
 int lantern_state_collect_attestations_for_block(
     const LanternState *state,
-    LanternAttestations *out_attestations);
+    LanternAttestations *out_attestations,
+    LanternBlockSignatures *out_signatures);
 int lantern_state_compute_vote_checkpoints(
     const LanternState *state,
     LanternCheckpoint *out_head,
