@@ -144,13 +144,27 @@ static size_t signed_block_min_capacity_for_test(const LanternSignedBlock *block
     size_t block_fixed = (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
         + (LANTERN_ROOT_SIZE * 2u)
         + SSZ_BYTE_SIZE_OF_UINT32;
+    size_t block_offset = SSZ_BYTE_SIZE_OF_UINT32;
+    size_t body_header = SSZ_BYTE_SIZE_OF_UINT32;
     size_t att_count = block->message.block.body.attestations.length;
     if (att_count > LANTERN_MAX_ATTESTATIONS) {
         return 0;
     }
     size_t att_bytes = att_count * LANTERN_SIGNED_VOTE_SSZ_SIZE;
     size_t proposer_bytes = LANTERN_SIGNED_VOTE_SSZ_SIZE;
-    size_t total = offsets + block_fixed + proposer_bytes;
+    size_t total = offsets + block_fixed;
+    if (block_offset > SIZE_MAX - total) {
+        return 0;
+    }
+    total += block_offset;
+    if (proposer_bytes > SIZE_MAX - total) {
+        return 0;
+    }
+    total += proposer_bytes;
+    if (body_header > SIZE_MAX - total) {
+        return 0;
+    }
+    total += body_header;
     if (att_bytes > SIZE_MAX - total) {
         return 0;
     }
@@ -206,7 +220,8 @@ static void populate_block(LanternSignedBlock *signed_block, uint8_t seed) {
     check_zero(
         lantern_attestations_append(&signed_block->message.block.body.attestations, &vote),
         "attestation append");
-    signed_block->message.proposer_attestation = build_signed_vote(2 + seed, 51 + seed, (uint8_t)(0x35 + seed));
+    signed_block->message.proposer_attestation =
+        build_signed_vote(2 + seed, signed_block->message.block.slot, (uint8_t)(0x35 + seed));
     size_t sig_count = signed_block->message.block.body.attestations.length + 1u;
     check_zero(lantern_block_signatures_resize(&signed_block->signatures, sig_count), "signature resize");
     for (size_t i = 0; i < sig_count; ++i) {

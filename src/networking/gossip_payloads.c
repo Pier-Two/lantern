@@ -20,9 +20,11 @@ static size_t signed_block_base_ssz_size(void) {
     size_t block_fixed = (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
         + (LANTERN_ROOT_SIZE * 2u)
         + SSZ_BYTE_SIZE_OF_UINT32;
+    size_t body_header = SSZ_BYTE_SIZE_OF_UINT32; /* block body attestation offset */
     size_t message_base = SSZ_BYTE_SIZE_OF_UINT32 /* block offset */
         + LANTERN_SIGNED_VOTE_SSZ_SIZE /* proposer attestation */
-        + block_fixed;
+        + block_fixed
+        + body_header;
     size_t offsets = SSZ_BYTE_SIZE_OF_UINT32 * 2u; /* message + signatures */
     return offsets + message_base;
 }

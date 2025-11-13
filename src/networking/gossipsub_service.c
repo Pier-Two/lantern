@@ -17,6 +17,18 @@
 #include "libp2p/errors.h"
 #include "libp2p/host.h"
 #include "protocol/gossipsub/gossipsub.h"
+#include "../../external/c-libp2p/src/protocol/gossipsub/proto/gen/gossipsub_rpc.pb.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+libp2p_err_t libp2p_gossipsub_rpc_decode_frame(
+    const uint8_t *frame,
+    size_t frame_len,
+    libp2p_gossipsub_RPC **out_rpc);
+#ifdef __cplusplus
+}
+#endif
 
 #define LANTERN_GOSSIPSUB_TOPIC_CAP 128u
 #define LANTERN_ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
@@ -57,6 +69,37 @@ static void describe_peer_id(const peer_id_t *peer, char *buffer, size_t length)
     }
 }
 
+static bool gossipsub_message_has_forbidden_metadata(const libp2p_gossipsub_message_t *msg) {
+    if (!msg || !msg->raw_message || msg->raw_message_len == 0) {
+        return false;
+    }
+    libp2p_gossipsub_RPC *rpc = NULL;
+    libp2p_err_t rc = libp2p_gossipsub_rpc_decode_frame(msg->raw_message, msg->raw_message_len, &rpc);
+    if (rc != LIBP2P_ERR_OK || !rpc) {
+        if (rpc) {
+            libp2p_gossipsub_RPC_free(rpc);
+        }
+        return true;
+    }
+    bool forbidden = false;
+    if (libp2p_gossipsub_RPC_has_publish(rpc)) {
+        size_t publish_count = libp2p_gossipsub_RPC_count_publish(rpc);
+        for (size_t i = 0; i < publish_count && !forbidden; ++i) {
+            libp2p_gossipsub_Message *proto_msg = libp2p_gossipsub_RPC_get_at_publish(rpc, i);
+            if (!proto_msg) {
+                continue;
+            }
+            if (libp2p_gossipsub_Message_has_from(proto_msg)
+                || libp2p_gossipsub_Message_has_seqno(proto_msg)
+                || libp2p_gossipsub_Message_has_signature(proto_msg)) {
+                forbidden = true;
+            }
+        }
+    }
+    libp2p_gossipsub_RPC_free(rpc);
+    return forbidden;
+}
+
 static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
     if (!block) {
         return 0;
@@ -65,6 +108,8 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
     size_t block_fixed = (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
         + (LANTERN_ROOT_SIZE * 2u)
         + SSZ_BYTE_SIZE_OF_UINT32;
+    size_t block_offset = SSZ_BYTE_SIZE_OF_UINT32;
+    size_t body_header = SSZ_BYTE_SIZE_OF_UINT32;
     size_t att_count = block->message.block.body.attestations.length;
     if (att_count > LANTERN_MAX_ATTESTATIONS) {
         return 0;
@@ -73,10 +118,18 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
     size_t proposer_bytes = LANTERN_SIGNED_VOTE_SSZ_SIZE;
     size_t signatures_bytes = block->signatures.length * LANTERN_SIGNATURE_SIZE;
     size_t total = offsets + block_fixed;
+    if (block_offset > SIZE_MAX - total) {
+        return 0;
+    }
+    total += block_offset;
     if (total > SIZE_MAX - proposer_bytes) {
         return 0;
     }
     total += proposer_bytes;
+    if (body_header > SIZE_MAX - total) {
+        return 0;
+    }
+    total += body_header;
     if (att_bytes > SIZE_MAX - total) {
         return 0;
     }
@@ -180,6 +233,15 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
     describe_peer_id(msg->from, peer_text, sizeof(peer_text));
     const struct lantern_log_metadata meta = {.peer = peer_text[0] ? peer_text : NULL};
 
+    if (gossipsub_message_has_forbidden_metadata(msg)) {
+        lantern_log_warn(
+            "gossip",
+            &meta,
+            "rejected block gossip with author/seqno/signature fields present");
+        result = LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
+        goto cleanup;
+    }
+
     lantern_log_debug(
         "gossip",
         &meta,
@@ -239,6 +301,15 @@ static libp2p_gossipsub_validation_result_t gossipsub_vote_validator(
     char peer_text[128];
     describe_peer_id(msg->from, peer_text, sizeof(peer_text));
     const struct lantern_log_metadata meta = {.peer = peer_text[0] ? peer_text : NULL};
+
+    if (gossipsub_message_has_forbidden_metadata(msg)) {
+        lantern_log_warn(
+            "gossip",
+            &meta,
+            "rejected vote gossip with author/seqno/signature fields present");
+        result = LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
+        goto cleanup;
+    }
 
     lantern_log_debug(
         "gossip",

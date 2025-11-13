@@ -70,7 +70,7 @@ static bool sign_proposer_vote(
     }
     if (!lantern_signature_sign(
             secret,
-            (uint32_t)signed_vote->data.slot,
+            signed_vote->data.slot,
             out_vote_root->bytes,
             sizeof(out_vote_root->bytes),
             &signed_vote->signature)) {
@@ -100,7 +100,7 @@ static int test_proposer_vote_signature_roundtrip(void) {
 
     if (!lantern_signature_verify_pk(
             pubkey,
-            (uint32_t)signed_vote.data.slot,
+            signed_vote.data.slot,
             &signed_vote.signature,
             vote_root.bytes,
             sizeof(vote_root.bytes))) {
@@ -127,7 +127,7 @@ static int test_proposer_vote_signature_roundtrip(void) {
     if (!lantern_signature_verify(
             serialized_pubkey,
             (size_t)written,
-            (uint32_t)signed_vote.data.slot,
+            signed_vote.data.slot,
             &signed_vote.signature,
             vote_root.bytes,
             sizeof(vote_root.bytes))) {
@@ -172,7 +172,7 @@ static int test_proposer_vote_signature_rejects_tampering(void) {
 
     if (lantern_signature_verify_pk(
             pubkey,
-            (uint32_t)signed_vote.data.slot,
+            signed_vote.data.slot,
             &signed_vote.signature,
             tampered_root.bytes,
             sizeof(tampered_root.bytes))) {

@@ -6,6 +6,28 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+
+static int init_range_assignment(
+    struct lantern_validator_assignment *assignment,
+    uint64_t start_index,
+    uint64_t count) {
+    if (!assignment || count == 0) {
+        return -1;
+    }
+    lantern_validator_assignment_init(assignment);
+    assignment->indices = malloc(count * sizeof(*assignment->indices));
+    if (!assignment->indices) {
+        return -1;
+    }
+    assignment->start_index = start_index;
+    assignment->count = count;
+    assignment->length = (size_t)count;
+    for (uint64_t i = 0; i < count; ++i) {
+        assignment->indices[i] = start_index + i;
+    }
+    return 0;
+}
 
 #define EXPECT_ZERO(expr, label)                                                                                        \
     do {                                                                                                                \
@@ -138,9 +160,10 @@ int main(void) {
     cfg.validator_count = 4;
 
     struct lantern_validator_assignment assignment;
-    lantern_validator_assignment_init(&assignment);
-    assignment.start_index = 1;
-    assignment.count = 2;
+    if (init_range_assignment(&assignment, 1, 2) != 0) {
+        fprintf(stderr, "assignment init failed\n");
+        return 1;
+    }
 
     if (lantern_consensus_runtime_init(&runtime, &cfg, &assignment) != 0) {
         fprintf(stderr, "runtime init failed\n");
@@ -179,6 +202,7 @@ int main(void) {
     }
 
     lantern_consensus_runtime_reset(&runtime);
+    lantern_validator_assignment_reset(&assignment);
     puts("lantern_validator_duties_integration OK");
     return 0;
 }

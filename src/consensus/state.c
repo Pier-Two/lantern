@@ -230,6 +230,17 @@ static int lantern_state_clone_view(const LanternState *source, LanternState *de
         dest->validator_votes = records;
         dest->validator_votes_len = len;
     }
+    if (source->validators && source->validator_count > 0) {
+        size_t bytes = source->validator_count * sizeof(*source->validators);
+        LanternValidator *validators = malloc(bytes);
+        if (!validators) {
+            goto error;
+        }
+        memcpy(validators, source->validators, bytes);
+        dest->validators = validators;
+        dest->validator_count = source->validator_count;
+        dest->validator_capacity = source->validator_count;
+    }
     dest->fork_choice = NULL;
     return 0;
 
@@ -641,6 +652,52 @@ void lantern_state_clear_validator_vote(LanternState *state, size_t index) {
     lantern_vote_record_reset(&state->validator_votes[index]);
 }
 
+int lantern_state_set_validator_pubkeys(LanternState *state, const uint8_t *pubkeys, size_t count) {
+    if (!state) {
+        return -1;
+    }
+    if (count > 0 && !pubkeys) {
+        return -1;
+    }
+    if (count > 0 && count > SIZE_MAX / sizeof(*state->validators)) {
+        return -1;
+    }
+    LanternValidator *items = NULL;
+    if (count > 0) {
+        items = malloc(count * sizeof(*items));
+        if (!items) {
+            return -1;
+        }
+        for (size_t i = 0; i < count; ++i) {
+            memcpy(
+                items[i].pubkey,
+                pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+                LANTERN_VALIDATOR_PUBKEY_SIZE);
+        }
+    }
+    if (state->validators) {
+        free(state->validators);
+    }
+    state->validators = items;
+    state->validator_count = count;
+    state->validator_capacity = count;
+    return 0;
+}
+
+size_t lantern_state_validator_count(const LanternState *state) {
+    if (!state || !state->validators) {
+        return 0;
+    }
+    return state->validator_count;
+}
+
+const uint8_t *lantern_state_validator_pubkey(const LanternState *state, size_t index) {
+    if (!state || !state->validators || index >= state->validator_count) {
+        return NULL;
+    }
+    return state->validators[index].pubkey;
+}
+
 static void lantern_root_zero(LanternRoot *root) {
     if (root) {
         memset(root->bytes, 0, LANTERN_ROOT_SIZE);
@@ -671,6 +728,12 @@ void lantern_state_reset(LanternState *state) {
         free(state->validator_votes);
         state->validator_votes = NULL;
         state->validator_votes_len = 0;
+    }
+    if (state->validators) {
+        free(state->validators);
+        state->validators = NULL;
+        state->validator_count = 0;
+        state->validator_capacity = 0;
     }
     memset(state, 0, sizeof(*state));
     lantern_root_list_init(&state->historical_block_hashes);

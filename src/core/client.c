@@ -97,6 +97,8 @@ static bool lantern_client_lock_state(struct lantern_client *client);
 static void lantern_client_unlock_state(struct lantern_client *client, bool locked);
 static bool lantern_client_lock_pending(struct lantern_client *client);
 static void lantern_client_unlock_pending(struct lantern_client *client, bool locked);
+static int lantern_client_refresh_state_validators(struct lantern_client *client);
+static bool lantern_validator_pubkey_is_zero(const uint8_t *pubkey);
 static bool lantern_client_block_known_locked(
     struct lantern_client *client,
     const LanternRoot *root,
@@ -1970,11 +1972,11 @@ static int load_hash_sig_public_keys(struct lantern_client *client, const struct
     bool has_dir = client->hash_sig_key_dir != NULL;
     bool has_single = client->hash_sig_public_path != NULL && validator_count == 1;
     if (!has_template && !has_dir && !has_single) {
-        lantern_log_error(
+        lantern_log_debug(
             "crypto",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "missing hash-sig public key directory or template");
-        return -1;
+            "hash-sig public key sources unavailable; skipping PQ handle load");
+        return 0;
     }
 
     free_hash_sig_pubkeys(client);
@@ -1987,25 +1989,23 @@ static int load_hash_sig_public_keys(struct lantern_client *client, const struct
     for (uint64_t i = 0; i < validator_count; ++i) {
         char *path = NULL;
         if (resolve_public_key_path(client, manifest, i, &path) != 0) {
-            lantern_log_error(
+            lantern_log_warn(
                 "crypto",
                 &meta,
-                "unable to resolve hash-sig public key path for index=%" PRIu64,
+                "unable to resolve hash-sig public key path for index=%" PRIu64 "; skipping",
                 i);
-            free_hash_sig_pubkeys(client);
-            return -1;
+            continue;
         }
         struct PQSignatureSchemePublicKey *pubkey = NULL;
         if (lantern_hash_sig_load_public_file(path, &pubkey) != 0) {
-            lantern_log_error(
+            lantern_log_warn(
                 "crypto",
                 &meta,
-                "failed to load hash-sig public key index=%" PRIu64 " path=%s",
+                "failed to load hash-sig public key index=%" PRIu64 " path=%s; skipping",
                 i,
                 path);
             free(path);
-            free_hash_sig_pubkeys(client);
-            return -1;
+            continue;
         }
         free(path);
         client->validator_pubkeys[i] = pubkey;
@@ -2026,11 +2026,11 @@ static int load_hash_sig_secret_keys(struct lantern_client *client, const struct
     bool has_dir = client->hash_sig_key_dir != NULL;
     bool has_single = client->hash_sig_secret_path != NULL && client->validator_assignment.count == 1;
     if (!has_template && !has_dir && !has_single) {
-        lantern_log_error(
+        lantern_log_debug(
             "crypto",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "missing hash-sig secret key source for local validators");
-        return -1;
+            "hash-sig secret key sources unavailable; skipping local key load");
+        return 0;
     }
 
     clear_local_secret_handles(client);
@@ -2039,25 +2039,23 @@ static int load_hash_sig_secret_keys(struct lantern_client *client, const struct
         struct lantern_local_validator *validator = &client->local_validators[i];
         char *path = NULL;
         if (resolve_secret_key_path(client, manifest, validator->global_index, &path) != 0) {
-            lantern_log_error(
+            lantern_log_warn(
                 "crypto",
                 &meta,
-                "unable to resolve hash-sig secret key path for validator=%" PRIu64,
+                "unable to resolve hash-sig secret key path for validator=%" PRIu64 "; skipping",
                 validator->global_index);
-            clear_local_secret_handles(client);
-            return -1;
+            continue;
         }
         struct PQSignatureSchemeSecretKey *secret = NULL;
         if (lantern_hash_sig_load_secret_file(path, &secret) != 0) {
-            lantern_log_error(
+            lantern_log_warn(
                 "crypto",
                 &meta,
-                "failed to load hash-sig secret key validator=%" PRIu64 " path=%s",
+                "failed to load hash-sig secret key validator=%" PRIu64 " path=%s; skipping",
                 validator->global_index,
                 path);
             free(path);
-            clear_local_secret_handles(client);
-            return -1;
+            continue;
         }
         free(path);
         validator->secret_key = secret;
@@ -2368,6 +2366,7 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     int storage_state_rc = lantern_storage_load_state(client->data_dir, &client->state);
     if (storage_state_rc == 0) {
         client->has_state = true;
+        (void)lantern_client_refresh_state_validators(client);
         loaded_from_storage = true;
     } else if (storage_state_rc < 0) {
         lantern_log_error(
@@ -2565,6 +2564,7 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
                 spec_header_hex[0] ? spec_header_hex : "0x0",
                 parent_hex[0] ? parent_hex : "0x0");
             client->has_state = true;
+            (void)lantern_client_refresh_state_validators(client);
         }
     }
     if (client->has_state) {
@@ -3365,16 +3365,13 @@ static int validator_sign_vote(
     if (!validator || !vote || !validator->secret_key) {
         return -1;
     }
-    if (slot > UINT32_MAX) {
-        return -1;
-    }
     LanternRoot vote_root;
     if (lantern_hash_tree_root_vote(&vote->data, &vote_root) != 0) {
         return -1;
     }
     if (!lantern_signature_sign(
             validator->secret_key,
-            (uint32_t)slot,
+            slot,
             vote_root.bytes,
             sizeof(vote_root.bytes),
             &vote->signature)) {
@@ -3963,6 +3960,18 @@ static void lantern_client_unlock_pending(struct lantern_client *client, bool lo
     pthread_mutex_unlock(&client->pending_lock);
 }
 
+static bool lantern_validator_pubkey_is_zero(const uint8_t *pubkey) {
+    if (!pubkey) {
+        return true;
+    }
+    for (size_t i = 0; i < LANTERN_VALIDATOR_PUBKEY_SIZE; ++i) {
+        if (pubkey[i] != 0u) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static const struct lantern_validator_record *lantern_client_get_validator_record(
     const struct lantern_client *client,
     uint64_t validator_id) {
@@ -3975,6 +3984,51 @@ static const struct lantern_validator_record *lantern_client_get_validator_recor
     return &client->genesis.validator_registry.records[validator_id];
 }
 
+static int lantern_client_refresh_state_validators(struct lantern_client *client) {
+    if (!client || !client->has_state) {
+        return -1;
+    }
+    const struct lantern_validator_registry *registry = &client->genesis.validator_registry;
+    if (!registry->records || registry->count == 0) {
+        return lantern_state_set_validator_pubkeys(&client->state, NULL, 0);
+    }
+    size_t count = registry->count;
+    size_t total_bytes = count * LANTERN_VALIDATOR_PUBKEY_SIZE;
+    uint8_t *packed = malloc(total_bytes);
+    if (!packed) {
+        return -1;
+    }
+    bool missing_pubkeys = false;
+    for (size_t i = 0; i < count; ++i) {
+        const struct lantern_validator_record *record = &registry->records[i];
+        if (!record || !record->has_pubkey_bytes) {
+            memset(packed + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), 0, LANTERN_VALIDATOR_PUBKEY_SIZE);
+            missing_pubkeys = true;
+            continue;
+        }
+        memcpy(
+            packed + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+            record->pubkey_bytes,
+            LANTERN_VALIDATOR_PUBKEY_SIZE);
+    }
+    int rc = lantern_state_set_validator_pubkeys(&client->state, packed, count);
+    free(packed);
+    if (rc != 0) {
+        lantern_log_warn(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to copy validator pubkeys into parent state");
+        return -1;
+    }
+    if (missing_pubkeys) {
+        lantern_log_debug(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "one or more validator pubkeys missing in parent state snapshot; falling back to registry when needed");
+    }
+    return 0;
+}
+
 static bool lantern_client_verify_vote_signature(
     const struct lantern_client *client,
     const LanternSignedVote *vote,
@@ -3984,24 +4038,37 @@ static bool lantern_client_verify_vote_signature(
     if (!client || !vote || !signature) {
         return false;
     }
-    const struct lantern_validator_record *record =
-        lantern_client_get_validator_record(client, vote->data.validator_id);
-    if (!record || !record->has_pubkey_bytes) {
-        lantern_log_warn(
-            "state",
-            meta,
-            "missing validator %s pubkey for validator=%" PRIu64,
-            context ? context : "signature",
-            vote->data.validator_id);
-        return false;
+    const uint8_t *pubkey_bytes = NULL;
+    bool state_has_registry = client && client->has_state;
+    size_t state_validator_count = state_has_registry ? lantern_state_validator_count(&client->state) : 0;
+    if (state_has_registry && state_validator_count > 0) {
+        if (vote->data.validator_id >= state_validator_count) {
+            lantern_log_warn(
+                "state",
+                meta,
+                "validator=%" PRIu64 " exceeds parent state validator count=%zu",
+                vote->data.validator_id,
+                state_validator_count);
+            return false;
+        }
+        pubkey_bytes = lantern_state_validator_pubkey(&client->state, (size_t)vote->data.validator_id);
+        if (lantern_validator_pubkey_is_zero(pubkey_bytes)) {
+            pubkey_bytes = NULL;
+        }
     }
-    if (vote->data.slot > UINT32_MAX) {
-        lantern_log_warn(
-            "state",
-            meta,
-            "attestation slot %" PRIu64 " exceeds XMSS epoch window",
-            vote->data.slot);
-        return false;
+    if (!pubkey_bytes) {
+        const struct lantern_validator_record *record =
+            lantern_client_get_validator_record(client, vote->data.validator_id);
+        if (!record || !record->has_pubkey_bytes) {
+            lantern_log_warn(
+                "state",
+                meta,
+                "missing validator %s pubkey for validator=%" PRIu64,
+                context ? context : "signature",
+                vote->data.validator_id);
+            return false;
+        }
+        pubkey_bytes = record->pubkey_bytes;
     }
     LanternRoot vote_root;
     if (lantern_hash_tree_root_vote(&vote->data, &vote_root) != 0) {
@@ -4014,15 +4081,15 @@ static bool lantern_client_verify_vote_signature(
     if (pubkey_handle) {
         ok = lantern_signature_verify_pk(
             pubkey_handle,
-            (uint32_t)vote->data.slot,
+            vote->data.slot,
             signature,
             vote_root.bytes,
             sizeof(vote_root.bytes));
     } else {
         ok = lantern_signature_verify(
-            record->pubkey_bytes,
-            sizeof(record->pubkey_bytes),
-            (uint32_t)vote->data.slot,
+            pubkey_bytes,
+            LANTERN_VALIDATOR_PUBKEY_SIZE,
+            vote->data.slot,
             signature,
             vote_root.bytes,
             sizeof(vote_root.bytes));
@@ -4051,12 +4118,12 @@ static bool lantern_client_verify_block_signatures(
         return true;
     }
     if (block->signatures.length == 0) {
-        lantern_log_trace(
+        lantern_log_warn(
             "state",
             meta,
-            "signed block slot=%" PRIu64 " missing BlockSignatures; skipping verification",
+            "signed block slot=%" PRIu64 " missing BlockSignatures; rejecting",
             block->message.block.slot);
-        return true;
+        return false;
     }
     if (!block->signatures.data || block->signatures.length != expected_signatures) {
         lantern_log_warn(

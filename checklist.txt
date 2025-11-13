@@ -1,0 +1,6 @@
+- [x] Enforce mandatory block signature verification instead of skipping when `BlockSignatures` is empty in `src/core/client.c:4041-4059`.
+- [x] Source validator public keys from the parent state (not just `genesis.validator_registry`) before verifying block signatures per spec guidance in `block.py`.
+- [x] Align `LANTERN_SIGNATURE_SIZE` and all SSZ/Merkle encoders with the spec’s 3100-byte `Signature` container.
+- [x] Expand signature APIs to accept 64-bit epochs and remove the `UINT32_MAX` guard in `lantern_client_verify_vote_signature`.
+- [x] Reject gossip messages that include author/seqno/signature fields to enforce `strict_no_sign` validation mode in `gossipsub_service`.
+- [x] Reduce `LANTERN_MAX_BLOCK_SIGNATURES` to `VALIDATOR_REGISTRY_LIMIT` so SSZ limits and Merkle roots match the specification.

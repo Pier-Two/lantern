@@ -390,7 +390,6 @@ static void build_signed_block_vector(LanternSignedBlock *signed_block) {
 
     LanternSignedVote proposer;
     build_signed_vote_vector_a(&proposer);
-    proposer.data.validator_id = 0;
     signed_block->message.proposer_attestation = proposer;
 
     size_t attestation_count = signed_block->message.block.body.attestations.length;
