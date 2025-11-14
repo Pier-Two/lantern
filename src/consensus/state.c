@@ -798,15 +798,6 @@ int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, u
     lantern_root_zero(&state->latest_finalized.root);
     state->latest_finalized.slot = 0;
 
-    if (lantern_state_mark_justified_slot(state, state->latest_justified.slot) != 0) {
-        lantern_state_reset(state);
-        return -1;
-    }
-    if (lantern_state_mark_justified_slot(state, state->latest_finalized.slot) != 0) {
-        lantern_state_reset(state);
-        return -1;
-    }
-
     return 0;
 }
 
@@ -901,11 +892,13 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
             state->slot);
         return -1;
     }
-    if (block->slot < state->latest_block_header.slot) {
+    if (block->slot <= state->latest_block_header.slot) {
+        const char *reason = block->slot == state->latest_block_header.slot ? "duplicate" : "stale";
         lantern_log_warn(
             "state",
             &meta,
-            "header rejected: stale slot %" PRIu64 " latest %" PRIu64,
+            "header rejected: %s slot %" PRIu64 " latest %" PRIu64,
+            reason,
             block->slot,
             state->latest_block_header.slot);
         return -1;
@@ -928,8 +921,7 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
     if (lantern_hash_tree_root_block_header(&state->latest_block_header, &latest_header_root) != 0) {
         return -1;
     }
-    bool skip_parent_check = state->latest_block_header.slot == 0 && lantern_root_is_zero(&block->parent_root);
-    if (!skip_parent_check && memcmp(block->parent_root.bytes, latest_header_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+    if (memcmp(block->parent_root.bytes, latest_header_root.bytes, LANTERN_ROOT_SIZE) != 0) {
         char expected_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         char received_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         if (lantern_bytes_to_hex(
@@ -1294,12 +1286,11 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
             computed_hex_dbg[0] ? computed_hex_dbg : "0x0");
     }
 
-    bool allow_genesis_mismatch = (state->slot == 0 && block->slot == 0);
-        if (hashed_state) {
-            if (memcmp(block->state_root.bytes, computed_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
-                char expected_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                char computed_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                if (lantern_bytes_to_hex(
+    if (hashed_state) {
+        if (memcmp(block->state_root.bytes, computed_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+            char expected_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+            char computed_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+            if (lantern_bytes_to_hex(
                     block->state_root.bytes,
                     LANTERN_ROOT_SIZE,
                     expected_hex,
@@ -1317,24 +1308,15 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
                 != 0) {
                 computed_hex[0] = '\0';
             }
-            if (allow_genesis_mismatch) {
-                lantern_log_warn(
-                    "state",
-                    &(const struct lantern_log_metadata){.has_slot = true, .slot = block->slot},
-                    "genesis block state root mismatch: expected=%s computed=%s (accepting)",
-                    expected_hex[0] ? expected_hex : "0x0",
-                    computed_hex[0] ? computed_hex : "0x0");
-            } else {
-                lantern_log_warn(
-                    "state",
-                    &(const struct lantern_log_metadata){.has_slot = true, .slot = block->slot},
-                    "state root mismatch: expected=%s computed=%s",
-                    expected_hex[0] ? expected_hex : "0x0",
-                    computed_hex[0] ? computed_hex : "0x0");
-                STATE_FAIL("state root mismatch for slot %" PRIu64, block->slot);
-            }
+            lantern_log_warn(
+                "state",
+                &(const struct lantern_log_metadata){.has_slot = true, .slot = block->slot},
+                "state root mismatch: expected=%s computed=%s",
+                expected_hex[0] ? expected_hex : "0x0",
+                computed_hex[0] ? computed_hex : "0x0");
+            STATE_FAIL("state root mismatch for slot %" PRIu64, block->slot);
         }
-    } else if (!allow_genesis_mismatch) {
+    } else {
         STATE_FAIL("failed to hash state for slot %" PRIu64, block->slot);
     }
 

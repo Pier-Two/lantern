@@ -46,6 +46,38 @@ static void fill_signature(LanternSignature *signature, uint8_t value) {
     memset(signature->bytes, value, LANTERN_SIGNATURE_SIZE);
 }
 
+static void zero_root(LanternRoot *root) {
+    if (!root) {
+        return;
+    }
+    memset(root->bytes, 0, sizeof(root->bytes));
+}
+
+static bool bitlist_test_bit(const struct lantern_bitlist *bitlist, size_t index) {
+    assert(bitlist != NULL);
+    assert(bitlist->bytes != NULL);
+    assert(index < bitlist->bit_length);
+    size_t byte_index = index / 8;
+    assert(byte_index < bitlist->capacity);
+    size_t bit_index = index % 8;
+    return (bitlist->bytes[byte_index] & (uint8_t)(1u << bit_index)) != 0;
+}
+
+static void mark_slot_justified_for_tests(LanternState *state, uint64_t slot) {
+    if (!state) {
+        return;
+    }
+    size_t index = (size_t)slot;
+    expect_zero(
+        lantern_bitlist_resize(&state->justified_slots, index + 1),
+        "resize justified slots for test");
+    assert(state->justified_slots.bytes != NULL);
+    size_t byte_index = index / 8u;
+    assert(byte_index < state->justified_slots.capacity);
+    size_t bit_index = index % 8u;
+    state->justified_slots.bytes[byte_index] |= (uint8_t)(1u << bit_index);
+}
+
 static bool checkpoints_equal(const LanternCheckpoint *a, const LanternCheckpoint *b) {
     if (!a || !b) {
         return false;
@@ -123,6 +155,8 @@ static int test_genesis_state(void) {
     lantern_state_init(&state);
     expect_zero(lantern_state_generate_genesis(&state, 1234, 8), "generate genesis");
 
+    assert(state.justified_slots.bit_length == 0);
+
     assert(state.config.genesis_time == 1234);
     assert(state.config.num_validators == 8);
     assert(state.slot == 0);
@@ -137,6 +171,114 @@ static int test_genesis_state(void) {
         assert(state.latest_block_header.state_root.bytes[i] == 0);
     }
 
+    lantern_state_reset(&state);
+    return 0;
+}
+
+static int test_genesis_justification_bits(void) {
+    const uint64_t genesis_time = 4321;
+    const uint64_t validator_count = 6;
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, genesis_time, validator_count), "generate genesis for bits");
+    assert(state.justified_slots.bit_length == 0);
+
+    LanternBlock block;
+    memset(&block, 0, sizeof(block));
+    block.slot = 1;
+    expect_zero(
+        lantern_proposer_for_slot(block.slot, validator_count, &block.proposer_index),
+        "compute proposer for first block");
+    lantern_block_body_init(&block.body);
+
+    expect_zero(lantern_state_process_slots(&state, block.slot), "advance slots for first block");
+    LanternRoot parent_root;
+    expect_zero(lantern_hash_tree_root_block_header(&state.latest_block_header, &parent_root), "hash genesis header");
+    block.parent_root = parent_root;
+
+    expect_zero(lantern_state_process_block(&state, &block, NULL, NULL), "process first block");
+    assert(state.justified_slots.bit_length == 1);
+    assert(bitlist_test_bit(&state.justified_slots, 0));
+
+    lantern_block_body_reset(&block.body);
+    lantern_state_reset(&state);
+    return 0;
+}
+
+static int test_block_header_rejects_duplicate_slot(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, 1111, 4), "genesis for duplicate slot test");
+
+    expect_zero(lantern_state_process_slots(&state, 1), "advance slots for duplicate slot test");
+    LanternRoot genesis_header_root;
+    expect_zero(
+        lantern_hash_tree_root_block_header(&state.latest_block_header, &genesis_header_root),
+        "hash genesis header for duplicate slot test");
+
+    LanternBlock first_block;
+    LanternRoot first_block_root;
+    make_block(&state, 1, &genesis_header_root, &first_block, &first_block_root);
+    (void)first_block_root;
+
+    if (lantern_state_process_block(&state, &first_block, NULL, NULL) != 0) {
+        fprintf(stderr, "failed to process first block in duplicate slot test\n");
+        lantern_block_body_reset(&first_block.body);
+        lantern_state_reset(&state);
+        return 1;
+    }
+
+    LanternRoot latest_header_root;
+    expect_zero(
+        lantern_hash_tree_root_block_header(&state.latest_block_header, &latest_header_root),
+        "hash latest header for duplicate slot test");
+
+    LanternBlock duplicate_block;
+    LanternRoot duplicate_block_root;
+    make_block(&state, first_block.slot, &latest_header_root, &duplicate_block, &duplicate_block_root);
+    (void)duplicate_block_root;
+
+    expect_zero(
+        lantern_state_process_slots(&state, duplicate_block.slot),
+        "align slots for duplicate block test");
+
+    if (lantern_state_process_block(&state, &duplicate_block, NULL, NULL) == 0) {
+        fprintf(stderr, "duplicate slot block was incorrectly accepted\n");
+        lantern_block_body_reset(&duplicate_block.body);
+        lantern_block_body_reset(&first_block.body);
+        lantern_state_reset(&state);
+        return 1;
+    }
+
+    lantern_block_body_reset(&duplicate_block.body);
+    lantern_block_body_reset(&first_block.body);
+    lantern_state_reset(&state);
+    return 0;
+}
+
+static int test_block_header_rejects_zero_parent_root(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, 1222, 5), "genesis for zero parent root test");
+
+    expect_zero(lantern_state_process_slots(&state, 1), "advance slot for zero parent root test");
+
+    LanternRoot zero_parent;
+    zero_root(&zero_parent);
+
+    LanternBlock block;
+    LanternRoot block_root;
+    make_block(&state, 1, &zero_parent, &block, &block_root);
+    (void)block_root;
+
+    if (lantern_state_process_block(&state, &block, NULL, NULL) == 0) {
+        fprintf(stderr, "zero parent root block was incorrectly accepted\n");
+        lantern_block_body_reset(&block.body);
+        lantern_state_reset(&state);
+        return 1;
+    }
+
+    lantern_block_body_reset(&block.body);
     lantern_state_reset(&state);
     return 0;
 }
@@ -202,6 +344,49 @@ static int test_state_transition_applies_block(void) {
     return 0;
 }
 
+static int test_state_transition_rejects_genesis_state_root_mismatch(void) {
+    const uint64_t genesis_time = 600;
+    const uint64_t validator_count = 4;
+
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(
+        lantern_state_generate_genesis(&state, genesis_time, validator_count),
+        "generate genesis state for mismatch test");
+
+    LanternRoot parent_root;
+    expect_zero(
+        lantern_hash_tree_root_block_header(&state.latest_block_header, &parent_root),
+        "hash genesis header for mismatch test");
+
+    LanternBlock block;
+    memset(&block, 0, sizeof(block));
+    block.slot = 0;
+    expect_zero(lantern_proposer_for_slot(block.slot, validator_count, &block.proposer_index), "compute proposer");
+    block.parent_root = parent_root;
+    lantern_block_body_init(&block.body);
+
+    LanternRoot expected_state_root;
+    expect_zero(lantern_hash_tree_root_state(&state, &expected_state_root), "hash expected state root");
+    block.state_root = expected_state_root;
+    block.state_root.bytes[0] ^= 0xFF;
+
+    LanternSignedBlock signed_block;
+    memset(&signed_block, 0, sizeof(signed_block));
+    signed_block.message.block = block;
+
+    if (lantern_state_transition(&state, &signed_block) == 0) {
+        fprintf(stderr, "genesis state mismatch block was incorrectly accepted\n");
+        lantern_block_body_reset(&block.body);
+        lantern_state_reset(&state);
+        return 1;
+    }
+
+    lantern_block_body_reset(&block.body);
+    lantern_state_reset(&state);
+    return 0;
+}
+
 static void build_vote(
     LanternVote *out_vote,
     LanternSignature *out_signature,
@@ -244,6 +429,7 @@ static int test_attestations_require_quorum(void) {
     LanternState state;
     lantern_state_init(&state);
     expect_zero(lantern_state_generate_genesis(&state, 500, 4), "genesis for quorum test");
+    mark_slot_justified_for_tests(&state, state.latest_justified.slot);
 
     LanternAttestations attestations;
     lantern_attestations_init(&attestations);
@@ -274,6 +460,7 @@ static int test_attestations_require_justified_source(void) {
     LanternState state;
     lantern_state_init(&state);
     expect_zero(lantern_state_generate_genesis(&state, 600, 4), "genesis for justified source test");
+    mark_slot_justified_for_tests(&state, state.latest_justified.slot);
 
     LanternAttestations attestations;
     lantern_attestations_init(&attestations);
@@ -314,6 +501,7 @@ static int test_attestations_accept_duplicate_votes(void) {
     LanternState state;
     lantern_state_init(&state);
     expect_zero(lantern_state_generate_genesis(&state, 700, 3), "genesis for duplicate vote test");
+    mark_slot_justified_for_tests(&state, state.latest_justified.slot);
 
     LanternAttestations attestations;
     lantern_attestations_init(&attestations);
@@ -345,6 +533,7 @@ static int test_collect_attestations_for_block(void) {
     LanternState state;
     lantern_state_init(&state);
     expect_zero(lantern_state_generate_genesis(&state, 900, 4), "genesis for collection test");
+    mark_slot_justified_for_tests(&state, state.latest_justified.slot);
 
     LanternAttestations input;
     lantern_attestations_init(&input);
@@ -769,10 +958,22 @@ int main(void) {
     if (test_genesis_state() != 0) {
         return 1;
     }
+    if (test_genesis_justification_bits() != 0) {
+        return 1;
+    }
+    if (test_block_header_rejects_duplicate_slot() != 0) {
+        return 1;
+    }
+    if (test_block_header_rejects_zero_parent_root() != 0) {
+        return 1;
+    }
     if (test_process_slots_sets_state_root() != 0) {
         return 1;
     }
     if (test_state_transition_applies_block() != 0) {
+        return 1;
+    }
+    if (test_state_transition_rejects_genesis_state_root_mismatch() != 0) {
         return 1;
     }
     if (test_attestations_require_quorum() != 0) {
