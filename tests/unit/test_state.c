@@ -954,6 +954,78 @@ static int test_compute_vote_checkpoints_justifiable(void) {
     return 0;
 }
 
+static int test_history_limits_enforced(void) {
+    const uint64_t genesis_time = 999;
+    const uint64_t validator_count = 8;
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, genesis_time, validator_count), "genesis for history test");
+
+    expect_zero(
+        lantern_root_list_resize(&state.historical_block_hashes, LANTERN_HISTORICAL_ROOTS_LIMIT),
+        "prep historical roots");
+    expect_zero(
+        lantern_bitlist_resize(&state.justified_slots, LANTERN_HISTORICAL_ROOTS_LIMIT),
+        "prep justified slots");
+
+    state.latest_block_header.slot = LANTERN_HISTORICAL_ROOTS_LIMIT;
+    state.slot = state.latest_block_header.slot + 1;
+
+    LanternBlock block;
+    memset(&block, 0, sizeof(block));
+    block.slot = state.slot;
+    expect_zero(
+        lantern_proposer_for_slot(block.slot, validator_count, &block.proposer_index),
+        "proposer for history limit block");
+    expect_zero(
+        lantern_hash_tree_root_block_header(&state.latest_block_header, &block.parent_root),
+        "hash parent header for history limit block");
+    lantern_block_body_init(&block.body);
+
+    expect_zero(lantern_state_process_block_header(&state, &block), "process history limit block");
+    assert(state.historical_block_hashes.length == LANTERN_HISTORICAL_ROOTS_LIMIT);
+    assert(state.historical_roots_offset == 1u);
+    assert(state.justified_slots.bit_length == LANTERN_HISTORICAL_ROOTS_LIMIT);
+    assert(state.justified_slots_offset == 1u);
+
+    lantern_block_body_reset(&block.body);
+    lantern_state_reset(&state);
+    return 0;
+}
+
+static int test_justified_slot_window_helpers(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, 111, 4), "genesis for slot window test");
+
+    expect_zero(lantern_bitlist_resize(&state.justified_slots, 4), "initialize bitlist window");
+    state.justified_slots.bytes[0] = 0;
+    state.justified_slots.bytes[0] |= (uint8_t)(1u << 1u); /* slot offset + 1 */
+    state.justified_slots_offset = 10u;
+
+    assert(!lantern_state_slot_in_justified_window(&state, 9u));
+    assert(lantern_state_slot_in_justified_window(&state, 10u));
+
+    bool bit = false;
+    expect_zero(lantern_state_get_justified_slot_bit(&state, 11u, &bit), "read window bit");
+    assert(bit);
+
+    expect_zero(lantern_state_mark_justified_slot(&state, 9u), "mark trimmed slot");
+    assert(state.justified_slots_offset == 10u);
+
+    expect_zero(lantern_state_mark_justified_slot(&state, 14u), "mark new slot past window");
+    assert(state.justified_slots_offset == 11u);
+    assert(lantern_state_slot_in_justified_window(&state, 14u));
+    assert(!lantern_state_slot_in_justified_window(&state, 10u));
+
+    bool latest_bit = false;
+    expect_zero(lantern_state_get_justified_slot_bit(&state, 14u, &latest_bit), "read latest bit");
+    assert(latest_bit);
+
+    lantern_state_reset(&state);
+    return 0;
+}
+
 int main(void) {
     if (test_genesis_state() != 0) {
         return 1;
@@ -998,6 +1070,12 @@ int main(void) {
         return 1;
     }
     if (test_compute_vote_checkpoints_justifiable() != 0) {
+        return 1;
+    }
+    if (test_history_limits_enforced() != 0) {
+        return 1;
+    }
+    if (test_justified_slot_window_helpers() != 0) {
         return 1;
     }
     puts("lantern_state_test OK");

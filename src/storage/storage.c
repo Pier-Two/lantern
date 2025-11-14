@@ -29,7 +29,9 @@
 #define LANTERN_STORAGE_VOTES_VERSION 2u
 #define LANTERN_STORAGE_BLOCKS_DIR "blocks"
 #define LANTERN_STORAGE_STATE_FILE "state.ssz"
+#define LANTERN_STORAGE_STATE_META_FILE "state.meta"
 #define LANTERN_STORAGE_VOTES_FILE "votes.bin"
+#define LANTERN_STORAGE_STATE_META_VERSION 1u
 
 #if defined(_WIN32)
 #define LANTERN_STORAGE_PATH_SEP '\\'
@@ -43,6 +45,13 @@ struct lantern_storage_votes_header {
     uint32_t reserved;
     uint64_t validator_count;
     uint64_t record_count;
+};
+
+struct lantern_storage_state_meta {
+    uint32_t version;
+    uint32_t reserved;
+    uint64_t historical_roots_offset;
+    uint64_t justified_slots_offset;
 };
 
 static int ensure_directory(const char *path) {
@@ -286,6 +295,53 @@ static int read_file_buffer(const char *path, uint8_t **out_data, size_t *out_le
     return 0;
 }
 
+static int write_state_meta(const char *data_dir, const LanternState *state) {
+    if (!data_dir || !state) {
+        return -1;
+    }
+    struct lantern_storage_state_meta meta = {
+        .version = LANTERN_STORAGE_STATE_META_VERSION,
+        .reserved = 0,
+        .historical_roots_offset = state->historical_roots_offset,
+        .justified_slots_offset = state->justified_slots_offset,
+    };
+    char *meta_path = NULL;
+    if (join_path(data_dir, LANTERN_STORAGE_STATE_META_FILE, &meta_path) != 0) {
+        return -1;
+    }
+    int rc = write_atomic_file(meta_path, (const uint8_t *)&meta, sizeof(meta));
+    free(meta_path);
+    return rc;
+}
+
+static int read_state_meta(const char *data_dir, struct lantern_storage_state_meta *meta) {
+    if (!data_dir || !meta) {
+        return -1;
+    }
+    char *meta_path = NULL;
+    if (join_path(data_dir, LANTERN_STORAGE_STATE_META_FILE, &meta_path) != 0) {
+        return -1;
+    }
+    uint8_t *buffer = NULL;
+    size_t len = 0;
+    int rc = read_file_buffer(meta_path, &buffer, &len);
+    free(meta_path);
+    if (rc != 0) {
+        free(buffer);
+        return rc;
+    }
+    if (len != sizeof(*meta)) {
+        free(buffer);
+        return -1;
+    }
+    memcpy(meta, buffer, sizeof(*meta));
+    free(buffer);
+    if (meta->version != LANTERN_STORAGE_STATE_META_VERSION) {
+        return -1;
+    }
+    return 0;
+}
+
 static int build_blocks_dir(const char *data_dir, char **out_path) {
     return join_path(data_dir, LANTERN_STORAGE_BLOCKS_DIR, out_path);
 }
@@ -331,7 +387,10 @@ int lantern_storage_save_state(const char *data_dir, const LanternState *state) 
     int rc = write_atomic_file(state_path, buffer, written);
     free(state_path);
     free(buffer);
-    return rc;
+    if (rc != 0) {
+        return rc;
+    }
+    return write_state_meta(data_dir, state);
 }
 
 int lantern_storage_load_state(const char *data_dir, LanternState *state) {
@@ -362,6 +421,18 @@ int lantern_storage_load_state(const char *data_dir, LanternState *state) {
         return -1;
     }
     if (lantern_state_prepare_validator_votes(&decoded, decoded.config.num_validators) != 0) {
+        lantern_state_reset(&decoded);
+        return -1;
+    }
+    struct lantern_storage_state_meta meta;
+    int meta_rc = read_state_meta(data_dir, &meta);
+    if (meta_rc == 0) {
+        decoded.historical_roots_offset = meta.historical_roots_offset;
+        decoded.justified_slots_offset = meta.justified_slots_offset;
+    } else if (meta_rc == 1) {
+        decoded.historical_roots_offset = 0;
+        decoded.justified_slots_offset = 0;
+    } else {
         lantern_state_reset(&decoded);
         return -1;
     }

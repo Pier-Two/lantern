@@ -60,10 +60,16 @@ static void record_attestation_validation_metric(double start_seconds, bool vali
 }
 
 static int lantern_root_list_append(struct lantern_root_list *list, const LanternRoot *root);
+static int lantern_root_list_drop_front(struct lantern_root_list *list, size_t count);
 static int lantern_bitlist_set_bit(struct lantern_bitlist *list, size_t index, bool value);
 static int lantern_bitlist_get_bit(const struct lantern_bitlist *list, size_t index, bool *out_value);
 static int lantern_bitlist_ensure_length(struct lantern_bitlist *list, size_t bit_length);
+static int lantern_bitlist_drop_front(struct lantern_bitlist *list, size_t bits);
 static void lantern_root_zero(LanternRoot *root);
+static int lantern_state_append_historical_root(LanternState *state, const LanternRoot *root);
+static int lantern_state_set_justified_slot_bit(LanternState *state, uint64_t slot, bool value);
+static bool lantern_state_slot_in_justified_window(const LanternState *state, uint64_t slot);
+static int lantern_state_get_justified_slot_bit(const LanternState *state, uint64_t slot, bool *out_value);
 
 static bool signature_is_zero(const LanternSignature *signature) {
     if (!signature) {
@@ -212,6 +218,8 @@ static int lantern_state_clone_view(const LanternState *source, LanternState *de
     dest->latest_justified = source->latest_justified;
     dest->latest_finalized = source->latest_finalized;
     dest->validator_registry_root = source->validator_registry_root;
+    dest->historical_roots_offset = source->historical_roots_offset;
+    dest->justified_slots_offset = source->justified_slots_offset;
 
     if (clone_root_list(&dest->historical_block_hashes, &source->historical_block_hashes) != 0) {
         goto error;
@@ -432,6 +440,20 @@ static int lantern_root_list_append(struct lantern_root_list *list, const Lanter
     return 0;
 }
 
+static int lantern_root_list_drop_front(struct lantern_root_list *list, size_t count) {
+    if (!list || count == 0) {
+        return 0;
+    }
+    if (count >= list->length) {
+        return lantern_root_list_resize(list, 0);
+    }
+    size_t remaining = list->length - count;
+    memmove(list->items, list->items + count, remaining * sizeof(*list->items));
+    memset(list->items + remaining, 0, count * sizeof(*list->items));
+    list->length = remaining;
+    return 0;
+}
+
 static int lantern_bitlist_set_bit(struct lantern_bitlist *list, size_t index, bool value) {
     if (!list) {
         return -1;
@@ -486,6 +508,134 @@ static int lantern_bitlist_append(struct lantern_bitlist *list, bool value) {
         return -1;
     }
     return lantern_bitlist_set_bit(list, new_length - 1, value);
+}
+
+static int lantern_bitlist_drop_front(struct lantern_bitlist *list, size_t bits) {
+    if (!list || bits == 0) {
+        return 0;
+    }
+    if (bits >= list->bit_length) {
+        return lantern_bitlist_resize(list, 0);
+    }
+    size_t byte_len = bitlist_required_bytes(list->bit_length);
+    size_t byte_shift = bits / 8u;
+    size_t bit_shift = bits % 8u;
+    if (byte_shift > 0) {
+        memmove(list->bytes, list->bytes + byte_shift, byte_len - byte_shift);
+        memset(list->bytes + (byte_len - byte_shift), 0, byte_shift);
+        byte_len -= byte_shift;
+    }
+    if (bit_shift > 0 && byte_len > 0) {
+        uint8_t carry = 0;
+        for (size_t i = byte_len; i > 0; --i) {
+            size_t idx = i - 1;
+            uint8_t current = list->bytes[idx];
+            uint8_t next_carry = (uint8_t)(current >> (8u - bit_shift));
+            list->bytes[idx] = (uint8_t)((current << bit_shift) | carry);
+            carry = next_carry;
+        }
+    }
+    size_t new_length = list->bit_length - bits;
+    return lantern_bitlist_resize(list, new_length);
+}
+
+static bool lantern_state_slot_in_justified_window(const LanternState *state, uint64_t slot) {
+    if (!state) {
+        return false;
+    }
+    uint64_t offset = state->justified_slots_offset;
+    uint64_t bit_length = state->justified_slots.bit_length;
+    uint64_t window_end = offset + bit_length;
+    return slot >= offset && slot < window_end;
+}
+
+static int lantern_state_get_justified_slot_bit(const LanternState *state, uint64_t slot, bool *out_value) {
+    if (!state || !out_value) {
+        return -1;
+    }
+    if (!lantern_state_slot_in_justified_window(state, slot)) {
+        *out_value = false;
+        return 0;
+    }
+    uint64_t relative = slot - state->justified_slots_offset;
+    if (relative > SIZE_MAX) {
+        return -1;
+    }
+    return lantern_bitlist_get_bit(&state->justified_slots, (size_t)relative, out_value);
+}
+
+static int lantern_state_ensure_justified_slot_index(LanternState *state, uint64_t slot, size_t *out_index) {
+    if (!state) {
+        return -1;
+    }
+    size_t limit = LANTERN_HISTORICAL_ROOTS_LIMIT;
+    if (limit == 0) {
+        return -1;
+    }
+    uint64_t offset = state->justified_slots_offset;
+    if (slot < offset) {
+        return 1;
+    }
+    uint64_t relative = slot - offset;
+    if (relative >= limit) {
+        uint64_t drop = (relative - limit) + 1u;
+        if (drop > SIZE_MAX) {
+            return -1;
+        }
+        if (lantern_bitlist_drop_front(&state->justified_slots, (size_t)drop) != 0) {
+            return -1;
+        }
+        state->justified_slots_offset += drop;
+        offset += drop;
+        relative = slot >= offset ? slot - offset : 0;
+    }
+    if (relative > SIZE_MAX) {
+        return -1;
+    }
+    size_t desired_length = (size_t)relative + 1u;
+    if (desired_length > state->justified_slots.bit_length) {
+        if (lantern_bitlist_ensure_length(&state->justified_slots, desired_length) != 0) {
+            return -1;
+        }
+    }
+    if (out_index) {
+        *out_index = (size_t)relative;
+    }
+    return 0;
+}
+
+static int lantern_state_set_justified_slot_bit(LanternState *state, uint64_t slot, bool value) {
+    if (!state) {
+        return -1;
+    }
+    if (slot > SIZE_MAX) {
+        return -1;
+    }
+    size_t index = 0;
+    int rc = lantern_state_ensure_justified_slot_index(state, slot, &index);
+    if (rc > 0) {
+        return 0;
+    }
+    if (rc != 0) {
+        return -1;
+    }
+    return lantern_bitlist_set_bit(&state->justified_slots, index, value);
+}
+
+static int lantern_state_append_historical_root(LanternState *state, const LanternRoot *root) {
+    if (!state || !root) {
+        return -1;
+    }
+    if (state->historical_block_hashes.length >= LANTERN_HISTORICAL_ROOTS_LIMIT) {
+        if (state->historical_block_hashes.length == 0) {
+            return -1;
+        }
+        if (lantern_root_list_drop_front(&state->historical_block_hashes, 1) != 0) {
+            return -1;
+        }
+        state->historical_roots_offset += 1u;
+    }
+    return lantern_root_list_append(&state->historical_block_hashes, root);
 }
 
 static int lantern_bitlist_ensure_length(struct lantern_bitlist *list, size_t bit_length) {
@@ -864,15 +1014,11 @@ static int lantern_state_mark_justified_slot(LanternState *state, uint64_t slot)
     if (slot > SIZE_MAX) {
         return -1;
     }
-    size_t index = (size_t)slot;
-    if (lantern_bitlist_ensure_length(&state->justified_slots, index + 1) != 0) {
-        return -1;
-    }
     const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
     if (debug_hash && debug_hash[0] != '\0') {
         fprintf(stderr, "mark justified slot %" PRIu64 "\n", slot);
     }
-    return lantern_bitlist_set_bit(&state->justified_slots, index, true);
+    return lantern_state_set_justified_slot_bit(state, slot, true);
 }
 
 int lantern_state_process_block_header(LanternState *state, const LanternBlock *block) {
@@ -956,23 +1102,24 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
         state->latest_finalized.root = block->parent_root;
     }
 
-    if (lantern_root_list_append(&state->historical_block_hashes, &block->parent_root) != 0) {
+    uint64_t parent_slot = state->latest_block_header.slot;
+    if (lantern_state_append_historical_root(state, &block->parent_root) != 0) {
         return -1;
     }
-    if (lantern_bitlist_append(&state->justified_slots, state->latest_block_header.slot == 0) != 0) {
+    if (lantern_state_set_justified_slot_bit(state, parent_slot, parent_slot == 0) != 0) {
         return -1;
     }
 
-    uint64_t parent_slot = state->latest_block_header.slot;
     uint64_t delta = block->slot - parent_slot;
     if (delta > 1) {
         LanternRoot zero_root;
         lantern_root_zero(&zero_root);
         for (uint64_t i = 0; i < delta - 1; ++i) {
-            if (lantern_root_list_append(&state->historical_block_hashes, &zero_root) != 0) {
+            uint64_t slot = parent_slot + 1 + i;
+            if (lantern_state_append_historical_root(state, &zero_root) != 0) {
                 return -1;
             }
-            if (lantern_bitlist_append(&state->justified_slots, false) != 0) {
+            if (lantern_state_set_justified_slot_bit(state, slot, false) != 0) {
                 return -1;
             }
         }
@@ -1043,12 +1190,12 @@ int lantern_state_process_attestations(
             record_attestation_validation_metric(att_validation_start, false);
             return -1;
         }
-        if (vote->source.slot >= state->justified_slots.bit_length) {
+        if (!lantern_state_slot_in_justified_window(state, vote->source.slot)) {
             record_attestation_validation_metric(att_validation_start, false);
             continue;
         }
         bool source_is_justified = false;
-        if (lantern_bitlist_get_bit(&state->justified_slots, (size_t)vote->source.slot, &source_is_justified) != 0) {
+        if (lantern_state_get_justified_slot_bit(state, vote->source.slot, &source_is_justified) != 0) {
             lantern_log_warn(
                 "state",
                 &meta,
@@ -1062,8 +1209,8 @@ int lantern_state_process_attestations(
             continue;
         }
         bool target_is_justified = false;
-        if (vote->target.slot < state->justified_slots.bit_length) {
-            if (lantern_bitlist_get_bit(&state->justified_slots, (size_t)vote->target.slot, &target_is_justified) != 0) {
+        if (lantern_state_slot_in_justified_window(state, vote->target.slot)) {
+            if (lantern_state_get_justified_slot_bit(state, vote->target.slot, &target_is_justified) != 0) {
                 lantern_log_warn(
                     "state",
                     &meta,

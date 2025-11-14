@@ -115,6 +115,8 @@ int main(void) {
     LanternState state;
     lantern_state_init(&state);
     expect_zero(lantern_state_generate_genesis(&state, 123456u, 4u), "generate genesis");
+    state.historical_roots_offset = 11u;
+    state.justified_slots_offset = 22u;
 
     /* Populate validator registry with deterministic pubkeys so SSZ encoding works */
     const size_t genesis_validators = state.config.num_validators;
@@ -139,6 +141,8 @@ int main(void) {
         return EXIT_FAILURE;
     }
     assert(loaded_state.config.num_validators == state.config.num_validators);
+    assert(loaded_state.historical_roots_offset == state.historical_roots_offset);
+    assert(loaded_state.justified_slots_offset == state.justified_slots_offset);
     lantern_state_reset(&loaded_state);
 
     LanternVote vote;
@@ -200,11 +204,14 @@ int main(void) {
 
     char state_path[PATH_MAX];
     char votes_path[PATH_MAX];
+    char meta_path[PATH_MAX];
     char blocks_dir[PATH_MAX];
     int written = snprintf(state_path, sizeof(state_path), "%s/%s", base_dir, "state.ssz");
     assert(written > 0 && (size_t)written < sizeof(state_path));
     written = snprintf(votes_path, sizeof(votes_path), "%s/%s", base_dir, "votes.bin");
     assert(written > 0 && (size_t)written < sizeof(votes_path));
+    written = snprintf(meta_path, sizeof(meta_path), "%s/%s", base_dir, "state.meta");
+    assert(written > 0 && (size_t)written < sizeof(meta_path));
     written = snprintf(blocks_dir, sizeof(blocks_dir), "%s/%s", base_dir, "blocks");
     assert(written > 0 && (size_t)written < sizeof(blocks_dir));
 
@@ -217,6 +224,7 @@ int main(void) {
     cleanup_path(block_path);
     cleanup_dir(blocks_dir);
     cleanup_path(votes_path);
+    cleanup_path(meta_path);
     cleanup_path(state_path);
     cleanup_dir(base_dir);
 
