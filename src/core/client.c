@@ -3476,22 +3476,39 @@ static int validator_build_block(
         return -1;
     }
 
-    LanternAttestations att_list;
-    LanternBlockSignatures att_signatures;
-    lantern_attestations_init(&att_list);
-    lantern_block_signatures_init(&att_signatures);
-    if (lantern_state_collect_attestations_for_block(&client->state, &att_list, &att_signatures) != 0) {
-        lantern_attestations_reset(&att_list);
-        lantern_block_signatures_reset(&att_signatures);
+    LanternCheckpoint head_cp;
+    LanternCheckpoint target_cp;
+    LanternCheckpoint source_cp;
+    if (lantern_state_compute_vote_checkpoints(&client->state, &head_cp, &target_cp, &source_cp) != 0) {
         lantern_client_unlock_state(client, state_locked);
         lantern_signed_block_with_attestation_reset(out_block);
         return -1;
     }
 
-    LanternCheckpoint head_cp;
-    LanternCheckpoint target_cp;
-    LanternCheckpoint source_cp;
-    if (lantern_state_compute_vote_checkpoints(&client->state, &head_cp, &target_cp, &source_cp) != 0) {
+    out_proposer_vote->data.validator_id = local->global_index;
+    out_proposer_vote->data.slot = slot;
+    out_proposer_vote->data.head = head_cp;
+    out_proposer_vote->data.target = target_cp;
+    out_proposer_vote->data.source = source_cp;
+    if (validator_sign_vote(local, slot, out_proposer_vote) != 0) {
+        lantern_client_unlock_state(client, state_locked);
+        lantern_signed_block_with_attestation_reset(out_block);
+        return -1;
+    }
+
+    LanternAttestations att_list;
+    LanternBlockSignatures att_signatures;
+    lantern_attestations_init(&att_list);
+    lantern_block_signatures_init(&att_signatures);
+    if (lantern_state_collect_attestations_for_block(
+            &client->state,
+            slot,
+            local->global_index,
+            &parent_root,
+            out_proposer_vote,
+            &att_list,
+            &att_signatures)
+        != 0) {
         lantern_attestations_reset(&att_list);
         lantern_block_signatures_reset(&att_signatures);
         lantern_client_unlock_state(client, state_locked);
@@ -3501,17 +3518,6 @@ static int validator_build_block(
 
     lantern_client_unlock_state(client, state_locked);
     state_locked = false;
-
-    out_proposer_vote->data.validator_id = local->global_index;
-    out_proposer_vote->data.slot = slot;
-    out_proposer_vote->data.head = head_cp;
-    out_proposer_vote->data.target = target_cp;
-    out_proposer_vote->data.source = source_cp;
-    if (validator_sign_vote(local, slot, out_proposer_vote) != 0) {
-        lantern_attestations_reset(&att_list);
-        lantern_signed_block_with_attestation_reset(out_block);
-        return -1;
-    }
 
     LanternBlock *message_block = &out_block->message.block;
     message_block->slot = slot;

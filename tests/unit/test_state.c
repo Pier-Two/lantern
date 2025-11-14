@@ -562,12 +562,27 @@ static int test_collect_attestations_for_block(void) {
         lantern_state_process_attestations(&state, &input, &input_signatures),
         "process mixed attestations");
 
+    uint64_t block_slot = state.slot + 1u;
+    uint64_t proposer_index = 0;
+    expect_zero(
+        lantern_proposer_for_slot(block_slot, state.config.num_validators, &proposer_index),
+        "collection proposer lookup");
+    LanternRoot parent_root;
+    expect_zero(lantern_state_select_block_parent(&state, &parent_root), "collection parent root");
+
     LanternAttestations collected;
     lantern_attestations_init(&collected);
     LanternBlockSignatures collected_signatures;
     lantern_block_signatures_init(&collected_signatures);
     expect_zero(
-        lantern_state_collect_attestations_for_block(&state, &collected, &collected_signatures),
+        lantern_state_collect_attestations_for_block(
+            &state,
+            block_slot,
+            proposer_index,
+            &parent_root,
+            NULL,
+            &collected,
+            &collected_signatures),
         "collect attestations");
 
     if (collected.length != 2) {
@@ -664,6 +679,162 @@ static int test_collect_attestations_for_block(void) {
     lantern_block_signatures_reset(&input_signatures);
     lantern_state_reset(&state);
     return 0;
+}
+
+static int test_process_block_applies_proposer_attestation(void) {
+    LanternState without_vote;
+    LanternState with_vote;
+    lantern_state_init(&without_vote);
+    lantern_state_init(&with_vote);
+    const uint64_t genesis_time = 777;
+    const uint64_t validator_count = 4;
+    expect_zero(
+        lantern_state_generate_genesis(&without_vote, genesis_time, validator_count),
+        "genesis for proposer block (without vote)");
+    expect_zero(
+        lantern_state_generate_genesis(&with_vote, genesis_time, validator_count),
+        "genesis for proposer block (with vote)");
+    mark_slot_justified_for_tests(&without_vote, without_vote.latest_justified.slot);
+    mark_slot_justified_for_tests(&with_vote, with_vote.latest_justified.slot);
+
+    LanternBlock block;
+    memset(&block, 0, sizeof(block));
+    block.slot = without_vote.slot + 1u;
+    expect_zero(
+        lantern_proposer_for_slot(block.slot, validator_count, &block.proposer_index),
+        "proposer for proposer vote test");
+    expect_zero(
+        lantern_state_select_block_parent(&without_vote, &block.parent_root),
+        "parent root for proposer vote test");
+    lantern_block_body_init(&block.body);
+    LanternBlockSignatures block_sigs;
+    lantern_block_signatures_init(&block_sigs);
+
+    LanternCheckpoint base = without_vote.latest_justified;
+    LanternCheckpoint next = base;
+    next.slot = base.slot + 1u;
+    fill_root(&next.root, 0xA1);
+
+    LanternSignedVote proposer_vote;
+    memset(&proposer_vote, 0, sizeof(proposer_vote));
+    build_vote(&proposer_vote.data, &proposer_vote.signature, block.proposer_index, block.slot, &base, &next, 0xB2);
+
+    expect_zero(lantern_state_process_slots(&without_vote, block.slot), "advance slots without proposer vote");
+    expect_zero(
+        lantern_state_process_block(&without_vote, &block, &block_sigs, NULL),
+        "process block without proposer vote");
+    assert(without_vote.latest_justified.slot == base.slot);
+
+    expect_zero(lantern_state_process_slots(&with_vote, block.slot), "advance slots with proposer vote");
+    expect_zero(
+        lantern_state_process_block(&with_vote, &block, &block_sigs, &proposer_vote),
+        "process block with proposer vote");
+    assert(with_vote.latest_justified.slot == next.slot);
+
+    lantern_block_body_reset(&block.body);
+    lantern_block_signatures_reset(&block_sigs);
+    lantern_state_reset(&without_vote);
+    lantern_state_reset(&with_vote);
+    return 0;
+}
+
+static int test_collect_attestations_fixed_point(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, 950, 4), "genesis for fixed-point test");
+    mark_slot_justified_for_tests(&state, state.latest_justified.slot);
+
+    LanternCheckpoint base = state.latest_justified;
+    LanternCheckpoint mid = base;
+    mid.slot = base.slot + 1u;
+    fill_root(&mid.root, 0xE1);
+    LanternCheckpoint tip = mid;
+    tip.slot = mid.slot + 1u;
+    fill_root(&tip.root, 0xE2);
+
+    LanternSignedVote vote;
+    memset(&vote, 0, sizeof(vote));
+    build_vote(&vote.data, &vote.signature, 0, mid.slot, &base, &mid, 0x21);
+    expect_zero(lantern_state_set_signed_validator_vote(&state, 0, &vote), "store fixed vote 0");
+    build_vote(&vote.data, &vote.signature, 1, mid.slot, &base, &mid, 0x22);
+    expect_zero(lantern_state_set_signed_validator_vote(&state, 1, &vote), "store fixed vote 1");
+    build_vote(&vote.data, &vote.signature, 2, tip.slot, &mid, &tip, 0x23);
+    expect_zero(lantern_state_set_signed_validator_vote(&state, 2, &vote), "store fixed vote 2");
+    build_vote(&vote.data, &vote.signature, 3, tip.slot, &mid, &tip, 0x24);
+    expect_zero(lantern_state_set_signed_validator_vote(&state, 3, &vote), "store fixed vote 3");
+
+    uint64_t block_slot = state.slot + 1u;
+    uint64_t proposer_index = 0;
+    expect_zero(
+        lantern_proposer_for_slot(block_slot, state.config.num_validators, &proposer_index),
+        "fixed-point proposer lookup");
+    LanternRoot parent_root;
+    expect_zero(lantern_state_select_block_parent(&state, &parent_root), "fixed-point parent root");
+
+    LanternAttestations collected;
+    lantern_attestations_init(&collected);
+    LanternBlockSignatures collected_signatures;
+    lantern_block_signatures_init(&collected_signatures);
+
+    int rc = 0;
+    if (lantern_state_collect_attestations_for_block(
+            &state,
+            block_slot,
+            proposer_index,
+            &parent_root,
+            NULL,
+            &collected,
+            &collected_signatures)
+        != 0) {
+        fprintf(stderr, "fixed-point collection failed\n");
+        rc = 1;
+        goto cleanup;
+    }
+
+    if (collected.length != 4 || collected_signatures.length != 4) {
+        fprintf(stderr, "expected four attestations after fixed-point collection\n");
+        rc = 1;
+        goto cleanup;
+    }
+
+    bool seen_validators[4] = {false, false, false, false};
+    bool saw_mid_source = false;
+    for (size_t i = 0; i < collected.length; ++i) {
+        const LanternVote *vote_view = &collected.data[i];
+        if (vote_view->validator_id >= 4) {
+            fprintf(stderr, "unexpected validator id %" PRIu64 "\n", vote_view->validator_id);
+            rc = 1;
+            goto cleanup;
+        }
+        seen_validators[vote_view->validator_id] = true;
+        if (checkpoints_equal(&vote_view->source, &mid)) {
+            saw_mid_source = true;
+        } else if (!checkpoints_equal(&vote_view->source, &base)) {
+            fprintf(stderr, "unexpected checkpoint source for validator %" PRIu64 "\n", vote_view->validator_id);
+            rc = 1;
+            goto cleanup;
+        }
+    }
+
+    if (!saw_mid_source) {
+        fprintf(stderr, "expected at least one mid-source attestation\n");
+        rc = 1;
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < 4; ++i) {
+        if (!seen_validators[i]) {
+            fprintf(stderr, "missing validator %zu in fixed-point collection\n", i);
+            rc = 1;
+            goto cleanup;
+        }
+    }
+
+cleanup:
+    lantern_attestations_reset(&collected);
+    lantern_block_signatures_reset(&collected_signatures);
+    lantern_state_reset(&state);
+    return rc;
 }
 
 static int test_select_block_parent_uses_fork_choice(void) {
@@ -1058,6 +1229,12 @@ int main(void) {
         return 1;
     }
     if (test_collect_attestations_for_block() != 0) {
+        return 1;
+    }
+    if (test_process_block_applies_proposer_attestation() != 0) {
+        return 1;
+    }
+    if (test_collect_attestations_fixed_point() != 0) {
         return 1;
     }
     if (test_select_block_parent_uses_fork_choice() != 0) {
