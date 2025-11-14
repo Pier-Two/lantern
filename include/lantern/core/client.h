@@ -187,6 +187,11 @@ const struct lantern_local_validator *lantern_client_local_validator(
     size_t index);
 int lantern_client_publish_block(struct lantern_client *client, const LanternSignedBlock *block);
 
+int lantern_client_debug_record_vote(
+    struct lantern_client *client,
+    const LanternSignedVote *vote,
+    const char *peer_id_text);
+
 int lantern_client_debug_import_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,

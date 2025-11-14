@@ -1,9 +1,11 @@
 #include "lantern/core/client.h"
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/signature.h"
 #include "lantern/networking/enr.h"
 #include "lantern/networking/libp2p.h"
 #include "lantern/networking/reqresp_service.h"
 #include "lantern/support/strings.h"
+#include "lantern/support/time.h"
 #include "protocol/identify/protocol_identify.h"
 #include "protocol/ping/protocol_ping.h"
 
@@ -305,6 +307,33 @@ static void fill_root_with_index(LanternRoot *root, uint32_t index) {
     }
 }
 
+static int slot_for_root(struct lantern_client *client, const LanternRoot *root, uint64_t *out_slot) {
+    if (!client || !root || !out_slot || !client->has_fork_choice) {
+        return -1;
+    }
+    if (lantern_fork_choice_block_info(&client->fork_choice, root, out_slot, NULL, NULL) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int advance_fork_choice_intervals(LanternForkChoice *store, size_t count, bool has_proposal) {
+    if (!store || store->seconds_per_interval == 0) {
+        return -1;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        uint64_t next_interval = store->time_intervals + 1u;
+        uint64_t now = store->config.genesis_time + (next_interval * store->seconds_per_interval);
+        if (now < store->config.genesis_time) {
+            return -1;
+        }
+        if (lantern_fork_choice_advance_time(store, now, has_proposal) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static bool pending_contains_root(const struct lantern_client *client, const LanternRoot *root) {
     if (!client || !root) {
         return false;
@@ -320,6 +349,674 @@ static bool pending_contains_root(const struct lantern_client *client, const Lan
         }
     }
     return false;
+}
+
+static int setup_vote_validation_client(
+    struct lantern_client *client,
+    const char *node_id,
+    struct PQSignatureSchemePublicKey **out_pub,
+    struct PQSignatureSchemeSecretKey **out_secret,
+    LanternRoot *anchor_root,
+    LanternRoot *child_root) {
+    if (!client || !out_pub || !out_secret) {
+        return -1;
+    }
+    int rc = -1;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternBlock anchor;
+    LanternBlock child;
+    bool anchor_body_init = false;
+    bool child_body_init = false;
+    LanternRoot anchor_root_local;
+    LanternRoot child_root_local;
+    memset(&anchor_root_local, 0, sizeof(anchor_root_local));
+    memset(&child_root_local, 0, sizeof(child_root_local));
+
+    memset(client, 0, sizeof(*client));
+    client->node_id = (char *)node_id;
+    lantern_state_init(&client->state);
+    lantern_fork_choice_init(&client->fork_choice);
+
+    if (pthread_mutex_init(&client->state_lock, NULL) != 0) {
+        fprintf(stderr, "failed to initialize state mutex for vote test\n");
+        return -1;
+    }
+    client->state_lock_initialized = true;
+
+    double now_seconds = lantern_time_now_seconds();
+    if (now_seconds < 0.0) {
+        now_seconds = 0.0;
+    }
+    uint64_t genesis_time = (uint64_t)now_seconds;
+
+    if (lantern_state_generate_genesis(&client->state, genesis_time, 1) != 0) {
+        fprintf(stderr, "failed to generate genesis for vote test\n");
+        goto finish;
+    }
+    client->has_state = true;
+
+    if (lantern_fork_choice_configure(&client->fork_choice, &client->state.config) != 0) {
+        fprintf(stderr, "failed to configure fork choice for vote test\n");
+        goto finish;
+    }
+
+    LanternRoot anchor_state_root;
+    if (lantern_hash_tree_root_state(&client->state, &anchor_state_root) != 0) {
+        fprintf(stderr, "failed to hash anchor state for vote test\n");
+        goto finish;
+    }
+    client->state.latest_block_header.state_root = anchor_state_root;
+
+    memset(&anchor, 0, sizeof(anchor));
+    lantern_block_body_init(&anchor.body);
+    anchor_body_init = true;
+    anchor.slot = 0;
+    anchor.proposer_index = 0;
+    anchor.parent_root = client->state.latest_block_header.parent_root;
+    anchor.state_root = anchor_state_root;
+
+    if (lantern_hash_tree_root_block(&anchor, &anchor_root_local) != 0) {
+        fprintf(stderr, "failed to hash anchor block for vote test\n");
+        goto finish;
+    }
+    client->state.latest_justified.root = anchor_root_local;
+    client->state.latest_justified.slot = anchor.slot;
+    client->state.latest_finalized = client->state.latest_justified;
+    if (lantern_state_mark_justified_slot(&client->state, anchor.slot) != 0) {
+        fprintf(stderr, "failed to seed justified slot window for vote test\n");
+        goto finish;
+    }
+
+    if (lantern_fork_choice_set_anchor(
+            &client->fork_choice,
+            &anchor,
+            &client->state.latest_justified,
+            &client->state.latest_finalized,
+            &anchor_root_local)
+        != 0) {
+        fprintf(stderr, "failed to set anchor for vote test\n");
+        goto finish;
+    }
+
+    memset(&child, 0, sizeof(child));
+    lantern_block_body_init(&child.body);
+    child_body_init = true;
+    child.slot = anchor.slot + 1u;
+    child.proposer_index = 0;
+    child.parent_root = anchor_root_local;
+    fill_root(&child.state_root, 0xA1);
+
+    if (lantern_hash_tree_root_block(&child, &child_root_local) != 0) {
+        fprintf(stderr, "failed to hash child block for vote test\n");
+        goto finish;
+    }
+
+    if (lantern_fork_choice_add_block(
+            &client->fork_choice,
+            &child,
+            NULL,
+            &client->state.latest_justified,
+            &client->state.latest_finalized,
+            &child_root_local)
+        != 0) {
+        fprintf(stderr, "failed to add child block for vote test\n");
+        goto finish;
+    }
+
+    lantern_state_attach_fork_choice(&client->state, &client->fork_choice);
+    client->has_fork_choice = true;
+
+    enum PQSigningError key_err = pq_key_gen(0, 1024, &pub, &secret);
+    if (key_err != Success || !pub || !secret) {
+        fprintf(stderr, "pq_key_gen failed for vote test (%d)\n", (int)key_err);
+        goto finish;
+    }
+
+    uint8_t serialized_pub[LANTERN_VALIDATOR_PUBKEY_SIZE];
+    uintptr_t written = 0;
+    enum PQSigningError serialize_err = pq_public_key_serialize(pub, serialized_pub, sizeof(serialized_pub), &written);
+    if (serialize_err != Success || written == 0 || written > sizeof(serialized_pub)) {
+        fprintf(stderr, "failed to serialize pubkey for vote test (%d)\n", (int)serialize_err);
+        goto finish;
+    }
+    if (written < sizeof(serialized_pub)) {
+        memset(serialized_pub + written, 0, sizeof(serialized_pub) - written);
+    }
+
+    if (lantern_state_set_validator_pubkeys(&client->state, serialized_pub, 1) != 0) {
+        fprintf(stderr, "failed to set validator pubkeys for vote test\n");
+        goto finish;
+    }
+
+    if (anchor_root) {
+        *anchor_root = anchor_root_local;
+    }
+    if (child_root) {
+        *child_root = child_root_local;
+    }
+    *out_pub = pub;
+    *out_secret = secret;
+    rc = 0;
+
+finish:
+    if (anchor_body_init) {
+        lantern_block_body_reset(&anchor.body);
+    }
+    if (child_body_init) {
+        lantern_block_body_reset(&child.body);
+    }
+    if (rc != 0) {
+        if (secret) {
+            pq_secret_key_free(secret);
+            secret = NULL;
+        }
+        if (pub) {
+            pq_public_key_free(pub);
+            pub = NULL;
+        }
+        if (client->has_fork_choice) {
+            lantern_fork_choice_reset(&client->fork_choice);
+            client->has_fork_choice = false;
+        }
+        if (client->has_state) {
+            lantern_state_reset(&client->state);
+            client->has_state = false;
+        }
+        if (client->state_lock_initialized) {
+            pthread_mutex_destroy(&client->state_lock);
+            client->state_lock_initialized = false;
+        }
+    }
+    return rc;
+}
+
+static void teardown_vote_validation_client(
+    struct lantern_client *client,
+    struct PQSignatureSchemePublicKey *pub,
+    struct PQSignatureSchemeSecretKey *secret) {
+    if (secret) {
+        pq_secret_key_free(secret);
+    }
+    if (pub) {
+        pq_public_key_free(pub);
+    }
+    if (client->has_fork_choice) {
+        lantern_fork_choice_reset(&client->fork_choice);
+        client->has_fork_choice = false;
+    }
+    if (client->has_state) {
+        lantern_state_reset(&client->state);
+        client->has_state = false;
+    }
+    if (client->state_lock_initialized) {
+        pthread_mutex_destroy(&client->state_lock);
+        client->state_lock_initialized = false;
+    }
+}
+
+static int sign_vote_with_secret(LanternSignedVote *vote, struct PQSignatureSchemeSecretKey *secret) {
+    if (!vote || !secret) {
+        return -1;
+    }
+    LanternRoot vote_root;
+    if (lantern_hash_tree_root_vote(&vote->data, &vote_root) != 0) {
+        return -1;
+    }
+    if (!lantern_signature_sign(secret, vote->data.slot, vote_root.bytes, sizeof(vote_root.bytes), &vote->signature)) {
+        return -1;
+    }
+    return 0;
+}
+
+static int test_record_vote_accepts_known_roots(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    int rc = 1;
+
+    if (setup_vote_validation_client(&client, "vote_known", &pub, &secret, &anchor_root, &child_root) != 0) {
+        return 1;
+    }
+
+    LanternSignedVote vote;
+    memset(&vote, 0, sizeof(vote));
+    uint64_t child_slot = 0;
+    if (slot_for_root(&client, &child_root, &child_slot) != 0) {
+        fprintf(stderr, "failed to resolve child slot for known roots test\n");
+        goto cleanup;
+    }
+    vote.data.validator_id = 0;
+    vote.data.slot = 2;
+    vote.data.head.slot = child_slot;
+    vote.data.head.root = child_root;
+    vote.data.target.slot = child_slot;
+    vote.data.target.root = child_root;
+    vote.data.source.slot = 0;
+    vote.data.source.root = anchor_root;
+
+    if (sign_vote_with_secret(&vote, secret) != 0) {
+        fprintf(stderr, "failed to sign vote with known roots\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_debug_record_vote(&client, &vote, "vote_known_peer") != 0) {
+        fprintf(stderr, "lantern_client_debug_record_vote failed for known roots\n");
+        goto cleanup;
+    }
+
+    if (!lantern_state_validator_has_vote(&client.state, 0)) {
+        fprintf(stderr, "known root vote was not stored\n");
+        goto cleanup;
+    }
+
+    LanternSignedVote stored;
+    memset(&stored, 0, sizeof(stored));
+    if (lantern_state_get_signed_validator_vote(&client.state, 0, &stored) != 0) {
+        fprintf(stderr, "failed to fetch stored vote\n");
+        goto cleanup;
+    }
+    if (memcmp(&stored.data, &vote.data, sizeof(vote.data)) != 0) {
+        fprintf(stderr, "stored vote data mismatch\n");
+        goto cleanup;
+    }
+    if (memcmp(&stored.signature, &vote.signature, sizeof(vote.signature)) != 0) {
+        fprintf(stderr, "stored vote signature mismatch\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_record_vote_rejects_unknown_head(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    int rc = 1;
+
+    if (setup_vote_validation_client(&client, "vote_unknown", &pub, &secret, &anchor_root, &child_root) != 0) {
+        return 1;
+    }
+
+    LanternSignedVote vote;
+    memset(&vote, 0, sizeof(vote));
+    uint64_t child_slot = 0;
+    if (slot_for_root(&client, &child_root, &child_slot) != 0) {
+        fprintf(stderr, "failed to resolve child slot for unknown head test\n");
+        goto cleanup;
+    }
+    vote.data.validator_id = 0;
+    vote.data.slot = 2;
+    vote.data.head.slot = child_slot;
+    fill_root(&vote.data.head.root, 0xEE);
+    vote.data.target.slot = child_slot;
+    vote.data.target.root = child_root;
+    vote.data.source.slot = 0;
+    vote.data.source.root = anchor_root;
+
+    if (sign_vote_with_secret(&vote, secret) != 0) {
+        fprintf(stderr, "failed to sign vote with unknown head\n");
+        goto cleanup;
+    }
+
+    if (lantern_state_validator_has_vote(&client.state, 0)) {
+        fprintf(stderr, "validator unexpectedly had a stored vote before test\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_debug_record_vote(&client, &vote, "vote_unknown_peer") != 0) {
+        fprintf(stderr, "lantern_client_debug_record_vote failed for unknown head\n");
+        goto cleanup;
+    }
+
+    if (lantern_state_validator_has_vote(&client.state, 0)) {
+        fprintf(stderr, "unknown head vote should not be stored\n");
+        goto cleanup;
+    }
+
+    if (client.fork_choice.new_votes && client.fork_choice.validator_count > 0) {
+        for (size_t i = 0; i < client.fork_choice.validator_count; ++i) {
+            if (client.fork_choice.new_votes[i].has_checkpoint) {
+                fprintf(stderr, "unknown head vote updated fork choice new_votes\n");
+                goto cleanup;
+            }
+        }
+    }
+
+    rc = 0;
+
+cleanup:
+    teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_record_vote_rejects_slot_mismatch(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    int rc = 1;
+
+    if (setup_vote_validation_client(&client, "vote_slot_mismatch", &pub, &secret, &anchor_root, &child_root) != 0) {
+        return 1;
+    }
+
+    LanternSignedVote vote;
+    memset(&vote, 0, sizeof(vote));
+    uint64_t child_slot = 0;
+    if (slot_for_root(&client, &child_root, &child_slot) != 0) {
+        fprintf(stderr, "failed to resolve child slot for slot mismatch test\n");
+        goto cleanup;
+    }
+    vote.data.validator_id = 0;
+    vote.data.slot = 2;
+    uint64_t mismatch_slot = child_slot >= UINT64_MAX - 5u ? UINT64_MAX : child_slot + 5u;
+    vote.data.head.slot = mismatch_slot;
+    vote.data.head.root = child_root;
+    vote.data.target.slot = child_slot;
+    vote.data.target.root = child_root;
+    vote.data.source.slot = 0;
+    vote.data.source.root = anchor_root;
+
+    if (sign_vote_with_secret(&vote, secret) != 0) {
+        fprintf(stderr, "failed to sign slot mismatch vote\n");
+        goto cleanup;
+    }
+
+    if (lantern_state_validator_has_vote(&client.state, 0)) {
+        fprintf(stderr, "validator unexpectedly had a stored vote before slot mismatch test\n");
+        goto cleanup;
+    }
+
+    lantern_client_debug_record_vote(&client, &vote, "slot_mismatch_peer");
+
+    if (lantern_state_validator_has_vote(&client.state, 0)) {
+        fprintf(stderr, "slot mismatch vote should have been rejected\n");
+        goto cleanup;
+    }
+
+    if (client.fork_choice.new_votes && client.fork_choice.validator_count > 0) {
+        for (size_t i = 0; i < client.fork_choice.validator_count; ++i) {
+            if (client.fork_choice.new_votes[i].has_checkpoint) {
+                fprintf(stderr, "slot mismatch vote updated fork choice cache\n");
+                goto cleanup;
+            }
+        }
+    }
+
+    rc = 0;
+
+cleanup:
+    teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_record_vote_rejects_future_slot(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    int rc = 1;
+
+    if (setup_vote_validation_client(&client, "vote_future_slot", &pub, &secret, &anchor_root, &child_root) != 0) {
+        return 1;
+    }
+
+    uint64_t current_slot = 0;
+    double now_seconds = lantern_time_now_seconds();
+    if (now_seconds < 0.0) {
+        now_seconds = 0.0;
+    }
+    uint32_t seconds_per_slot = client.fork_choice.seconds_per_slot == 0 ? 1u : client.fork_choice.seconds_per_slot;
+    uint64_t now = (uint64_t)now_seconds;
+    if (now >= client.fork_choice.config.genesis_time) {
+        current_slot = (now - client.fork_choice.config.genesis_time) / seconds_per_slot;
+    }
+    uint64_t allowed_slot = current_slot == UINT64_MAX ? UINT64_MAX : current_slot + 1u;
+    uint64_t future_slot = allowed_slot == UINT64_MAX ? UINT64_MAX : allowed_slot + 8u;
+    if (future_slot <= allowed_slot) {
+        future_slot = allowed_slot + 1u;
+    }
+
+    LanternSignedVote vote;
+    memset(&vote, 0, sizeof(vote));
+    uint64_t child_slot = 0;
+    if (slot_for_root(&client, &child_root, &child_slot) != 0) {
+        fprintf(stderr, "failed to resolve child slot for future slot test\n");
+        goto cleanup;
+    }
+    vote.data.validator_id = 0;
+    vote.data.slot = future_slot;
+    vote.data.head.slot = child_slot;
+    vote.data.head.root = child_root;
+    vote.data.target.slot = child_slot;
+    vote.data.target.root = child_root;
+    vote.data.source.slot = 0;
+    vote.data.source.root = anchor_root;
+
+    lantern_client_debug_record_vote(&client, &vote, "future_slot_peer");
+
+    if (lantern_state_validator_has_vote(&client.state, 0)) {
+        fprintf(stderr, "future slot vote should have been dropped\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_record_vote_preserves_state_root(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    int rc = 1;
+
+    if (setup_vote_validation_client(&client, "vote_root", &pub, &secret, &anchor_root, &child_root) != 0) {
+        return 1;
+    }
+
+    LanternCheckpoint pre_justified = client.state.latest_justified;
+    LanternCheckpoint pre_finalized = client.state.latest_finalized;
+    LanternRoot pre_state_root;
+    if (lantern_hash_tree_root_state(&client.state, &pre_state_root) != 0) {
+        fprintf(stderr, "failed to hash pre-vote state\n");
+        goto cleanup;
+    }
+
+    LanternSignedVote vote;
+    memset(&vote, 0, sizeof(vote));
+    uint64_t child_slot = 0;
+    if (slot_for_root(&client, &child_root, &child_slot) != 0) {
+        fprintf(stderr, "failed to resolve child slot for root preservation test\n");
+        goto cleanup;
+    }
+    vote.data.validator_id = 0;
+    vote.data.slot = 2;
+    vote.data.head.slot = child_slot;
+    vote.data.head.root = child_root;
+    vote.data.target.slot = child_slot;
+    vote.data.target.root = child_root;
+    vote.data.source.slot = 0;
+    vote.data.source.root = anchor_root;
+
+    if (sign_vote_with_secret(&vote, secret) != 0) {
+        fprintf(stderr, "failed to sign vote for root preservation test\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_debug_record_vote(&client, &vote, "vote_root_peer") != 0) {
+        fprintf(stderr, "lantern_client_debug_record_vote failed for root preservation test\n");
+        goto cleanup;
+    }
+
+    LanternRoot post_state_root;
+    if (lantern_hash_tree_root_state(&client.state, &post_state_root) != 0) {
+        fprintf(stderr, "failed to hash post-vote state\n");
+        goto cleanup;
+    }
+
+    if (memcmp(pre_state_root.bytes, post_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "state root changed after gossip vote\n");
+        goto cleanup;
+    }
+    if (client.state.latest_justified.slot != pre_justified.slot
+        || memcmp(client.state.latest_justified.root.bytes, pre_justified.root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "latest_justified changed after gossip vote\n");
+        goto cleanup;
+    }
+    if (client.state.latest_finalized.slot != pre_finalized.slot
+        || memcmp(client.state.latest_finalized.root.bytes, pre_finalized.root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "latest_finalized changed after gossip vote\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_record_vote_defers_interval_pipeline(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    int rc = 1;
+
+    if (setup_vote_validation_client(&client, "vote_interval", &pub, &secret, &anchor_root, &child_root) != 0) {
+        return 1;
+    }
+
+    LanternSignedVote vote;
+    memset(&vote, 0, sizeof(vote));
+    uint64_t child_slot = 0;
+    if (slot_for_root(&client, &child_root, &child_slot) != 0) {
+        fprintf(stderr, "failed to resolve child slot for interval pipeline test\n");
+        goto cleanup;
+    }
+    vote.data.validator_id = 0;
+    vote.data.slot = child_slot;
+    vote.data.head.slot = child_slot;
+    vote.data.head.root = child_root;
+    vote.data.target.slot = child_slot;
+    vote.data.target.root = child_root;
+    vote.data.source.slot = 0;
+    vote.data.source.root = anchor_root;
+
+    if (sign_vote_with_secret(&vote, secret) != 0) {
+        fprintf(stderr, "failed to sign vote for interval pipeline test\n");
+        goto cleanup;
+    }
+
+    LanternRoot safe_before = client.fork_choice.safe_target;
+    bool had_safe_before = client.fork_choice.has_safe_target;
+
+    if (lantern_client_debug_record_vote(&client, &vote, "vote_interval_peer") != 0) {
+        fprintf(stderr, "lantern_client_debug_record_vote failed for interval pipeline test\n");
+        goto cleanup;
+    }
+
+    struct lantern_fork_choice_vote_entry *new_entry = client.fork_choice.new_votes;
+    struct lantern_fork_choice_vote_entry *known_entry = client.fork_choice.known_votes;
+    if (!new_entry || !known_entry) {
+        fprintf(stderr, "fork choice vote tables unavailable for interval pipeline test\n");
+        goto cleanup;
+    }
+    if (!new_entry->has_checkpoint) {
+        fprintf(stderr, "gossip vote missing from new_votes immediately after record\n");
+        goto cleanup;
+    }
+    if (known_entry->has_checkpoint) {
+        fprintf(stderr, "known_votes updated before interval pipeline advanced\n");
+        goto cleanup;
+    }
+    if (had_safe_before) {
+        if (memcmp(client.fork_choice.safe_target.bytes, safe_before.bytes, LANTERN_ROOT_SIZE) != 0) {
+            fprintf(stderr, "safe target changed before interval 2\n");
+            goto cleanup;
+        }
+    }
+
+    if (advance_fork_choice_intervals(&client.fork_choice, 1, false) != 0) {
+        fprintf(stderr, "failed to advance fork choice to interval 1\n");
+        goto cleanup;
+    }
+    if (!new_entry->has_checkpoint) {
+        fprintf(stderr, "new_votes lost checkpoint before interval 2\n");
+        goto cleanup;
+    }
+    if (known_entry->has_checkpoint) {
+        fprintf(stderr, "known_votes filled before interval 2\n");
+        goto cleanup;
+    }
+    if (had_safe_before) {
+        if (memcmp(client.fork_choice.safe_target.bytes, safe_before.bytes, LANTERN_ROOT_SIZE) != 0) {
+            fprintf(stderr, "safe target changed during interval 1\n");
+            goto cleanup;
+        }
+    }
+
+    if (advance_fork_choice_intervals(&client.fork_choice, 1, false) != 0) {
+        fprintf(stderr, "failed to advance fork choice to interval 2\n");
+        goto cleanup;
+    }
+    if (!client.fork_choice.has_safe_target) {
+        fprintf(stderr, "safe target unavailable after interval 2\n");
+        goto cleanup;
+    }
+    if (memcmp(client.fork_choice.safe_target.bytes, child_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "safe target did not reflect gossip vote after interval 2\n");
+        goto cleanup;
+    }
+    if (!new_entry->has_checkpoint) {
+        fprintf(stderr, "new_votes checkpoint missing after interval 2\n");
+        goto cleanup;
+    }
+    if (known_entry->has_checkpoint) {
+        fprintf(stderr, "known_votes filled before interval 3\n");
+        goto cleanup;
+    }
+
+    if (advance_fork_choice_intervals(&client.fork_choice, 1, false) != 0) {
+        fprintf(stderr, "failed to advance fork choice to interval 3\n");
+        goto cleanup;
+    }
+    if (!known_entry->has_checkpoint) {
+        fprintf(stderr, "known_votes missing checkpoint after interval 3\n");
+        goto cleanup;
+    }
+    if (known_entry->checkpoint.slot != vote.data.target.slot
+        || memcmp(known_entry->checkpoint.root.bytes, child_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "known_votes checkpoint mismatch after interval 3\n");
+        goto cleanup;
+    }
+    if (new_entry->has_checkpoint) {
+        fprintf(stderr, "new_votes retained checkpoint after migration\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    teardown_vote_validation_client(&client, pub, secret);
+    return rc;
 }
 
 static int test_pending_block_queue(void) {
@@ -886,6 +1583,24 @@ static int verify_client_state(
 }
 
 int main(void) {
+    if (test_record_vote_accepts_known_roots() != 0) {
+        return 1;
+    }
+    if (test_record_vote_rejects_unknown_head() != 0) {
+        return 1;
+    }
+    if (test_record_vote_rejects_slot_mismatch() != 0) {
+        return 1;
+    }
+    if (test_record_vote_rejects_future_slot() != 0) {
+        return 1;
+    }
+    if (test_record_vote_preserves_state_root() != 0) {
+        return 1;
+    }
+    if (test_record_vote_defers_interval_pipeline() != 0) {
+        return 1;
+    }
     if (test_pending_block_queue() != 0) {
         return 1;
     }

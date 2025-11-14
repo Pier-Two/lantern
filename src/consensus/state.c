@@ -771,6 +771,9 @@ int lantern_state_prepare_validator_votes(LanternState *state, uint64_t validato
     if (!state || validator_count == 0) {
         return -1;
     }
+    if (validator_count > (uint64_t)LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return -1;
+    }
     if (validator_count > SIZE_MAX) {
         return -1;
     }
@@ -878,6 +881,9 @@ int lantern_state_set_validator_pubkeys(LanternState *state, const uint8_t *pubk
     if (!state) {
         return -1;
     }
+    if (count > (size_t)LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return -1;
+    }
     if (count > 0 && !pubkeys) {
         return -1;
     }
@@ -982,6 +988,9 @@ void lantern_state_attach_fork_choice(LanternState *state, struct lantern_fork_c
 
 int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, uint64_t num_validators) {
     if (!state || num_validators == 0) {
+        return -1;
+    }
+    if (num_validators > (uint64_t)LANTERN_VALIDATOR_REGISTRY_LIMIT) {
         return -1;
     }
     lantern_state_reset(state);
@@ -1351,17 +1360,6 @@ int lantern_state_process_attestations(
 
     state->latest_justified = latest_justified;
     state->latest_finalized = latest_finalized;
-    if (state->validator_votes && state->validator_votes_len > 0) {
-        for (size_t i = 0; i < state->validator_votes_len; ++i) {
-            struct lantern_vote_record *record = &state->validator_votes[i];
-            if (!record->has_vote) {
-                continue;
-            }
-            if (lantern_checkpoint_equal(&record->vote.target, &state->latest_justified)) {
-                record->vote.source = state->latest_justified;
-            }
-        }
-    }
     if (state->fork_choice) {
         if (lantern_fork_choice_update_checkpoints(
                 state->fork_choice,
@@ -1562,11 +1560,15 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
     return 0;
 }
 
-int lantern_state_select_block_parent(const LanternState *state, LanternRoot *out_parent_root) {
+int lantern_state_select_block_parent(LanternState *state, LanternRoot *out_parent_root) {
     if (!state || !out_parent_root) {
         return -1;
     }
     if (state->config.num_validators == 0) {
+        return -1;
+    }
+
+    if (lantern_state_process_slot(state) != 0) {
         return -1;
     }
 
@@ -1624,16 +1626,22 @@ int lantern_state_collect_attestations_for_block(
         rc = -1;
         goto cleanup;
     }
-    LanternBlockHeader saved_header = slot_snapshot.latest_block_header;
     if (lantern_state_process_slots(&slot_snapshot, block_slot) != 0) {
         rc = -1;
         goto cleanup;
     }
-    slot_snapshot.latest_block_header = saved_header;
 
     LanternCheckpoint checkpoint = slot_snapshot.latest_justified;
-    const size_t max_iterations = 32;
-    for (size_t iteration = 0; iteration < max_iterations; ++iteration) {
+    size_t iteration = 0;
+    size_t iteration_guard = state->validator_votes_len == 0 ? 1 : state->validator_votes_len;
+    if (iteration_guard < SIZE_MAX) {
+        iteration_guard += 1u;
+    }
+    const struct lantern_log_metadata meta = {
+        .has_slot = true,
+        .slot = block_slot,
+    };
+    while (true) {
         if (collect_attestations_for_checkpoint(&slot_snapshot, &checkpoint, out_attestations, out_signatures) != 0) {
             rc = -1;
             goto cleanup;
@@ -1672,6 +1680,16 @@ int lantern_state_collect_attestations_for_block(
             break;
         }
         checkpoint = post_checkpoint;
+        iteration += 1u;
+        if (iteration > iteration_guard) {
+            lantern_log_warn(
+                "state",
+                &meta,
+                "attestation collection failed to converge after %zu iterations (validators=%zu)",
+                iteration,
+                state->validator_votes_len);
+            break;
+        }
     }
 
 cleanup:

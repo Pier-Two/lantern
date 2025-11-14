@@ -103,6 +103,13 @@ static bool lantern_client_block_known_locked(
     struct lantern_client *client,
     const LanternRoot *root,
     uint64_t *out_slot);
+static bool lantern_client_current_slot(const struct lantern_client *client, uint64_t *out_slot);
+static bool lantern_client_validate_vote_constraints(
+    struct lantern_client *client,
+    const LanternVote *vote,
+    const char *facility,
+    const struct lantern_log_metadata *meta,
+    const char *context);
 static bool lantern_client_import_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
@@ -4194,6 +4201,127 @@ static bool lantern_client_block_known_locked(
     return false;
 }
 
+static bool lantern_client_current_slot(const struct lantern_client *client, uint64_t *out_slot) {
+    if (!client || !out_slot || !client->has_fork_choice) {
+        return false;
+    }
+    const LanternForkChoice *store = &client->fork_choice;
+    if (store->seconds_per_slot == 0) {
+        return false;
+    }
+    double now_seconds = lantern_time_now_seconds();
+    if (now_seconds < 0.0) {
+        now_seconds = 0.0;
+    }
+    uint64_t now = 0;
+    if (now_seconds >= (double)UINT64_MAX) {
+        now = UINT64_MAX;
+    } else {
+        now = (uint64_t)now_seconds;
+    }
+    if (now < store->config.genesis_time) {
+        *out_slot = 0;
+        return true;
+    }
+    uint64_t elapsed = now - store->config.genesis_time;
+    *out_slot = elapsed / store->seconds_per_slot;
+    return true;
+}
+
+static bool lantern_client_validate_vote_constraints(
+    struct lantern_client *client,
+    const LanternVote *vote,
+    const char *facility,
+    const struct lantern_log_metadata *meta,
+    const char *context) {
+    if (!client || !vote || !client->has_fork_choice) {
+        return false;
+    }
+    const char *log_facility = (facility && *facility) ? facility : "state";
+    const char *label = (context && *context) ? context : "vote";
+
+    struct checkpoint_rule {
+        const LanternCheckpoint *checkpoint;
+        const char *name;
+    } rules[] = {
+        {.checkpoint = &vote->source, .name = "source"},
+        {.checkpoint = &vote->target, .name = "target"},
+        {.checkpoint = &vote->head, .name = "head"},
+    };
+
+    for (size_t i = 0; i < (sizeof(rules) / sizeof(rules[0])); ++i) {
+        const struct checkpoint_rule *rule = &rules[i];
+        char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        format_root_hex(&rule->checkpoint->root, root_hex, sizeof(root_hex));
+        if (lantern_root_is_zero(&rule->checkpoint->root)) {
+            lantern_log_debug(
+                log_facility,
+                meta,
+                "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " %s root=%s (zero root)",
+                label,
+                vote->validator_id,
+                vote->slot,
+                rule->name,
+                root_hex[0] ? root_hex : "0x0");
+            return false;
+        }
+        uint64_t block_slot = 0;
+        if (!lantern_client_block_known_locked(client, &rule->checkpoint->root, &block_slot)) {
+            lantern_log_debug(
+                log_facility,
+                meta,
+                "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " unknown %s root=%s",
+                label,
+                vote->validator_id,
+                vote->slot,
+                rule->name,
+                root_hex[0] ? root_hex : "0x0");
+            return false;
+        }
+        if (block_slot != rule->checkpoint->slot) {
+            lantern_log_debug(
+                log_facility,
+                meta,
+                "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " %s slot mismatch vote=%" PRIu64
+                " block=%" PRIu64 " root=%s",
+                label,
+                vote->validator_id,
+                vote->slot,
+                rule->name,
+                rule->checkpoint->slot,
+                block_slot,
+                root_hex[0] ? root_hex : "0x0");
+            return false;
+        }
+    }
+
+    uint64_t current_slot = 0;
+    if (!lantern_client_current_slot(client, &current_slot)) {
+        lantern_log_debug(
+            log_facility,
+            meta,
+            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (unable to compute current slot)",
+            label,
+            vote->validator_id,
+            vote->slot);
+        return false;
+    }
+    uint64_t allowed_slot = current_slot == UINT64_MAX ? UINT64_MAX : current_slot + 1u;
+    if (vote->slot > allowed_slot) {
+        lantern_log_debug(
+            log_facility,
+            meta,
+            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (current_slot=%" PRIu64 ")",
+            label,
+            vote->validator_id,
+            vote->slot,
+            current_slot);
+        return false;
+    }
+
+    return true;
+}
+
 static bool lantern_client_import_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
@@ -4311,6 +4439,36 @@ static bool lantern_client_import_block(
         return false;
     }
 
+    if (client->has_fork_choice) {
+        const LanternAttestations *attestations = &block->message.block.body.attestations;
+        for (size_t i = 0; i < attestations->length; ++i) {
+            if (!lantern_client_validate_vote_constraints(
+                    client,
+                    &attestations->data[i],
+                    "state",
+                    meta,
+                    "block attestation")) {
+                lantern_client_unlock_state(client, state_locked);
+                return false;
+            }
+        }
+        const LanternVote *proposer_vote = &block->message.proposer_attestation;
+        bool proposer_present = !lantern_root_is_zero(&proposer_vote->head.root)
+            || !lantern_root_is_zero(&proposer_vote->target.root)
+            || !lantern_root_is_zero(&proposer_vote->source.root);
+        if (proposer_present) {
+            if (!lantern_client_validate_vote_constraints(
+                    client,
+                    proposer_vote,
+                    "state",
+                    meta,
+                    "proposer attestation")) {
+                lantern_client_unlock_state(client, state_locked);
+                return false;
+            }
+        }
+    }
+
     LanternSignedBlock import_block = *block;
 
     if (lantern_state_transition(&client->state, &import_block) != 0) {
@@ -4324,25 +4482,12 @@ static bool lantern_client_import_block(
     }
 
     if (client->has_fork_choice) {
-        if (lantern_fork_choice_accept_new_votes(&client->fork_choice) != 0) {
+        uint64_t now_seconds = validator_wall_time_now_seconds();
+        if (lantern_fork_choice_advance_time(&client->fork_choice, now_seconds, false) != 0) {
             lantern_log_debug(
                 "forkchoice",
                 meta,
-                "accepting new votes failed after slot=%" PRIu64,
-                block->message.block.slot);
-        }
-        if (lantern_fork_choice_update_safe_target(&client->fork_choice) != 0) {
-            lantern_log_debug(
-                "forkchoice",
-                meta,
-                "updating safe target failed after slot=%" PRIu64,
-                block->message.block.slot);
-        }
-        if (lantern_fork_choice_recompute_head(&client->fork_choice) != 0) {
-            lantern_log_debug(
-                "forkchoice",
-                meta,
-                "recomputing head failed after slot=%" PRIu64,
+                "advancing fork choice time failed after slot=%" PRIu64,
                 block->message.block.slot);
         }
     }
@@ -5824,6 +5969,33 @@ static void lantern_client_record_vote(
     char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     char source_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     LanternSignedVote vote_copy = *vote;
+    format_root_hex(&vote_copy.data.head.root, head_hex, sizeof(head_hex));
+    format_root_hex(&vote_copy.data.target.root, target_hex, sizeof(target_hex));
+    format_root_hex(&vote_copy.data.source.root, source_hex, sizeof(source_hex));
+    lantern_log_debug(
+        "gossip",
+        &meta,
+        "received vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64,
+        vote_copy.data.validator_id,
+        vote_copy.data.slot,
+        head_hex[0] ? head_hex : "0x0",
+        target_hex[0] ? target_hex : "0x0",
+        vote_copy.data.target.slot);
+
+    if (!client->has_fork_choice) {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "deferring vote validator=%" PRIu64 " slot=%" PRIu64 " (fork choice unavailable)",
+            vote_copy.data.validator_id,
+            vote_copy.data.slot);
+        goto cleanup;
+    }
+
+    if (!lantern_client_validate_vote_constraints(client, &vote_copy.data, "gossip", &meta, "gossip")) {
+        goto cleanup;
+    }
+
     if (!lantern_client_verify_vote_signature(
             client,
             &vote_copy,
@@ -5838,37 +6010,73 @@ static void lantern_client_record_vote(
             vote_copy.data.slot);
         goto cleanup;
     }
-    format_root_hex(&vote_copy.data.head.root, head_hex, sizeof(head_hex));
-    format_root_hex(&vote_copy.data.target.root, target_hex, sizeof(target_hex));
-    format_root_hex(&vote_copy.data.source.root, source_hex, sizeof(source_hex));
-    lantern_log_debug(
-        "gossip",
-        &meta,
-        "received vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64,
-        vote_copy.data.validator_id,
-        vote_copy.data.slot,
-        head_hex[0] ? head_hex : "0x0",
-        target_hex[0] ? target_hex : "0x0",
-        vote_copy.data.target.slot);
 
-    LanternAttestations att_view = {
-        .data = &vote_copy.data,
-        .length = 1,
-        .capacity = 1,
-    };
-    LanternBlockSignatures sig_view = {
-        .data = &vote_copy.signature,
-        .length = 1,
-        .capacity = 1,
-    };
+    const LanternVote *vote_data = &vote_copy.data;
+    uint64_t validator_count = client->state.config.num_validators;
+    if (validator_count == 0 || !client->state.validator_votes || client->state.validator_votes_len == 0) {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (state vote cache unavailable)",
+            vote_data->validator_id,
+            vote_data->slot);
+        goto cleanup;
+    }
+    if ((vote_data->validator_id >= validator_count)
+        || (vote_data->validator_id >= (uint64_t)client->state.validator_votes_len)) {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (validator out of range)",
+            vote_data->validator_id,
+            vote_data->slot);
+        goto cleanup;
+    }
+    if (vote_data->target.slot <= vote_data->source.slot) {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (target slot <= source)",
+            vote_data->validator_id,
+            vote_data->slot);
+        goto cleanup;
+    }
+    if (!lantern_state_slot_in_justified_window(&client->state, vote_data->source.slot)) {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (source outside justified window)",
+            vote_data->validator_id,
+            vote_data->slot);
+        goto cleanup;
+    }
+    bool source_is_justified = false;
+    if (lantern_state_get_justified_slot_bit(&client->state, vote_data->source.slot, &source_is_justified) != 0) {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (unable to check source justification)",
+            vote_data->validator_id,
+            vote_data->slot);
+        goto cleanup;
+    }
+    if (!source_is_justified) {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (source not justified)",
+            vote_data->validator_id,
+            vote_data->slot);
+        goto cleanup;
+    }
 
-    if (lantern_state_process_attestations(&client->state, &att_view, &sig_view) != 0) {
+    if (lantern_state_set_signed_validator_vote(&client->state, (size_t)vote_data->validator_id, &vote_copy) != 0) {
         lantern_log_debug(
             "state",
             &meta,
-            "rejected gossip vote validator=%" PRIu64 " slot=%" PRIu64,
-            vote_copy.data.validator_id,
-            vote_copy.data.slot);
+            "failed to cache gossip vote validator=%" PRIu64 " slot=%" PRIu64,
+            vote_data->validator_id,
+            vote_data->slot);
         goto cleanup;
     }
 
@@ -5881,19 +6089,12 @@ static void lantern_client_record_vote(
                 vote_copy.data.validator_id,
                 vote_copy.data.slot);
         } else {
-            if (lantern_fork_choice_accept_new_votes(&client->fork_choice) != 0) {
+            uint64_t now_seconds = validator_wall_time_now_seconds();
+            if (lantern_fork_choice_advance_time(&client->fork_choice, now_seconds, false) != 0) {
                 lantern_log_debug(
                     "forkchoice",
                     &meta,
-                    "accepting new votes failed after validator=%" PRIu64 " slot=%" PRIu64,
-                    vote_copy.data.validator_id,
-                    vote_copy.data.slot);
-            }
-            if (lantern_fork_choice_update_safe_target(&client->fork_choice) != 0) {
-                lantern_log_debug(
-                    "forkchoice",
-                    &meta,
-                    "updating safe target failed after validator=%" PRIu64 " slot=%" PRIu64,
+                    "advancing fork choice time failed after validator=%" PRIu64 " slot=%" PRIu64,
                     vote_copy.data.validator_id,
                     vote_copy.data.slot);
             }
@@ -6115,23 +6316,12 @@ static int restore_persisted_blocks(struct lantern_client *client) {
         }
     }
 
-    if (lantern_fork_choice_accept_new_votes(&client->fork_choice) != 0) {
+    uint64_t now_seconds = validator_wall_time_now_seconds();
+    if (lantern_fork_choice_advance_time(&client->fork_choice, now_seconds, false) != 0) {
         lantern_log_warn(
             "forkchoice",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "accepting new votes from storage failed");
-    }
-    if (lantern_fork_choice_update_safe_target(&client->fork_choice) != 0) {
-        lantern_log_warn(
-            "forkchoice",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "updating safe target after restore failed");
-    }
-    if (lantern_fork_choice_recompute_head(&client->fork_choice) != 0) {
-        lantern_log_warn(
-            "forkchoice",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "recomputing head after restore failed");
+            "advancing fork choice time after restore failed");
     }
 
     persisted_block_list_reset(&list);
@@ -6309,6 +6499,17 @@ int lantern_client_publish_block(struct lantern_client *client, const LanternSig
         block->message.block.slot,
         root_hex[0] ? root_hex : "0x0",
         block->message.block.body.attestations.length);
+    return 0;
+}
+
+int lantern_client_debug_record_vote(
+    struct lantern_client *client,
+    const LanternSignedVote *vote,
+    const char *peer_id_text) {
+    if (!client || !vote) {
+        return -1;
+    }
+    lantern_client_record_vote(client, vote, peer_id_text);
     return 0;
 }
 

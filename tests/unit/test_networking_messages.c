@@ -440,7 +440,7 @@ static void test_replay_devnet_block_payloads(void) {
 
         LanternRoot decoded_block_root;
         memset(&decoded_block_root, 0, sizeof(decoded_block_root));
-        CHECK(lantern_hash_tree_root_block(&decoded.message, &decoded_block_root) == 0);
+        CHECK(lantern_hash_tree_root_block(&decoded.message.block, &decoded_block_root) == 0);
         CHECK(memcmp(decoded_block_root.bytes, original_block_root.bytes, LANTERN_ROOT_SIZE) == 0);
 
         uint8_t *roundtrip = (uint8_t *)malloc(ssz_written);

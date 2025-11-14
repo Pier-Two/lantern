@@ -11,6 +11,7 @@
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/duties.h"
 #include "lantern/consensus/state.h"
+#include "lantern/consensus/ssz.h"
 #include "lantern/networking/messages.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/strings.h"
@@ -100,6 +101,80 @@ static int iterate_counter(const LanternSignedBlock *block, const LanternRoot *r
     struct iterate_ctx *ctx = context;
     ctx->count += 1;
     return 0;
+}
+
+static int test_storage_rejects_excess_validators(void) {
+    char dir_template[] = "/tmp/lantern_storage_limitXXXXXX";
+    char *limit_dir = mkdtemp(dir_template);
+    if (!limit_dir) {
+        perror("mkdtemp limit");
+        return 1;
+    }
+
+    LanternState invalid;
+    lantern_state_init(&invalid);
+    uint8_t *encoded = NULL;
+    char state_path[PATH_MAX];
+    state_path[0] = '\0';
+    int result = 1;
+
+    size_t too_many = (size_t)LANTERN_VALIDATOR_REGISTRY_LIMIT + 1u;
+    invalid.config.genesis_time = 555u;
+    invalid.config.num_validators = (uint64_t)too_many;
+    invalid.validator_count = too_many;
+    invalid.validator_capacity = too_many;
+    invalid.validators = calloc(too_many, sizeof(LanternValidator));
+    if (!invalid.validators) {
+        perror("calloc validators");
+        goto cleanup;
+    }
+    for (size_t i = 0; i < too_many; ++i) {
+        memset(invalid.validators[i].pubkey, (int)(0x30 + (i & 0x3Fu)), LANTERN_VALIDATOR_PUBKEY_SIZE);
+    }
+
+    size_t buffer_size = 1024u * 1024u;
+    encoded = malloc(buffer_size);
+    if (!encoded) {
+        perror("malloc encoded state");
+        goto cleanup;
+    }
+    size_t written = 0;
+    expect_zero(lantern_ssz_encode_state(&invalid, encoded, buffer_size, &written), "encode invalid state");
+
+    int state_path_len = snprintf(state_path, sizeof(state_path), "%s/%s", limit_dir, "state.ssz");
+    assert(state_path_len > 0 && (size_t)state_path_len < sizeof(state_path));
+    FILE *fp = fopen(state_path, "wb");
+    if (!fp) {
+        perror("fopen invalid state file");
+        goto cleanup;
+    }
+    size_t file_written = fwrite(encoded, 1u, written, fp);
+    fclose(fp);
+    if (file_written != written) {
+        fprintf(stderr, "failed to write invalid state fixture\n");
+        goto cleanup;
+    }
+
+    LanternState loaded;
+    lantern_state_init(&loaded);
+    int load_rc = lantern_storage_load_state(limit_dir, &loaded);
+    if (load_rc == 0) {
+        fprintf(stderr, "expected load_state to reject validator count > limit\n");
+        lantern_state_reset(&loaded);
+        goto cleanup;
+    }
+    lantern_state_reset(&loaded);
+
+    result = 0;
+
+cleanup:
+    free(encoded);
+    lantern_state_reset(&invalid);
+    if (state_path[0] != '\0') {
+        cleanup_path(state_path);
+    }
+    cleanup_dir(limit_dir);
+    return result;
 }
 
 int main(void) {
@@ -227,6 +302,10 @@ int main(void) {
     cleanup_path(meta_path);
     cleanup_path(state_path);
     cleanup_dir(base_dir);
+
+    if (test_storage_rejects_excess_validators() != 0) {
+        return EXIT_FAILURE;
+    }
 
     return EXIT_SUCCESS;
 }

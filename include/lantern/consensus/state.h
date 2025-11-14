@@ -88,7 +88,7 @@ void lantern_state_clear_validator_vote(LanternState *state, size_t index);
 int lantern_state_set_validator_pubkeys(LanternState *state, const uint8_t *pubkeys, size_t count);
 size_t lantern_state_validator_count(const LanternState *state);
 const uint8_t *lantern_state_validator_pubkey(const LanternState *state, size_t index);
-int lantern_state_select_block_parent(const LanternState *state, LanternRoot *out_parent_root);
+int lantern_state_select_block_parent(LanternState *state, LanternRoot *out_parent_root);
 int lantern_state_collect_attestations_for_block(
     const LanternState *state,
     uint64_t block_slot,
