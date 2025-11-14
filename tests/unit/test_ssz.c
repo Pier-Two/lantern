@@ -653,8 +653,8 @@ static void test_leanspec_vectors(void) {
                                         LANTERN_SSZ_VECTOR_CONFIG,
                                         sizeof(LANTERN_SSZ_VECTOR_CONFIG)),
               "config decode");
-    assert(cfg_decoded.num_validators == cfg_expected.num_validators);
     assert(cfg_decoded.genesis_time == cfg_expected.genesis_time);
+    assert(cfg_decoded.num_validators == 0);
 
     /* Checkpoint */
     LanternCheckpoint checkpoint_expected = checkpoint_from_vector(

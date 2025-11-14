@@ -116,6 +116,19 @@ int main(void) {
     lantern_state_init(&state);
     expect_zero(lantern_state_generate_genesis(&state, 123456u, 4u), "generate genesis");
 
+    /* Populate validator registry with deterministic pubkeys so SSZ encoding works */
+    const size_t genesis_validators = state.config.num_validators;
+    const size_t pubkey_bytes = genesis_validators * LANTERN_VALIDATOR_PUBKEY_SIZE;
+    uint8_t *dummy_pubkeys = calloc(pubkey_bytes, 1u);
+    assert(dummy_pubkeys != NULL);
+    for (size_t i = 0; i < genesis_validators; ++i) {
+        memset(dummy_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), (int)(0xA0 + i), LANTERN_VALIDATOR_PUBKEY_SIZE);
+    }
+    expect_zero(
+        lantern_state_set_validator_pubkeys(&state, dummy_pubkeys, genesis_validators),
+        "populate validator pubkeys");
+    free(dummy_pubkeys);
+
     expect_zero(lantern_storage_save_state(base_dir, &state), "save state");
 
     LanternState loaded_state;

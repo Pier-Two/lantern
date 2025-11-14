@@ -80,7 +80,7 @@ static bool signature_is_zero(const LanternSignature *signature) {
 static struct state_profile_metric g_profile_process_slots;
 static struct state_profile_metric g_profile_process_block;
 static struct state_profile_metric g_profile_state_root;
-static size_t g_profile_max_justification_bits = 0;
+static size_t g_profile_max_justification_bits;
 
 static int lantern_state_mark_justified_slot(LanternState *state, uint64_t slot);
 
@@ -419,119 +419,6 @@ static bool lantern_slot_is_justifiable(uint64_t candidate_slot, uint64_t finali
         return true;
     }
     return lantern_is_pronic(delta);
-}
-
-static size_t lantern_validator_supermajority_threshold(size_t validator_count) {
-    if (validator_count == 0) {
-        return 0;
-    }
-    if (validator_count > (SIZE_MAX - 2u) / 2u) {
-        return SIZE_MAX;
-    }
-    return (validator_count * 2u + 2u) / 3u;
-}
-
-static int lantern_state_ensure_justification_capacity(
-    LanternState *state,
-    size_t validator_count,
-    size_t root_index) {
-    if (!state || validator_count == 0) {
-        return -1;
-    }
-    if (root_index >= SIZE_MAX / validator_count) {
-        return -1;
-    }
-    size_t required_bits = (root_index + 1u) * validator_count;
-    if (required_bits > LANTERN_JUSTIFICATION_VALIDATORS_LIMIT) {
-        return -1;
-    }
-    if (required_bits <= state->justification_validators.bit_length) {
-        return 0;
-    }
-    return lantern_bitlist_ensure_length(&state->justification_validators, required_bits);
-}
-
-static int lantern_state_get_or_append_justification_root(
-    LanternState *state,
-    const LanternRoot *root,
-    size_t validator_count,
-    size_t *out_index) {
-    if (!state || !root || !out_index) {
-        return -1;
-    }
-    for (size_t i = 0; i < state->justification_roots.length; ++i) {
-        if (memcmp(state->justification_roots.items[i].bytes, root->bytes, LANTERN_ROOT_SIZE) == 0) {
-            if (lantern_state_ensure_justification_capacity(state, validator_count, i) != 0) {
-                return -1;
-            }
-            *out_index = i;
-            return 0;
-        }
-    }
-    if (state->justification_roots.length >= LANTERN_HISTORICAL_ROOTS_LIMIT) {
-        return -1;
-    }
-    if (lantern_root_list_append(&state->justification_roots, root) != 0) {
-        return -1;
-    }
-    size_t index = state->justification_roots.length - 1u;
-    if (lantern_state_ensure_justification_capacity(state, validator_count, index) != 0) {
-        return -1;
-    }
-    *out_index = index;
-    return 0;
-}
-
-static int lantern_state_mark_justification_vote(
-    LanternState *state,
-    size_t validator_count,
-    size_t root_index,
-    size_t validator_index,
-    bool *out_new_vote,
-    size_t *out_total_votes) {
-    if (!state || validator_index >= validator_count) {
-        return -1;
-    }
-    if (root_index >= SIZE_MAX / validator_count) {
-        return -1;
-    }
-    size_t base_bit = root_index * validator_count;
-    size_t bit_index = base_bit + validator_index;
-    bool already_set = false;
-    if (bit_index < state->justification_validators.bit_length) {
-        if (lantern_bitlist_get_bit(&state->justification_validators, bit_index, &already_set) != 0) {
-            return -1;
-        }
-    }
-    if (already_set) {
-        if (out_new_vote) {
-            *out_new_vote = false;
-        }
-        if (out_total_votes) {
-            *out_total_votes = 0;
-        }
-        return 0;
-    }
-    if (lantern_bitlist_set_bit(&state->justification_validators, bit_index, true) != 0) {
-        return -1;
-    }
-    if (out_new_vote) {
-        *out_new_vote = true;
-    }
-    if (out_total_votes) {
-        size_t count = 0;
-        for (size_t i = 0; i < validator_count; ++i) {
-            bool bit = false;
-            if (lantern_bitlist_get_bit(&state->justification_validators, base_bit + i, &bit) != 0) {
-                return -1;
-            }
-            if (bit) {
-                ++count;
-            }
-        }
-        *out_total_votes = count;
-    }
-    return 0;
 }
 
 static int lantern_root_list_append(struct lantern_root_list *list, const LanternRoot *root) {
@@ -1127,10 +1014,6 @@ int lantern_state_process_attestations(
     if (!state->validator_votes || state->validator_votes_len != validator_count) {
         return -1;
     }
-    size_t quorum_threshold = lantern_validator_supermajority_threshold(validator_count);
-    if (quorum_threshold == 0) {
-        return -1;
-    }
 
     LanternCheckpoint latest_justified = state->latest_justified;
     LanternCheckpoint latest_finalized = state->latest_finalized;
@@ -1156,7 +1039,7 @@ int lantern_state_process_attestations(
                 &meta,
                 "attestation rejected: validator %" PRIu64 " out of range (validators=%" PRIu64 ")",
                 vote->validator_id,
-                validator_count);
+                (uint64_t)validator_count);
             record_attestation_validation_metric(att_validation_start, false);
             return -1;
         }
@@ -1168,12 +1051,11 @@ int lantern_state_process_attestations(
             record_attestation_validation_metric(att_validation_start, false);
             return -1;
         }
-
-        bool source_is_justified = false;
         if (vote->source.slot >= state->justified_slots.bit_length) {
             record_attestation_validation_metric(att_validation_start, false);
             continue;
         }
+        bool source_is_justified = false;
         if (lantern_bitlist_get_bit(&state->justified_slots, (size_t)vote->source.slot, &source_is_justified) != 0) {
             lantern_log_warn(
                 "state",
@@ -1187,6 +1069,18 @@ int lantern_state_process_attestations(
             record_attestation_validation_metric(att_validation_start, false);
             continue;
         }
+        bool target_is_justified = false;
+        if (vote->target.slot < state->justified_slots.bit_length) {
+            if (lantern_bitlist_get_bit(&state->justified_slots, (size_t)vote->target.slot, &target_is_justified) != 0) {
+                lantern_log_warn(
+                    "state",
+                    &meta,
+                    "attestation rejected: unable to read justified bit for slot %" PRIu64,
+                    vote->target.slot);
+                record_attestation_validation_metric(att_validation_start, false);
+                return -1;
+            }
+        }
         if (debug_hash && debug_hash[0] != '\0') {
             fprintf(
                 stderr,
@@ -1196,32 +1090,6 @@ int lantern_state_process_attestations(
                 vote->target.slot);
         }
 
-        struct lantern_vote_record *record = &state->validator_votes[vote->validator_id];
-        if (record->has_vote) {
-            if (vote->slot < record->vote.slot) {
-                record_attestation_validation_metric(att_validation_start, false);
-                continue;
-            }
-            if (vote->slot == record->vote.slot) {
-                if (lantern_votes_equal(&record->vote, vote)) {
-                    record_attestation_validation_metric(att_validation_start, false);
-                    continue;
-                }
-                lantern_log_warn(
-                    "state",
-                    &meta,
-                    "attestation rejected: validator %" PRIu64 " produced conflicting vote at slot %" PRIu64,
-                    vote->validator_id,
-                    vote->slot);
-                record_attestation_validation_metric(att_validation_start, false);
-                return -1;
-            }
-        }
-
-        if (!lantern_slot_is_justifiable(vote->target.slot, latest_finalized.slot)) {
-            record_attestation_validation_metric(att_validation_start, false);
-            continue;
-        }
         LanternSignedVote stored_vote;
         memset(&stored_vote, 0, sizeof(stored_vote));
         stored_vote.data = *vote;
@@ -1232,76 +1100,22 @@ int lantern_state_process_attestations(
             record_attestation_validation_metric(att_validation_start, false);
             return -1;
         }
-        size_t root_index = 0;
-        if (lantern_state_get_or_append_justification_root(state, &vote->target.root, validator_count, &root_index) != 0) {
-            record_attestation_validation_metric(att_validation_start, false);
-            return -1;
-        }
-        bool new_vote = false;
-        size_t total_votes = 0;
-        if (lantern_state_mark_justification_vote(
-                state,
-                validator_count,
-                root_index,
-                (size_t)vote->validator_id,
-                &new_vote,
-                &total_votes)
-            != 0) {
-            record_attestation_validation_metric(att_validation_start, false);
-            return -1;
-        }
-        if (!new_vote) {
-            record_attestation_validation_metric(att_validation_start, true);
-            continue;
-        }
 
-        if (total_votes >= quorum_threshold) {
-            bool target_marked = false;
-            if (vote->target.slot < state->justified_slots.bit_length) {
-                if (lantern_bitlist_get_bit(&state->justified_slots, (size_t)vote->target.slot, &target_marked) != 0) {
-                    lantern_log_warn(
-                        "state",
-                        &meta,
-                        "attestation rejected: unable to read justified bit for slot %" PRIu64,
-                        vote->target.slot);
-                    record_attestation_validation_metric(att_validation_start, false);
-                    return -1;
-                }
+        if (!target_is_justified) {
+            if (lantern_state_mark_justified_slot(state, vote->target.slot) != 0) {
+                record_attestation_validation_metric(att_validation_start, false);
+                return -1;
             }
-            if (!target_marked) {
-                if (lantern_state_mark_justified_slot(state, vote->target.slot) != 0) {
-                    record_attestation_validation_metric(att_validation_start, false);
-                    return -1;
-                }
-                if (debug_hash && debug_hash[0] != '\0') {
-                    fprintf(stderr, "marked slot %" PRIu64 " justified\n", vote->target.slot);
-                }
-            }
-            uint64_t previous_latest_justified_slot = latest_justified.slot;
             if (vote->target.slot > latest_justified.slot) {
                 latest_justified = vote->target;
             }
-            if ((vote->source.slot + 1 == vote->target.slot) && previous_latest_justified_slot < vote->target.slot) {
-                latest_finalized = vote->source;
-                latest_justified = vote->target;
-                if (debug_hash && debug_hash[0] != '\0') {
-                    char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                    if (lantern_bytes_to_hex(
-                            vote->target.root.bytes,
-                            LANTERN_ROOT_SIZE,
-                            target_hex,
-                            sizeof(target_hex),
-                            1)
-                        == 0) {
-                        lantern_log_debug(
-                            "state",
-                            &meta,
-                            "finalized slot=%" PRIu64 " root=%s",
-                            vote->source.slot,
-                            target_hex);
-                    }
-                }
-            } else if (debug_hash && debug_hash[0] != '\0') {
+            if (debug_hash && debug_hash[0] != '\0') {
+                fprintf(stderr, "marked slot %" PRIu64 " justified\n", vote->target.slot);
+            }
+        } else if ((vote->source.slot + 1 == vote->target.slot) && (latest_justified.slot < vote->target.slot)) {
+            latest_finalized = vote->source;
+            latest_justified = vote->target;
+            if (debug_hash && debug_hash[0] != '\0') {
                 char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
                 if (lantern_bytes_to_hex(
                         vote->target.root.bytes,
@@ -1313,8 +1127,8 @@ int lantern_state_process_attestations(
                     lantern_log_debug(
                         "state",
                         &meta,
-                        "justified slot=%" PRIu64 " root=%s",
-                        vote->target.slot,
+                        "finalized slot=%" PRIu64 " root=%s",
+                        vote->source.slot,
                         target_hex);
                 }
             }

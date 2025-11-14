@@ -255,24 +255,35 @@ static int decode_validators_list(
     if (!state) {
         return -1;
     }
-    uint64_t expected = state->config.num_validators;
-    if (expected == 0) {
-        if (data_len != 0) {
+    size_t count = 0;
+    if (state->config.num_validators != 0) {
+        count = (size_t)state->config.num_validators;
+        size_t expected_size = count * LANTERN_VALIDATOR_PUBKEY_SIZE;
+        if (data_len != expected_size) {
             return -1;
         }
+    } else {
+        if (data_len == 0) {
+            state->config.num_validators = 0;
+            return lantern_state_set_validator_pubkeys(state, NULL, 0);
+        }
+        if (data_len % LANTERN_VALIDATOR_PUBKEY_SIZE != 0) {
+            return -1;
+        }
+        count = data_len / LANTERN_VALIDATOR_PUBKEY_SIZE;
+    }
+    if (count == 0) {
+        state->config.num_validators = 0;
         return lantern_state_set_validator_pubkeys(state, NULL, 0);
     }
     if (!data) {
         return -1;
     }
-    if (expected > SIZE_MAX) {
+    if (lantern_state_set_validator_pubkeys(state, data, count) != 0) {
         return -1;
     }
-    size_t expected_size = (size_t)expected * LANTERN_VALIDATOR_PUBKEY_SIZE;
-    if (data_len != expected_size) {
-        return -1;
-    }
-    return lantern_state_set_validator_pubkeys(state, data, (size_t)expected);
+    state->config.num_validators = count;
+    return 0;
 }
 
 static int encode_bitlist(const struct lantern_bitlist *list, uint8_t *out, size_t remaining, size_t *written) {
@@ -353,31 +364,21 @@ int lantern_ssz_encode_config(const LanternConfig *config, uint8_t *out, size_t 
     if (!config || !out || out_len < LANTERN_CONFIG_SSZ_SIZE) {
         return -1;
     }
-    size_t offset = 0;
-    if (write_u64(out + offset, out_len - offset, config->num_validators) != 0) {
+    if (write_u64(out, out_len, config->genesis_time) != 0) {
         return -1;
     }
-    offset += SSZ_BYTE_SIZE_OF_UINT64;
-    if (write_u64(out + offset, out_len - offset, config->genesis_time) != 0) {
-        return -1;
-    }
-    offset += SSZ_BYTE_SIZE_OF_UINT64;
-    set_written(written, offset);
+    set_written(written, LANTERN_CONFIG_SSZ_SIZE);
     return 0;
 }
 
 int lantern_ssz_decode_config(LanternConfig *config, const uint8_t *data, size_t data_len) {
-    if (!config || !data || data_len != LANTERN_CONFIG_SSZ_SIZE) {
+    if (!config || !data || data_len < LANTERN_CONFIG_SSZ_SIZE) {
         return -1;
     }
-    size_t offset = 0;
-    if (read_u64(data + offset, data_len - offset, &config->num_validators) != 0) {
+    if (read_u64(data, data_len, &config->genesis_time) != 0) {
         return -1;
     }
-    offset += SSZ_BYTE_SIZE_OF_UINT64;
-    if (read_u64(data + offset, data_len - offset, &config->genesis_time) != 0) {
-        return -1;
-    }
+    config->num_validators = 0;
     return 0;
 }
 
@@ -1241,5 +1242,6 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
         return -1;
     }
 
+    state->config.num_validators = (uint64_t)state->validator_count;
     return 0;
 }

@@ -656,50 +656,73 @@ int lantern_fixture_parse_signed_block(
     }
     lantern_signed_block_with_attestation_init(signed_block);
     int message_idx = lantern_fixture_object_get_field(doc, object_index, "message");
-    if (message_idx < 0) {
-        goto error;
+    if (message_idx >= 0) {
+        int block_idx = lantern_fixture_object_get_field(doc, message_idx, "block");
+        if (block_idx < 0) {
+            goto error;
+        }
+        if (lantern_fixture_parse_block(doc, block_idx, &signed_block->message.block) != 0) {
+            goto error;
+        }
+
+        int proposer_idx = lantern_fixture_object_get_field(doc, message_idx, "proposer_attestation");
+        if (proposer_idx < 0) {
+            goto error;
+        }
+        LanternSignedVote proposer_vote;
+        if (lantern_fixture_parse_attestation_message(doc, proposer_idx, &proposer_vote) != 0) {
+            goto error;
+        }
+        signed_block->message.proposer_attestation = proposer_vote.data;
+
+        size_t attestation_count = signed_block->message.block.body.attestations.length;
+        size_t expected_signatures = attestation_count + 1u;
+        if (expected_signatures == 0) {
+            goto error;
+        }
+
+        int signatures_idx = lantern_fixture_object_get_field(doc, object_index, "signature");
+        if (signatures_idx < 0) {
+            goto error;
+        }
+        if (lantern_fixture_parse_signature_list(
+                doc,
+                signatures_idx,
+                &signed_block->signatures,
+                expected_signatures)
+            != 0) {
+            goto error;
+        }
+        if (!signed_block->signatures.data) {
+            goto error;
+        }
+
+        return 0;
     }
 
-    int block_idx = lantern_fixture_object_get_field(doc, message_idx, "block");
-    if (block_idx < 0) {
+    /* Handle leanSpec fixtures that emit bare Block containers without signatures */
+    if (lantern_fixture_parse_block(doc, object_index, &signed_block->message.block) != 0) {
         goto error;
     }
-    if (lantern_fixture_parse_block(doc, block_idx, &signed_block->message.block) != 0) {
-        goto error;
-    }
-
-    int proposer_idx = lantern_fixture_object_get_field(doc, message_idx, "proposer_attestation");
-    if (proposer_idx < 0) {
-        goto error;
-    }
-    LanternSignedVote proposer_vote;
-    if (lantern_fixture_parse_attestation_message(doc, proposer_idx, &proposer_vote) != 0) {
-        goto error;
-    }
-    signed_block->message.proposer_attestation = proposer_vote.data;
+    LanternVote *proposer = &signed_block->message.proposer_attestation;
+    memset(proposer, 0, sizeof(*proposer));
+    proposer->validator_id = signed_block->message.block.proposer_index;
+    proposer->slot = signed_block->message.block.slot;
+    proposer->head.slot = signed_block->message.block.slot;
+    proposer->target.slot = signed_block->message.block.slot;
+    proposer->source.slot = signed_block->message.block.slot;
 
     size_t attestation_count = signed_block->message.block.body.attestations.length;
     size_t expected_signatures = attestation_count + 1u;
     if (expected_signatures == 0) {
         goto error;
     }
-
-    int signatures_idx = lantern_fixture_object_get_field(doc, object_index, "signature");
-    if (signatures_idx < 0) {
+    if (lantern_block_signatures_resize(&signed_block->signatures, expected_signatures) != 0) {
         goto error;
     }
-    if (lantern_fixture_parse_signature_list(
-            doc,
-            signatures_idx,
-            &signed_block->signatures,
-            expected_signatures)
-        != 0) {
-        goto error;
+    for (size_t i = 0; i < signed_block->signatures.length; ++i) {
+        memset(signed_block->signatures.data[i].bytes, 0, LANTERN_SIGNATURE_SIZE);
     }
-    if (!signed_block->signatures.data) {
-        goto error;
-    }
-
     return 0;
 
 error:
