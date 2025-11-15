@@ -1,5 +1,7 @@
 #include "client_test_helpers.h"
 
+#include <ctype.h>
+#include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <pthread.h>
@@ -15,6 +17,8 @@
 #ifndef LANTERN_TEST_FIXTURE_DIR
 #error "LANTERN_TEST_FIXTURE_DIR must be defined for client test helpers"
 #endif
+
+static int client_test_load_fixture_genesis_time(uint64_t *out_time);
 
 static int load_precomputed_keys(
     struct PQSignatureSchemePublicKey **out_pub,
@@ -168,12 +172,15 @@ int client_test_setup_vote_validation_client(
     }
     client->state_lock_initialized = true;
 
-    double now_seconds = lantern_time_now_seconds();
-    if (now_seconds < 0.0) {
-        now_seconds = 0.0;
+    uint64_t genesis_time = 0;
+    if (client_test_load_fixture_genesis_time(&genesis_time) != 0) {
+        double now_seconds = lantern_time_now_seconds();
+        if (now_seconds < 0.0) {
+            now_seconds = 0.0;
+        }
+        double shifted = now_seconds >= 60.0 ? now_seconds - 60.0 : 0.0;
+        genesis_time = (uint64_t)shifted;
     }
-    double shifted = now_seconds >= 60.0 ? now_seconds - 60.0 : 0.0;
-    uint64_t genesis_time = (uint64_t)shifted;
 
     if (lantern_state_generate_genesis(&client->state, genesis_time, 1) != 0) {
         fprintf(stderr, "failed to generate genesis for vote test\n");
@@ -329,6 +336,53 @@ void client_test_teardown_vote_validation_client(
         pq_public_key_free(pub);
     }
     reset_vote_client_on_error(client);
+}
+
+static int client_test_load_fixture_genesis_time(uint64_t *out_time) {
+    if (!out_time) {
+        return -1;
+    }
+    char config_path[PATH_MAX];
+    int written = snprintf(
+        config_path,
+        sizeof(config_path),
+        "%s/genesis/config.yaml",
+        LANTERN_TEST_FIXTURE_DIR);
+    if (written <= 0 || (size_t)written >= sizeof(config_path)) {
+        return -1;
+    }
+    FILE *fp = fopen(config_path, "r");
+    if (!fp) {
+        return -1;
+    }
+    char line[256];
+    const char *needle = "GENESIS_TIME";
+    while (fgets(line, sizeof(line), fp)) {
+        if (strstr(line, needle) == NULL) {
+            continue;
+        }
+        char *colon = strchr(line, ':');
+        if (!colon) {
+            continue;
+        }
+        colon += 1;
+        while (*colon && isspace((unsigned char)*colon)) {
+            colon++;
+        }
+        if (!*colon) {
+            continue;
+        }
+        errno = 0;
+        char *endptr = NULL;
+        unsigned long long value = strtoull(colon, &endptr, 10);
+        if (errno == 0 && endptr && endptr != colon) {
+            *out_time = (uint64_t)value;
+            fclose(fp);
+            return 0;
+        }
+    }
+    fclose(fp);
+    return -1;
 }
 
 int client_test_sign_vote_with_secret(LanternSignedVote *vote, struct PQSignatureSchemeSecretKey *secret) {

@@ -3320,6 +3320,30 @@ static uint64_t validator_wall_time_now_seconds(void) {
     return now > 0 ? (uint64_t)now : 0;
 }
 
+static bool lantern_client_vote_time_seconds(
+    const struct lantern_client *client,
+    uint64_t vote_slot,
+    uint64_t *out_seconds) {
+    if (!client || !client->has_fork_choice || !out_seconds) {
+        return false;
+    }
+    uint32_t seconds_per_slot = client->fork_choice.seconds_per_slot;
+    if (seconds_per_slot == 0) {
+        seconds_per_slot = 1;
+    }
+    uint64_t slot_for_time = vote_slot;
+    if (slot_for_time != UINT64_MAX) {
+        slot_for_time += 1u;
+    }
+    __uint128_t slot_offset = (__uint128_t)slot_for_time * (uint64_t)seconds_per_slot;
+    __uint128_t result = slot_offset + ( __uint128_t)client->fork_choice.config.genesis_time;
+    if (result > UINT64_MAX) {
+        return false;
+    }
+    *out_seconds = (uint64_t)result;
+    return true;
+}
+
 static void validator_sleep_ms(uint32_t ms) {
     struct timespec ts;
     ts.tv_sec = ms / 1000u;
@@ -4209,16 +4233,7 @@ static bool lantern_client_current_slot(const struct lantern_client *client, uin
     if (store->seconds_per_slot == 0) {
         return false;
     }
-    double now_seconds = lantern_time_now_seconds();
-    if (now_seconds < 0.0) {
-        now_seconds = 0.0;
-    }
-    uint64_t now = 0;
-    if (now_seconds >= (double)UINT64_MAX) {
-        now = UINT64_MAX;
-    } else {
-        now = (uint64_t)now_seconds;
-    }
+    uint64_t now = validator_wall_time_now_seconds();
     if (now < store->config.genesis_time) {
         *out_slot = 0;
         return true;
@@ -5969,7 +5984,6 @@ static void lantern_client_record_vote(
     char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     char source_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     LanternSignedVote vote_copy = *vote;
-    uint64_t rc_start_ms = monotonic_millis();
     format_root_hex(&vote_copy.data.head.root, head_hex, sizeof(head_hex));
     format_root_hex(&vote_copy.data.target.root, target_hex, sizeof(target_hex));
     format_root_hex(&vote_copy.data.source.root, source_hex, sizeof(source_hex));
@@ -5997,7 +6011,6 @@ static void lantern_client_record_vote(
         goto cleanup;
     }
 
-    uint64_t rc_after_constraints = monotonic_millis();
     if (!lantern_client_verify_vote_signature(
             client,
             &vote_copy,
@@ -6091,7 +6104,10 @@ static void lantern_client_record_vote(
                 vote_copy.data.validator_id,
                 vote_copy.data.slot);
         } else {
-            uint64_t now_seconds = validator_wall_time_now_seconds();
+            uint64_t now_seconds = 0;
+            if (!lantern_client_vote_time_seconds(client, vote_copy.data.slot, &now_seconds)) {
+                now_seconds = validator_wall_time_now_seconds();
+            }
             if (lantern_fork_choice_advance_time(&client->fork_choice, now_seconds, false) != 0) {
                 lantern_log_debug(
                     "forkchoice",
@@ -6126,14 +6142,6 @@ static void lantern_client_record_vote(
         vote_copy.data.target.slot,
         source_hex[0] ? source_hex : "0x0",
         vote_copy.data.source.slot);
-    uint64_t rc_end_ms = monotonic_millis();
-    fprintf(
-        stderr,
-        "[vote_debug] constraints=%llums rest=%llums total=%llums\n",
-        (unsigned long long)(rc_after_constraints - rc_start_ms),
-        (unsigned long long)(rc_end_ms - rc_after_constraints),
-        (unsigned long long)(rc_end_ms - rc_start_ms));
-
 cleanup:
     lantern_client_unlock_state(client, state_locked);
 }
