@@ -6104,17 +6104,19 @@ static void lantern_client_record_vote(
                 vote_copy.data.validator_id,
                 vote_copy.data.slot);
         } else {
-            uint64_t now_seconds = 0;
-            if (!lantern_client_vote_time_seconds(client, vote_copy.data.slot, &now_seconds)) {
-                now_seconds = validator_wall_time_now_seconds();
-            }
-            if (lantern_fork_choice_advance_time(&client->fork_choice, now_seconds, false) != 0) {
-                lantern_log_debug(
-                    "forkchoice",
-                    &meta,
-                    "advancing fork choice time failed after validator=%" PRIu64 " slot=%" PRIu64,
-                    vote_copy.data.validator_id,
-                    vote_copy.data.slot);
+            if (!client->debug_disable_fork_choice_time) {
+                uint64_t now_seconds = 0;
+                if (!lantern_client_vote_time_seconds(client, vote_copy.data.slot, &now_seconds)) {
+                    now_seconds = validator_wall_time_now_seconds();
+                }
+                if (lantern_fork_choice_advance_time(&client->fork_choice, now_seconds, false) != 0) {
+                    lantern_log_debug(
+                        "forkchoice",
+                        &meta,
+                        "advancing fork choice time failed after validator=%" PRIu64 " slot=%" PRIu64,
+                        vote_copy.data.validator_id,
+                        vote_copy.data.slot);
+                }
             }
         }
     }

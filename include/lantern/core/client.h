@@ -167,6 +167,7 @@ struct lantern_client {
     pthread_mutex_t status_lock;
     bool status_lock_initialized;
     bool debug_disable_block_requests;
+    bool debug_disable_fork_choice_time;
     char *hash_sig_key_dir;
     char *hash_sig_public_template;
     char *hash_sig_secret_template;

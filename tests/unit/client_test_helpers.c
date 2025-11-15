@@ -163,6 +163,7 @@ int client_test_setup_vote_validation_client(
 
     memset(client, 0, sizeof(*client));
     client->node_id = (char *)node_id;
+    client->debug_disable_fork_choice_time = true;
     lantern_state_init(&client->state);
     lantern_fork_choice_init(&client->fork_choice);
 
