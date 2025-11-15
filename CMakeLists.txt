@@ -193,6 +193,7 @@ if(LANTERN_BUILD_TESTS)
 
     add_executable(lantern_consensus_vectors_test
         tests/integration/test_consensus_vectors.c
+        tests/integration/consensus_fixture_runner.c
         tests/support/fixture_loader.c
     )
     target_link_libraries(lantern_consensus_vectors_test PRIVATE lantern)
@@ -210,6 +211,26 @@ if(LANTERN_BUILD_TESTS)
     add_test(NAME lantern_consensus_vectors COMMAND lantern_consensus_vectors_test)
     # Consensus fixtures iterate over dozens of LeanSpec transitions and need a longer timeout.
     set_tests_properties(lantern_consensus_vectors PROPERTIES TIMEOUT 300)
+
+    add_executable(lantern_genesis_vectors_test
+        tests/integration/test_genesis_vectors.c
+        tests/integration/consensus_fixture_runner.c
+        tests/support/fixture_loader.c
+    )
+    target_link_libraries(lantern_genesis_vectors_test PRIVATE lantern)
+    target_include_directories(
+        lantern_genesis_vectors_test
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}
+            ${PROJECT_SOURCE_DIR}/external/jsmn
+    )
+    target_compile_definitions(
+        lantern_genesis_vectors_test
+        PRIVATE
+            LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
+    )
+    add_test(NAME lantern_genesis_vectors COMMAND lantern_genesis_vectors_test)
+    set_tests_properties(lantern_genesis_vectors PROPERTIES TIMEOUT 120)
 
     # Mirror libp2p dependency test names into CTestCustom so top-level `ctest`
     # ignores them (they are dependency-only suites we do not build/run).
