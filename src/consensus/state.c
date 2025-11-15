@@ -1255,15 +1255,21 @@ int lantern_state_process_attestations(
                 vote->validator_id,
                 (uint64_t)validator_count);
             record_attestation_validation_metric(att_validation_start, false);
-            return -1;
+            continue;
         }
         if (vote->target.slot <= vote->source.slot) {
             record_attestation_validation_metric(att_validation_start, false);
             continue;
         }
         if (vote->source.slot > SIZE_MAX || vote->target.slot > SIZE_MAX) {
+            lantern_log_warn(
+                "state",
+                &meta,
+                "attestation rejected: slot range (%" PRIu64 ", %" PRIu64 ") exceeds size_t capacity",
+                vote->source.slot,
+                vote->target.slot);
             record_attestation_validation_metric(att_validation_start, false);
-            return -1;
+            continue;
         }
         if (!lantern_state_slot_in_justified_window(state, vote->source.slot)) {
             record_attestation_validation_metric(att_validation_start, false);
@@ -1277,7 +1283,7 @@ int lantern_state_process_attestations(
                 "attestation rejected: unable to read justified bit for slot %" PRIu64,
                 vote->source.slot);
             record_attestation_validation_metric(att_validation_start, false);
-            return -1;
+            continue;
         }
         if (!source_is_justified) {
             record_attestation_validation_metric(att_validation_start, false);
@@ -1292,7 +1298,7 @@ int lantern_state_process_attestations(
                     "attestation rejected: unable to read justified bit for slot %" PRIu64,
                     vote->target.slot);
                 record_attestation_validation_metric(att_validation_start, false);
-                return -1;
+                continue;
             }
         }
         if (debug_hash && debug_hash[0] != '\0') {

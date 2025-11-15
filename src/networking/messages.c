@@ -94,48 +94,6 @@ static void log_status_payload_debug(const char *label, const uint8_t *data, siz
     free(hex);
 }
 
-static uint64_t read_u64_le_partial(const uint8_t *slot_bytes, size_t slot_len) {
-    if (!slot_bytes) {
-        return 0;
-    }
-    if (slot_len > sizeof(uint64_t)) {
-        slot_len = sizeof(uint64_t);
-    }
-    uint64_t slot = 0;
-    for (size_t i = 0; i < slot_len; ++i) {
-        slot |= ((uint64_t)slot_bytes[i]) << (8u * i);
-    }
-    return slot;
-}
-
-static void log_truncated_slot_once(const char *field, size_t slot_len) {
-    enum {
-        SLOT_WARN_HEAD = 1u << 0,
-        SLOT_WARN_FINALIZED = 1u << 1,
-        SLOT_WARN_GENERIC = 1u << 2,
-    };
-    static unsigned logged = 0;
-    unsigned mask = SLOT_WARN_GENERIC;
-    if (field) {
-        if (strcmp(field, "head") == 0) {
-            mask = SLOT_WARN_HEAD;
-        } else if (strcmp(field, "finalized") == 0) {
-            mask = SLOT_WARN_FINALIZED;
-        }
-    }
-    if (logged & mask) {
-        return;
-    }
-    logged |= mask;
-    lantern_log_warn(
-        "reqresp",
-        NULL,
-        "status decode %s slot truncated to %zu bytes (expected %zu); padding high bytes with zero",
-        field ? field : "status",
-        slot_len,
-        sizeof(uint64_t));
-}
-
 void lantern_blocks_by_root_request_init(LanternBlocksByRootRequest *req) {
     if (!req) {
         return;
@@ -241,77 +199,27 @@ int lantern_network_status_decode(
     LanternStatusMessage *status,
     const uint8_t *data,
     size_t data_len) {
-    if (!status || (!data && data_len > 0)) {
+    const size_t expected_len = 2u * LANTERN_CHECKPOINT_SSZ_SIZE;
+    if (!status || !data) {
         return -1;
     }
-    if (data_len == 0) {
-        log_status_payload_debug("status decode empty", data, data_len);
+    if (data_len != expected_len) {
+        log_status_payload_debug("status decode invalid_len", data, data_len);
         return -1;
     }
-    if (data_len == 2u * LANTERN_CHECKPOINT_SSZ_SIZE) {
-        if (lantern_ssz_decode_checkpoint(&status->finalized, data, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
-            return -1;
-        }
-        if (lantern_ssz_decode_checkpoint(
-                &status->head,
-                data + LANTERN_CHECKPOINT_SSZ_SIZE,
-                LANTERN_CHECKPOINT_SSZ_SIZE)
-            != 0) {
-            return -1;
-        }
-        return 0;
+    if (lantern_ssz_decode_checkpoint(&status->finalized, data, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
+        log_status_payload_debug("status decode finalized_failed", data, data_len);
+        return -1;
     }
-    if (data_len == LANTERN_CHECKPOINT_SSZ_SIZE) {
-        if (lantern_ssz_decode_checkpoint(&status->head, data, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
-            return -1;
-        }
-        status->finalized = status->head;
-        return 0;
+    if (lantern_ssz_decode_checkpoint(
+            &status->head,
+            data + LANTERN_CHECKPOINT_SSZ_SIZE,
+            LANTERN_CHECKPOINT_SSZ_SIZE)
+        != 0) {
+        log_status_payload_debug("status decode head_failed", data, data_len);
+        return -1;
     }
-    size_t min_dual_checkpoint = LANTERN_CHECKPOINT_SSZ_SIZE + LANTERN_ROOT_SIZE;
-    if (data_len >= min_dual_checkpoint) {
-        if (lantern_ssz_decode_checkpoint(&status->finalized, data, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
-            log_status_payload_debug("status decode truncated_finalized", data, data_len);
-            return -1;
-        }
-        const size_t head_offset = LANTERN_CHECKPOINT_SSZ_SIZE;
-        const size_t head_available = data_len - head_offset;
-        if (head_available < LANTERN_ROOT_SIZE + 1) {
-            log_status_payload_debug("status decode truncated_head_root", data, data_len);
-            return -1;
-        }
-        memcpy(status->head.root.bytes, data + head_offset, LANTERN_ROOT_SIZE);
-        size_t slot_bytes_len = head_available - LANTERN_ROOT_SIZE;
-        if (slot_bytes_len > sizeof(uint64_t)) {
-            log_status_payload_debug("status decode invalid_head_slot", data, data_len);
-            return -1;
-        }
-        status->head.slot = read_u64_le_partial(data + head_offset + LANTERN_ROOT_SIZE, slot_bytes_len);
-        if (slot_bytes_len != sizeof(uint64_t)) {
-            log_truncated_slot_once("head", slot_bytes_len);
-        }
-        return 0;
-    }
-    if (data_len >= LANTERN_CHECKPOINT_SSZ_SIZE) {
-        if (lantern_ssz_decode_checkpoint(&status->head, data, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
-            log_status_payload_debug("status decode single_checkpoint_failed", data, data_len);
-            return -1;
-        }
-        status->finalized = status->head;
-        return 0;
-    }
-    if (data_len >= LANTERN_ROOT_SIZE + 1) {
-        memcpy(status->head.root.bytes, data, LANTERN_ROOT_SIZE);
-        size_t slot_bytes_len = data_len - LANTERN_ROOT_SIZE;
-        status->head.slot = read_u64_le_partial(data + LANTERN_ROOT_SIZE, slot_bytes_len);
-        if (slot_bytes_len != sizeof(uint64_t)) {
-            log_truncated_slot_once("head", slot_bytes_len);
-        }
-        status->finalized = status->head;
-        return 0;
-    }
-    log_status_payload_debug("status decode unsupported_format", data, data_len);
-    return -1;
+    return 0;
 }
 
 int lantern_network_status_encode_snappy(
@@ -362,25 +270,17 @@ int lantern_network_blocks_by_root_request_encode(
     if (req->roots.length > LANTERN_MAX_REQUEST_BLOCKS) {
         return -1;
     }
-    const size_t dynamic_offset = sizeof(uint32_t);
     size_t roots_bytes = req->roots.length * LANTERN_ROOT_SIZE;
-    if (dynamic_offset > SIZE_MAX - roots_bytes) {
-        return -1;
-    }
-    size_t total = dynamic_offset + roots_bytes;
-    if (out_len < total) {
-        return -1;
-    }
-    if (write_u32_le((uint32_t)dynamic_offset, out, out_len) != 0) {
+    if (out_len < roots_bytes) {
         return -1;
     }
     if (roots_bytes > 0) {
         if (!req->roots.items) {
             return -1;
         }
-        memcpy(out + dynamic_offset, req->roots.items, roots_bytes);
+        memcpy(out, req->roots.items, roots_bytes);
     }
-    *written = total;
+    *written = roots_bytes;
     return 0;
 }
 
@@ -391,21 +291,10 @@ int lantern_network_blocks_by_root_request_decode(
     if (!req || (!data && data_len > 0)) {
         return -1;
     }
-    if (data_len < sizeof(uint32_t)) {
+    if (data_len % LANTERN_ROOT_SIZE != 0) {
         return -1;
     }
-    uint32_t offset = 0;
-    if (read_u32_le(data, data_len, &offset) != 0) {
-        return -1;
-    }
-    if (offset < sizeof(uint32_t) || offset > data_len) {
-        return -1;
-    }
-    size_t payload_len = data_len - offset;
-    if (payload_len % LANTERN_ROOT_SIZE != 0) {
-        return -1;
-    }
-    size_t count = payload_len / LANTERN_ROOT_SIZE;
+    size_t count = data_len / LANTERN_ROOT_SIZE;
     if (count > LANTERN_MAX_REQUEST_BLOCKS) {
         return -1;
     }
@@ -416,7 +305,7 @@ int lantern_network_blocks_by_root_request_decode(
         if (!req->roots.items) {
             return -1;
         }
-        memcpy(req->roots.items, data + offset, payload_len);
+        memcpy(req->roots.items, data, data_len);
     }
     return 0;
 }
@@ -434,17 +323,12 @@ int lantern_network_blocks_by_root_request_encode_snappy(
     if (!req || !out || !written) {
         return -1;
     }
-    size_t roots_bytes = req->roots.length * LANTERN_ROOT_SIZE;
-    const size_t header_size = sizeof(uint32_t);
-    if (header_size > SIZE_MAX - roots_bytes) {
-        return -1;
-    }
-    size_t raw_size = header_size + roots_bytes;
+    size_t raw_size = req->roots.length * LANTERN_ROOT_SIZE;
     uint8_t *raw = alloc_scratch(raw_size);
     if (!raw) {
         return -1;
     }
-    size_t raw_written = raw_size;
+    size_t raw_written = 0;
     int result = -1;
     if (lantern_network_blocks_by_root_request_encode(req, raw, raw_size, &raw_written) == 0) {
         if (raw_len) {
@@ -495,28 +379,21 @@ int lantern_network_blocks_by_root_response_encode(
         return -1;
     }
 
-    const size_t container_prefix = sizeof(uint32_t);
+    if (resp->length == 0) {
+        *written = 0;
+        return 0;
+    }
+
     const size_t offsets_bytes = resp->length * sizeof(uint32_t);
-    size_t capacity = container_prefix + offsets_bytes;
-    if (capacity < container_prefix) {
+    size_t capacity = offsets_bytes + 256u;
+    if (capacity < offsets_bytes) {
         return -1;
-    }
-    if (capacity == container_prefix) {
-        capacity += resp->length > 0 ? 256u : 0u;
-    }
-    size_t minimum_payload = resp->length * (SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE);
-    if (minimum_payload > SIZE_MAX - (container_prefix + offsets_bytes)) {
-        return -1;
-    }
-    size_t minimum_capacity = container_prefix + offsets_bytes + minimum_payload;
-    if (capacity < minimum_capacity) {
-        capacity = minimum_capacity;
     }
 
     uint8_t *buffer = NULL;
     for (unsigned attempt = 0; attempt < 16; ++attempt) {
-        if (capacity < container_prefix + offsets_bytes) {
-            capacity = container_prefix + offsets_bytes;
+        if (capacity < offsets_bytes) {
+            capacity = offsets_bytes;
         }
         if (capacity > SIZE_MAX / 2 && attempt + 1 < 16) {
             free(buffer);
@@ -529,25 +406,17 @@ int lantern_network_blocks_by_root_response_encode(
         }
         buffer = resized;
 
-        if (write_u32_le((uint32_t)container_prefix, buffer, capacity) != 0) {
-            capacity *= 2u;
-            continue;
-        }
-
-        size_t offsets_start = container_prefix;
-        size_t payload_start = container_prefix + offsets_bytes;
-        size_t current_offset = offsets_bytes;
-
+        size_t payload_cursor = offsets_bytes;
         bool encode_ok = true;
         for (size_t i = 0; i < resp->length; ++i) {
-            if (current_offset > UINT32_MAX) {
+            if (payload_cursor > UINT32_MAX) {
                 encode_ok = false;
                 break;
             }
             if (write_u32_le(
-                    (uint32_t)current_offset,
-                    buffer + offsets_start + (i * sizeof(uint32_t)),
-                    capacity - (offsets_start + (i * sizeof(uint32_t))))
+                    (uint32_t)payload_cursor,
+                    buffer + (i * sizeof(uint32_t)),
+                    capacity - (i * sizeof(uint32_t)))
                 != 0) {
                 encode_ok = false;
                 break;
@@ -556,19 +425,18 @@ int lantern_network_blocks_by_root_response_encode(
             size_t block_written = 0;
             if (lantern_ssz_encode_signed_block(
                     &resp->blocks[i],
-                    buffer + payload_start,
-                    capacity - payload_start,
+                    buffer + payload_cursor,
+                    capacity - payload_cursor,
                     &block_written)
                 != 0) {
                 encode_ok = false;
                 break;
             }
-            if (block_written > SIZE_MAX - payload_start) {
+            if (block_written == 0 || block_written > SIZE_MAX - payload_cursor) {
                 encode_ok = false;
                 break;
             }
-            payload_start += block_written;
-            current_offset += block_written;
+            payload_cursor += block_written;
         }
 
         if (!encode_ok) {
@@ -578,12 +446,12 @@ int lantern_network_blocks_by_root_response_encode(
             capacity *= 2u;
             continue;
         }
-        if (out_len < payload_start) {
+        if (out_len < payload_cursor) {
             free(buffer);
             return -1;
         }
-        memcpy(out, buffer, payload_start);
-        *written = payload_start;
+        memcpy(out, buffer, payload_cursor);
+        *written = payload_cursor;
         free(buffer);
         return 0;
     }
@@ -596,44 +464,29 @@ int lantern_network_blocks_by_root_response_decode(
     LanternBlocksByRootResponse *resp,
     const uint8_t *data,
     size_t data_len) {
-    if (!resp || !data) {
+    if (!resp || (!data && data_len > 0)) {
         return -1;
+    }
+    if (lantern_blocks_by_root_response_resize(resp, 0) != 0) {
+        return -1;
+    }
+    if (data_len == 0) {
+        return 0;
     }
     if (data_len < sizeof(uint32_t)) {
         return -1;
     }
-    uint32_t offset = 0;
-    if (read_u32_le(data, data_len, &offset) != 0) {
-        return -1;
-    }
-    if (offset < sizeof(uint32_t) || offset > data_len) {
-        return -1;
-    }
-    const uint8_t *dynamic = data + offset;
-    size_t dynamic_len = data_len - offset;
-
-    if (lantern_blocks_by_root_response_resize(resp, 0) != 0) {
-        return -1;
-    }
-
-    if (dynamic_len == 0) {
-        return 0;
-    }
-
-    if (dynamic_len < sizeof(uint32_t)) {
-        return -1;
-    }
 
     uint32_t first_offset = 0;
-    if (read_u32_le(dynamic, dynamic_len, &first_offset) != 0) {
+    if (read_u32_le(data, data_len, &first_offset) != 0) {
         return -1;
     }
-    if (first_offset > dynamic_len || (first_offset % sizeof(uint32_t)) != 0) {
+    if (first_offset > data_len || (first_offset % sizeof(uint32_t)) != 0) {
         return -1;
     }
 
     size_t count = first_offset / sizeof(uint32_t);
-    if (count > LANTERN_MAX_REQUEST_BLOCKS) {
+    if (count == 0 || count > LANTERN_MAX_REQUEST_BLOCKS) {
         return -1;
     }
     if (lantern_blocks_by_root_response_resize(resp, count) != 0) {
@@ -641,25 +494,21 @@ int lantern_network_blocks_by_root_response_decode(
         return -1;
     }
 
-    if (count == 0) {
-        return 0;
-    }
-
-    size_t offsets_len = (size_t)first_offset;
-    if (dynamic_len < offsets_len) {
+    size_t offsets_len = count * sizeof(uint32_t);
+    if (data_len < offsets_len) {
         lantern_blocks_by_root_response_reset(resp);
         return -1;
     }
 
-    const uint8_t *offsets_region = dynamic;
-    const uint8_t *payload_region = dynamic;
-    size_t payload_total = dynamic_len;
+    const uint8_t *offsets_region = data;
+    const uint8_t *payload_region = data;
+    size_t payload_total = data_len;
 
     uint32_t prev_offset = first_offset;
     for (size_t i = 0; i < count; ++i) {
         size_t offset_index = i * sizeof(uint32_t);
         uint32_t start_offset = 0;
-        if (read_u32_le(offsets_region + offset_index, dynamic_len - offset_index, &start_offset) != 0) {
+        if (read_u32_le(offsets_region + offset_index, data_len - offset_index, &start_offset) != 0) {
             lantern_blocks_by_root_response_reset(resp);
             return -1;
         }
@@ -675,7 +524,7 @@ int lantern_network_blocks_by_root_response_decode(
         uint32_t end_offset = (uint32_t)payload_total;
         if (i + 1 < count) {
             size_t next_index = (i + 1) * sizeof(uint32_t);
-            if (read_u32_le(offsets_region + next_index, dynamic_len - next_index, &end_offset) != 0) {
+            if (read_u32_le(offsets_region + next_index, data_len - next_index, &end_offset) != 0) {
                 lantern_blocks_by_root_response_reset(resp);
                 return -1;
             }
@@ -710,7 +559,7 @@ int lantern_network_blocks_by_root_response_encode_snappy(
     if (!resp || !out || !written) {
         return -1;
     }
-    size_t capacity = sizeof(uint32_t) + (resp->length > 0 ? 256u : 0u);
+    size_t capacity = resp->length * sizeof(uint32_t) + (resp->length > 0 ? 256u : 1u);
     while (true) {
         uint8_t *raw = alloc_scratch(capacity);
         if (!raw) {

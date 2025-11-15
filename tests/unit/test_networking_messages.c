@@ -49,6 +49,52 @@ static void fill_signature(LanternSignature *signature, uint8_t seed) {
     fill_bytes(signature->bytes, LANTERN_SIGNATURE_SIZE, seed);
 }
 
+static void expect_root_seed(const LanternRoot *root, uint8_t seed) {
+    CHECK(root != NULL);
+    uint8_t expected[LANTERN_ROOT_SIZE];
+    fill_bytes(expected, sizeof(expected), seed);
+    CHECK(memcmp(root->bytes, expected, sizeof(expected)) == 0);
+}
+
+static void expect_checkpoint_seed(const LanternCheckpoint *checkpoint, uint64_t slot, uint8_t seed) {
+    CHECK(checkpoint != NULL);
+    CHECK(checkpoint->slot == slot);
+    expect_root_seed(&checkpoint->root, seed);
+}
+
+static void expect_signature_seed(const LanternSignature *signature, uint8_t seed) {
+    CHECK(signature != NULL);
+    uint8_t expected[LANTERN_SIGNATURE_SIZE];
+    fill_bytes(expected, sizeof(expected), seed);
+    CHECK(memcmp(signature->bytes, expected, sizeof(expected)) == 0);
+}
+
+static uint8_t *read_fixture_bytes(const char *relative_path, size_t *out_len) {
+    CHECK(relative_path != NULL);
+    char path[PATH_MAX];
+    int written = snprintf(path, sizeof(path), "%s/%s", LANTERN_TEST_FIXTURE_DIR, relative_path);
+    CHECK(written > 0);
+    CHECK((size_t)written < sizeof(path));
+
+    FILE *fp = fopen(path, "rb");
+    CHECK(fp != NULL);
+    CHECK(fseek(fp, 0, SEEK_END) == 0);
+    long length = ftell(fp);
+    CHECK(length >= 0);
+    CHECK(fseek(fp, 0, SEEK_SET) == 0);
+
+    uint8_t *buffer = (uint8_t *)malloc((size_t)length);
+    CHECK(buffer != NULL);
+    size_t read = fread(buffer, 1, (size_t)length, fp);
+    CHECK(read == (size_t)length);
+    fclose(fp);
+
+    if (out_len) {
+        *out_len = (size_t)length;
+    }
+    return buffer;
+}
+
 static void check_checkpoint_equal(const LanternCheckpoint *expected, const LanternCheckpoint *actual) {
     CHECK(expected != NULL);
     CHECK(actual != NULL);
@@ -465,6 +511,226 @@ static void test_replay_devnet_block_payloads(void) {
     }
 }
 
+static void test_status_fixture_roundtrip(void) {
+    size_t fixture_len = 0;
+    uint8_t *fixture = read_fixture_bytes("networking/status_leanspec.ssz", &fixture_len);
+    size_t snappy_fixture_len = 0;
+    uint8_t *snappy_fixture = read_fixture_bytes("networking/status_leanspec.snappy", &snappy_fixture_len);
+
+    LanternStatusMessage decoded = {0};
+    check_zero(lantern_network_status_decode(&decoded, fixture, fixture_len), "status fixture decode");
+    expect_checkpoint_seed(&decoded.finalized, 42, 0x11);
+    expect_checkpoint_seed(&decoded.head, 96, 0x41);
+
+    uint8_t encoded[128];
+    size_t written = 0;
+    check_zero(
+        lantern_network_status_encode(&decoded, encoded, sizeof(encoded), &written),
+        "status fixture encode");
+    CHECK(written == fixture_len);
+    CHECK(memcmp(encoded, fixture, fixture_len) == 0);
+
+    size_t max_compressed = 0;
+    CHECK(lantern_snappy_max_compressed_size(fixture_len, &max_compressed) == LANTERN_SNAPPY_OK);
+    uint8_t *compressed = (uint8_t *)malloc(max_compressed);
+    CHECK(compressed != NULL);
+    size_t compressed_len = 0;
+    CHECK(
+        lantern_snappy_compress(
+            fixture,
+            fixture_len,
+            compressed,
+            max_compressed,
+            &compressed_len)
+        == LANTERN_SNAPPY_OK);
+
+    LanternStatusMessage snappy_decoded = {0};
+    check_zero(
+        lantern_network_status_decode_snappy(&snappy_decoded, compressed, compressed_len),
+        "status fixture decode snappy");
+    expect_checkpoint_seed(&snappy_decoded.finalized, 42, 0x11);
+    expect_checkpoint_seed(&snappy_decoded.head, 96, 0x41);
+
+    LanternStatusMessage leanspec_snappy = {0};
+    check_zero(
+        lantern_network_status_decode_snappy(&leanspec_snappy, snappy_fixture, snappy_fixture_len),
+        "status fixture decode snappy fixture");
+    expect_checkpoint_seed(&leanspec_snappy.finalized, 42, 0x11);
+    expect_checkpoint_seed(&leanspec_snappy.head, 96, 0x41);
+
+    uint8_t *snappy_roundtrip = (uint8_t *)malloc(fixture_len);
+    CHECK(snappy_roundtrip != NULL);
+    size_t snappy_roundtrip_written = fixture_len;
+    CHECK(
+        lantern_snappy_decompress(
+            snappy_fixture,
+            snappy_fixture_len,
+            snappy_roundtrip,
+            fixture_len,
+            &snappy_roundtrip_written)
+        == LANTERN_SNAPPY_OK);
+    CHECK(snappy_roundtrip_written == fixture_len);
+    CHECK(memcmp(snappy_roundtrip, fixture, fixture_len) == 0);
+
+    free(snappy_roundtrip);
+    free(compressed);
+    free(snappy_fixture);
+    free(fixture);
+}
+
+static void test_blocks_by_root_request_fixture(void) {
+    size_t fixture_len = 0;
+    uint8_t *fixture = read_fixture_bytes("networking/blocks_by_root_request_leanspec.ssz", &fixture_len);
+
+    LanternBlocksByRootRequest decoded;
+    lantern_blocks_by_root_request_init(&decoded);
+    check_zero(
+        lantern_network_blocks_by_root_request_decode(&decoded, fixture, fixture_len),
+        "request fixture decode");
+    CHECK(decoded.roots.length == 3);
+    expect_root_seed(&decoded.roots.items[0], 0x21);
+    expect_root_seed(&decoded.roots.items[1], 0x52);
+    expect_root_seed(&decoded.roots.items[2], 0x83);
+
+    uint8_t encoded[128];
+    size_t written = 0;
+    check_zero(
+        lantern_network_blocks_by_root_request_encode(&decoded, encoded, sizeof(encoded), &written),
+        "request fixture encode");
+    CHECK(written == fixture_len);
+    CHECK(memcmp(encoded, fixture, fixture_len) == 0);
+
+    size_t max_compressed = 0;
+    CHECK(lantern_snappy_max_compressed_size(fixture_len, &max_compressed) == LANTERN_SNAPPY_OK);
+    uint8_t *compressed = (uint8_t *)malloc(max_compressed);
+    CHECK(compressed != NULL);
+    size_t compressed_len = 0;
+    CHECK(
+        lantern_snappy_compress(
+            fixture,
+            fixture_len,
+            compressed,
+            max_compressed,
+            &compressed_len)
+        == LANTERN_SNAPPY_OK);
+
+    LanternBlocksByRootRequest snappy_decoded;
+    lantern_blocks_by_root_request_init(&snappy_decoded);
+    check_zero(
+        lantern_network_blocks_by_root_request_decode_snappy(&snappy_decoded, compressed, compressed_len),
+        "request fixture decode snappy");
+    CHECK(snappy_decoded.roots.length == decoded.roots.length);
+    expect_root_seed(&snappy_decoded.roots.items[0], 0x21);
+    expect_root_seed(&snappy_decoded.roots.items[1], 0x52);
+    expect_root_seed(&snappy_decoded.roots.items[2], 0x83);
+
+    free(compressed);
+    free(fixture);
+    lantern_blocks_by_root_request_reset(&decoded);
+    lantern_blocks_by_root_request_reset(&snappy_decoded);
+}
+
+static void test_blocks_by_root_response_fixture(void) {
+    size_t fixture_len = 0;
+    uint8_t *fixture = read_fixture_bytes("networking/blocks_by_root_response_leanspec.ssz", &fixture_len);
+
+    LanternBlocksByRootResponse decoded;
+    lantern_blocks_by_root_response_init(&decoded);
+    check_zero(
+        lantern_network_blocks_by_root_response_decode(&decoded, fixture, fixture_len),
+        "response fixture decode");
+    CHECK(decoded.length == 2);
+
+    const LanternSignedBlock *block0 = &decoded.blocks[0];
+    CHECK(block0->message.block.slot == 12);
+    CHECK(block0->message.block.proposer_index == 1);
+    expect_root_seed(&block0->message.block.parent_root, 0x10);
+    expect_root_seed(&block0->message.block.state_root, 0x60);
+    CHECK(block0->message.block.body.attestations.length == 1);
+    const LanternVote *block0_vote0 = &block0->message.block.body.attestations.data[0];
+    CHECK(block0_vote0->validator_id == 1);
+    CHECK(block0_vote0->slot == 13);
+    expect_checkpoint_seed(&block0_vote0->head, 14, 0x10);
+    expect_checkpoint_seed(&block0_vote0->target, 15, 0x30);
+    expect_checkpoint_seed(&block0_vote0->source, 13, 0x50);
+    const LanternVote *block0_prop = &block0->message.proposer_attestation;
+    CHECK(block0_prop->validator_id == 4);
+    CHECK(block0_prop->slot == 17);
+    expect_checkpoint_seed(&block0_prop->head, 18, 0x90);
+    expect_checkpoint_seed(&block0_prop->target, 19, 0xB0);
+    expect_checkpoint_seed(&block0_prop->source, 17, 0xD0);
+    CHECK(block0->signatures.length == 2);
+    expect_signature_seed(&block0->signatures.data[0], 0xB0);
+    expect_signature_seed(&block0->signatures.data[1], 0xB3);
+
+    const LanternSignedBlock *block1 = &decoded.blocks[1];
+    CHECK(block1->message.block.slot == 18);
+    CHECK(block1->message.block.proposer_index == 3);
+    expect_root_seed(&block1->message.block.parent_root, 0x30);
+    expect_root_seed(&block1->message.block.state_root, 0x80);
+    CHECK(block1->message.block.body.attestations.length == 2);
+    const LanternVote *block1_vote0 = &block1->message.block.body.attestations.data[0];
+    CHECK(block1_vote0->validator_id == 3);
+    CHECK(block1_vote0->slot == 19);
+    expect_checkpoint_seed(&block1_vote0->head, 20, 0x30);
+    expect_checkpoint_seed(&block1_vote0->target, 21, 0x50);
+    expect_checkpoint_seed(&block1_vote0->source, 19, 0x70);
+    const LanternVote *block1_vote1 = &block1->message.block.body.attestations.data[1];
+    CHECK(block1_vote1->validator_id == 4);
+    CHECK(block1_vote1->slot == 20);
+    expect_checkpoint_seed(&block1_vote1->head, 21, 0x35);
+    expect_checkpoint_seed(&block1_vote1->target, 22, 0x55);
+    expect_checkpoint_seed(&block1_vote1->source, 20, 0x75);
+    const LanternVote *block1_prop = &block1->message.proposer_attestation;
+    CHECK(block1_prop->validator_id == 6);
+    CHECK(block1_prop->slot == 24);
+    expect_checkpoint_seed(&block1_prop->head, 25, 0xB0);
+    expect_checkpoint_seed(&block1_prop->target, 26, 0xD0);
+    expect_checkpoint_seed(&block1_prop->source, 24, 0xF0);
+    CHECK(block1->signatures.length == 3);
+    expect_signature_seed(&block1->signatures.data[0], 0xD0);
+    expect_signature_seed(&block1->signatures.data[1], 0xD3);
+    expect_signature_seed(&block1->signatures.data[2], 0xD6);
+
+    size_t encoded_capacity = fixture_len + 1024u;
+    uint8_t *encoded = (uint8_t *)malloc(encoded_capacity);
+    CHECK(encoded != NULL);
+    size_t written = 0;
+    check_zero(
+        lantern_network_blocks_by_root_response_encode(&decoded, encoded, encoded_capacity, &written),
+        "response fixture encode");
+    CHECK(written == fixture_len);
+    CHECK(memcmp(encoded, fixture, fixture_len) == 0);
+
+    size_t max_compressed = 0;
+    CHECK(lantern_snappy_max_compressed_size(fixture_len, &max_compressed) == LANTERN_SNAPPY_OK);
+    uint8_t *compressed = (uint8_t *)malloc(max_compressed);
+    CHECK(compressed != NULL);
+    size_t compressed_len = 0;
+    CHECK(
+        lantern_snappy_compress(
+            fixture,
+            fixture_len,
+            compressed,
+            max_compressed,
+            &compressed_len)
+        == LANTERN_SNAPPY_OK);
+    LanternBlocksByRootResponse snappy_decoded;
+    lantern_blocks_by_root_response_init(&snappy_decoded);
+    check_zero(
+        lantern_network_blocks_by_root_response_decode_snappy(&snappy_decoded, compressed, compressed_len),
+        "response fixture decode snappy");
+    CHECK(snappy_decoded.length == decoded.length);
+    CHECK(snappy_decoded.blocks[0].message.block.slot == 12);
+    CHECK(snappy_decoded.blocks[1].message.block.slot == 18);
+
+    free(compressed);
+    free(encoded);
+    free(fixture);
+    lantern_blocks_by_root_response_reset(&decoded);
+    lantern_blocks_by_root_response_reset(&snappy_decoded);
+}
+
 static void test_status_snappy(void) {
     LanternStatusMessage status = {
         .finalized = build_checkpoint(0xAA, 42),
@@ -495,47 +761,30 @@ static void test_status_snappy(void) {
     CHECK(snappy_decoded.finalized.slot == status.finalized.slot);
 }
 
-static void test_status_decode_truncated_head_slot(void) {
-    uint8_t finalized_root[LANTERN_ROOT_SIZE];
-    uint8_t head_root[LANTERN_ROOT_SIZE];
-    fill_bytes(finalized_root, sizeof(finalized_root), 0x31);
-    fill_bytes(head_root, sizeof(head_root), 0x62);
-
-    const uint8_t finalized_slot_bytes[8] = {0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE};
-    const uint8_t head_slot_bytes[6] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB};
-
-    uint8_t payload[LANTERN_ROOT_SIZE + sizeof(finalized_slot_bytes) + LANTERN_ROOT_SIZE + sizeof(head_slot_bytes)];
-    uint8_t *cursor = payload;
-    memcpy(cursor, finalized_root, LANTERN_ROOT_SIZE);
-    cursor += LANTERN_ROOT_SIZE;
-    memcpy(cursor, finalized_slot_bytes, sizeof(finalized_slot_bytes));
-    cursor += sizeof(finalized_slot_bytes);
-    memcpy(cursor, head_root, LANTERN_ROOT_SIZE);
-    cursor += LANTERN_ROOT_SIZE;
-    memcpy(cursor, head_slot_bytes, sizeof(head_slot_bytes));
-
+static void test_status_decode_rejects_truncated_payloads(void) {
     LanternStatusMessage decoded = {0};
-    CHECK(lantern_network_status_decode(&decoded, payload, sizeof(payload)) == 0);
-    CHECK(memcmp(decoded.finalized.root.bytes, finalized_root, LANTERN_ROOT_SIZE) == 0);
-    CHECK(decoded.finalized.slot == le_bytes_to_u64(finalized_slot_bytes, sizeof(finalized_slot_bytes)));
-    CHECK(memcmp(decoded.head.root.bytes, head_root, LANTERN_ROOT_SIZE) == 0);
-    CHECK(decoded.head.slot == le_bytes_to_u64(head_slot_bytes, sizeof(head_slot_bytes)));
+    uint8_t zero_payload[2u * LANTERN_CHECKPOINT_SSZ_SIZE] = {0};
+    CHECK(lantern_network_status_decode(&decoded, zero_payload, 0) != 0);
+    CHECK(lantern_network_status_decode(&decoded, zero_payload, LANTERN_CHECKPOINT_SSZ_SIZE) != 0);
+    CHECK(
+        lantern_network_status_decode(
+            &decoded,
+            zero_payload,
+            (2u * LANTERN_CHECKPOINT_SSZ_SIZE) - 1)
+        != 0);
+
+    uint8_t extra_payload[(2u * LANTERN_CHECKPOINT_SSZ_SIZE) + 4u];
+    memset(extra_payload, 0, sizeof(extra_payload));
+    CHECK(lantern_network_status_decode(&decoded, extra_payload, sizeof(extra_payload)) != 0);
 }
 
-static void test_status_decode_single_truncated_checkpoint(void) {
-    uint8_t head_root[LANTERN_ROOT_SIZE];
-    fill_bytes(head_root, sizeof(head_root), 0x5A);
-
-    const uint8_t slot_bytes[10] = {0x02, 0x04, 0x06, 0x08, 0x0A, 0x0C, 0x0E, 0x10, 0x12, 0x14};
-    uint8_t payload[LANTERN_ROOT_SIZE + sizeof(slot_bytes)];
-    memcpy(payload, head_root, LANTERN_ROOT_SIZE);
-    memcpy(payload + LANTERN_ROOT_SIZE, slot_bytes, sizeof(slot_bytes));
-
+static void test_status_snappy_rejects_truncated_frames(void) {
+    size_t fixture_len = 0;
+    uint8_t *fixture = read_fixture_bytes("networking/status_leanspec.snappy", &fixture_len);
+    CHECK(fixture_len > 1);
     LanternStatusMessage decoded = {0};
-    CHECK(lantern_network_status_decode(&decoded, payload, sizeof(payload)) == 0);
-    CHECK(memcmp(decoded.head.root.bytes, head_root, LANTERN_ROOT_SIZE) == 0);
-    CHECK(decoded.finalized.slot == decoded.head.slot);
-    CHECK(decoded.head.slot == le_bytes_to_u64(slot_bytes, sizeof(slot_bytes)));
+    CHECK(lantern_network_status_decode_snappy(&decoded, fixture, fixture_len - 1) != 0);
+    free(fixture);
 }
 
 static void test_blocks_by_root_request(void) {
@@ -548,7 +797,7 @@ static void test_blocks_by_root_request(void) {
     uint8_t encoded[128];
     size_t written = 0;
     check_zero(lantern_network_blocks_by_root_request_encode(&req, encoded, sizeof(encoded), &written), "request encode");
-    size_t expected_written = sizeof(uint32_t) + (req.roots.length * LANTERN_ROOT_SIZE);
+    size_t expected_written = req.roots.length * LANTERN_ROOT_SIZE;
     CHECK(written == expected_written);
 
     LanternBlocksByRootRequest decoded;
@@ -600,23 +849,28 @@ static void test_blocks_by_root_response(void) {
     check_zero(
         lantern_network_blocks_by_root_response_encode(&resp, encoded, encoded_capacity, &written),
         "response encode");
-    CHECK(written > sizeof(uint32_t));
-    uint32_t container_offset = (uint32_t)encoded[0]
+    CHECK(written >= resp.length * sizeof(uint32_t));
+    uint32_t first_offset = (uint32_t)encoded[0]
         | ((uint32_t)encoded[1] << 8)
         | ((uint32_t)encoded[2] << 16)
         | ((uint32_t)encoded[3] << 24);
-    CHECK(container_offset == sizeof(uint32_t));
-    uint32_t first_offset = (uint32_t)encoded[4]
-        | ((uint32_t)encoded[5] << 8)
-        | ((uint32_t)encoded[6] << 16)
-        | ((uint32_t)encoded[7] << 24);
     CHECK(first_offset == resp.length * sizeof(uint32_t));
-    if (resp.length > 1) {
-        uint32_t second_offset = (uint32_t)encoded[8]
-            | ((uint32_t)encoded[9] << 8)
-            | ((uint32_t)encoded[10] << 16)
-            | ((uint32_t)encoded[11] << 24);
-        CHECK(second_offset > first_offset);
+    for (size_t i = 0; i < resp.length; ++i) {
+        size_t idx = i * sizeof(uint32_t);
+        uint32_t offset_value = (uint32_t)encoded[idx]
+            | ((uint32_t)encoded[idx + 1] << 8)
+            | ((uint32_t)encoded[idx + 2] << 16)
+            | ((uint32_t)encoded[idx + 3] << 24);
+        CHECK(offset_value >= first_offset);
+        CHECK(offset_value < written);
+        if (i + 1 < resp.length) {
+            size_t next_idx = (i + 1) * sizeof(uint32_t);
+            uint32_t next_value = (uint32_t)encoded[next_idx]
+                | ((uint32_t)encoded[next_idx + 1] << 8)
+                | ((uint32_t)encoded[next_idx + 2] << 16)
+                | ((uint32_t)encoded[next_idx + 3] << 24);
+            CHECK(next_value > offset_value);
+        }
     }
 
     LanternBlocksByRootResponse decoded;
@@ -982,9 +1236,12 @@ static void test_client_publish_block_loopback(void) {
 }
 
 int main(void) {
+    test_status_fixture_roundtrip();
+    test_blocks_by_root_request_fixture();
+    test_blocks_by_root_response_fixture();
     test_status_snappy();
-    test_status_decode_truncated_head_slot();
-    test_status_decode_single_truncated_checkpoint();
+    test_status_decode_rejects_truncated_payloads();
+    test_status_snappy_rejects_truncated_frames();
     test_blocks_by_root_request();
     test_blocks_by_root_response();
     test_gossip_signed_vote_payload();

@@ -569,6 +569,114 @@ static int test_attestations_accept_duplicate_votes(void) {
     return 0;
 }
 
+static int test_attestations_ignore_out_of_range_validator(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(
+        lantern_state_generate_genesis(&state, 710, 3),
+        "genesis for out-of-range attestation test");
+    mark_slot_justified_for_tests(&state, state.latest_justified.slot);
+
+    LanternAttestations attestations;
+    lantern_attestations_init(&attestations);
+    LanternBlockSignatures signatures;
+    lantern_block_signatures_init(&signatures);
+
+    expect_zero(lantern_attestations_resize(&attestations, 2), "resize mixed attestations");
+    expect_zero(lantern_block_signatures_resize(&signatures, 2), "resize mixed attestation signatures");
+
+    LanternCheckpoint target_checkpoint = state.latest_justified;
+    target_checkpoint.slot = state.latest_justified.slot + 1u;
+    fill_root(&target_checkpoint.root, 0x75);
+
+    uint64_t invalid_validator = state.config.num_validators;
+    build_vote(
+        &attestations.data[0],
+        &signatures.data[0],
+        invalid_validator,
+        target_checkpoint.slot,
+        &state.latest_justified,
+        &target_checkpoint,
+        0x31);
+    build_vote(
+        &attestations.data[1],
+        &signatures.data[1],
+        0,
+        target_checkpoint.slot,
+        &state.latest_justified,
+        &target_checkpoint,
+        0x32);
+
+    expect_zero(
+        lantern_state_process_attestations(&state, &attestations, &signatures),
+        "process attestations with invalid validator entry");
+    assert(state.latest_justified.slot == target_checkpoint.slot);
+
+    lantern_attestations_reset(&attestations);
+    lantern_block_signatures_reset(&signatures);
+    lantern_state_reset(&state);
+    return 0;
+}
+
+static int test_process_block_accepts_mixed_attestations(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    const uint64_t genesis_time = 720;
+    const uint64_t validator_count = 4;
+    expect_zero(
+        lantern_state_generate_genesis(&state, genesis_time, validator_count),
+        "genesis for mixed attestation block test");
+    mark_slot_justified_for_tests(&state, state.latest_justified.slot);
+
+    LanternBlock block;
+    memset(&block, 0, sizeof(block));
+    block.slot = state.slot + 1u;
+    expect_zero(
+        lantern_proposer_for_slot(block.slot, validator_count, &block.proposer_index),
+        "proposer for mixed attestation block");
+    expect_zero(lantern_state_select_block_parent(&state, &block.parent_root), "parent root for mixed block");
+    lantern_block_body_init(&block.body);
+
+    expect_zero(lantern_attestations_resize(&block.body.attestations, 2), "resize mixed block attestations");
+
+    LanternBlockSignatures signatures;
+    lantern_block_signatures_init(&signatures);
+    expect_zero(lantern_block_signatures_resize(&signatures, 2), "resize mixed block signatures");
+
+    LanternCheckpoint target_checkpoint = state.latest_justified;
+    target_checkpoint.slot = state.latest_justified.slot + 1u;
+    fill_root(&target_checkpoint.root, 0x76);
+
+    uint64_t invalid_validator = state.config.num_validators;
+    build_vote(
+        &block.body.attestations.data[0],
+        &signatures.data[0],
+        invalid_validator,
+        target_checkpoint.slot,
+        &state.latest_justified,
+        &target_checkpoint,
+        0x41);
+    build_vote(
+        &block.body.attestations.data[1],
+        &signatures.data[1],
+        1,
+        target_checkpoint.slot,
+        &state.latest_justified,
+        &target_checkpoint,
+        0x42);
+
+    expect_zero(lantern_state_process_slots(&state, block.slot), "advance slots for mixed attestation block");
+    expect_zero(
+        lantern_state_process_block(&state, &block, &signatures, NULL),
+        "process block with mixed attestation validity");
+    assert(state.latest_justified.slot == target_checkpoint.slot);
+
+    lantern_block_signatures_reset(&signatures);
+    lantern_block_body_reset(&block.body);
+    lantern_state_reset(&state);
+    return 0;
+}
+
 static int test_collect_attestations_for_block(void) {
     LanternState state;
     lantern_state_init(&state);
@@ -1453,6 +1561,12 @@ int main(void) {
         return 1;
     }
     if (test_attestations_accept_duplicate_votes() != 0) {
+        return 1;
+    }
+    if (test_attestations_ignore_out_of_range_validator() != 0) {
+        return 1;
+    }
+    if (test_process_block_accepts_mixed_attestations() != 0) {
         return 1;
     }
     if (test_collect_attestations_for_block() != 0) {
