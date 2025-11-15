@@ -268,12 +268,22 @@ int client_test_setup_vote_validation_client(
             (size_t)written);
         goto finish;
     }
+    fprintf(stderr, "[pub_debug] serialized pub len=%zu buffer=%zu\n", (size_t)written, sizeof(serialized_pub));
     if (written < sizeof(serialized_pub)) {
         memset(serialized_pub + written, 0, sizeof(serialized_pub) - written);
     }
 
     if (lantern_state_set_validator_pubkeys(&client->state, serialized_pub, 1) != 0) {
         fprintf(stderr, "failed to set validator pubkeys for vote test\n");
+        goto finish;
+    }
+    const uint8_t *stored_pub = lantern_state_validator_pubkey(&client->state, 0);
+    if (!stored_pub) {
+        fprintf(stderr, "stored validator pubkey missing after load\n");
+        goto finish;
+    }
+    if (memcmp(stored_pub, serialized_pub, LANTERN_VALIDATOR_PUBKEY_SIZE) != 0) {
+        fprintf(stderr, "stored validator pubkey mismatch after load\n");
         goto finish;
     }
 

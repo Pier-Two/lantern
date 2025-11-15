@@ -5969,6 +5969,7 @@ static void lantern_client_record_vote(
     char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     char source_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     LanternSignedVote vote_copy = *vote;
+    uint64_t rc_start_ms = monotonic_millis();
     format_root_hex(&vote_copy.data.head.root, head_hex, sizeof(head_hex));
     format_root_hex(&vote_copy.data.target.root, target_hex, sizeof(target_hex));
     format_root_hex(&vote_copy.data.source.root, source_hex, sizeof(source_hex));
@@ -5996,6 +5997,7 @@ static void lantern_client_record_vote(
         goto cleanup;
     }
 
+    uint64_t rc_after_constraints = monotonic_millis();
     if (!lantern_client_verify_vote_signature(
             client,
             &vote_copy,
@@ -6124,6 +6126,13 @@ static void lantern_client_record_vote(
         vote_copy.data.target.slot,
         source_hex[0] ? source_hex : "0x0",
         vote_copy.data.source.slot);
+    uint64_t rc_end_ms = monotonic_millis();
+    fprintf(
+        stderr,
+        "[vote_debug] constraints=%llums rest=%llums total=%llums\n",
+        (unsigned long long)(rc_after_constraints - rc_start_ms),
+        (unsigned long long)(rc_end_ms - rc_after_constraints),
+        (unsigned long long)(rc_end_ms - rc_start_ms));
 
 cleanup:
     lantern_client_unlock_state(client, state_locked);
