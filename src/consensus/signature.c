@@ -1,5 +1,6 @@
 #include "lantern/consensus/signature.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "pq-bindings-c-rust.h"
@@ -99,6 +100,12 @@ bool lantern_signature_sign(
         &written);
     pq_signature_free(pq_signature);
     if (serialize_err != Success || written == 0 || written > sizeof(out_signature->bytes)) {
+        fprintf(
+            stderr,
+            "lantern_signature_sign serialize failed err=%d needed=%zu buffer=%zu\n",
+            (int)serialize_err,
+            (size_t)written,
+            sizeof(out_signature->bytes));
         return false;
     }
     if (written < sizeof(out_signature->bytes)) {

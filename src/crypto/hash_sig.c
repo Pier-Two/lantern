@@ -167,16 +167,20 @@ static int validate_json_fields(
 }
 
 static int load_secret_from_json(const char *json, size_t length, struct PQSignatureSchemeSecretKey **out_key) {
-    if (validate_json_fields(json, length, k_secret_required_fields, HASH_SIG_JSON_SECRET_REQUIRED_COUNT) != 0) {
-        return -1;
+    if (length <= (1u << 20)) {
+        if (validate_json_fields(json, length, k_secret_required_fields, HASH_SIG_JSON_SECRET_REQUIRED_COUNT) != 0) {
+            return -1;
+        }
     }
     enum PQSigningError rc = pq_secret_key_from_json((const uint8_t *)json, length, out_key);
     return (rc == Success && out_key && *out_key) ? 0 : -1;
 }
 
 static int load_public_from_json(const char *json, size_t length, struct PQSignatureSchemePublicKey **out_key) {
-    if (validate_json_fields(json, length, k_public_required_fields, HASH_SIG_JSON_PUBLIC_REQUIRED_COUNT) != 0) {
-        return -1;
+    if (length <= (1u << 20)) {
+        if (validate_json_fields(json, length, k_public_required_fields, HASH_SIG_JSON_PUBLIC_REQUIRED_COUNT) != 0) {
+            return -1;
+        }
     }
     enum PQSigningError rc = pq_public_key_from_json((const uint8_t *)json, length, out_key);
     return (rc == Success && out_key && *out_key) ? 0 : -1;

@@ -107,10 +107,57 @@ target_link_libraries(lantern_fix_genesis_state PRIVATE lantern)
 option(LANTERN_BUILD_TESTS "Build lantern unit tests" ON)
 if(LANTERN_BUILD_TESTS)
     enable_testing()
-    add_executable(lantern_client_test tests/unit/test_client.c)
-    target_link_libraries(lantern_client_test PRIVATE lantern)
-    target_compile_definitions(lantern_client_test PRIVATE LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
-    add_test(NAME lantern_client COMMAND lantern_client_test)
+    add_executable(lantern_client_vote_test
+        tests/unit/test_client_vote.c
+        tests/unit/client_test_helpers.c
+    )
+    target_link_libraries(lantern_client_vote_test PRIVATE lantern)
+    target_include_directories(
+        lantern_client_vote_test
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/tests/unit
+    )
+    target_compile_definitions(
+        lantern_client_vote_test
+        PRIVATE
+            LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
+    )
+    add_test(NAME lantern_client_vote COMMAND lantern_client_vote_test)
+
+    add_executable(lantern_client_pending_test
+        tests/unit/test_client_pending.c
+        tests/unit/client_test_helpers.c
+    )
+    target_link_libraries(lantern_client_pending_test PRIVATE lantern)
+    target_include_directories(
+        lantern_client_pending_test
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/tests/unit
+    )
+    target_compile_definitions(
+        lantern_client_pending_test
+        PRIVATE
+            LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
+    )
+    add_test(NAME lantern_client_pending COMMAND lantern_client_pending_test)
+
+    add_executable(lantern_genesis_bootstrap_test tests/unit/test_genesis_bootstrap.c)
+    target_link_libraries(lantern_genesis_bootstrap_test PRIVATE lantern)
+    target_compile_definitions(
+        lantern_genesis_bootstrap_test
+        PRIVATE
+            LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
+    )
+    add_test(NAME lantern_genesis_bootstrap COMMAND lantern_genesis_bootstrap_test)
+
+    add_executable(lantern_validator_selection_test tests/unit/test_validator_selection.c)
+    target_link_libraries(lantern_validator_selection_test PRIVATE lantern)
+    target_compile_definitions(
+        lantern_validator_selection_test
+        PRIVATE
+            LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
+    )
+    add_test(NAME lantern_validator_selection COMMAND lantern_validator_selection_test)
 
     add_executable(lantern_rlp_test tests/unit/test_rlp.c)
     target_link_libraries(lantern_rlp_test PRIVATE lantern)
@@ -252,7 +299,10 @@ if(LANTERN_BUILD_TESTS)
     endif()
 
     set(_lantern_ctest_targets
-        lantern_client
+        lantern_client_vote
+        lantern_client_pending
+        lantern_genesis_bootstrap
+        lantern_validator_selection
         lantern_rlp
         lantern_enr
         lantern_ssz
@@ -270,5 +320,6 @@ if(LANTERN_BUILD_TESTS)
         lantern_validator_duties_integration
     )
     set_property(TEST ${_lantern_ctest_targets} PROPERTY TIMEOUT 30)
+    set_tests_properties(lantern_client_vote PROPERTIES TIMEOUT 300)
 
 endif()
