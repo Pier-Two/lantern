@@ -1,0 +1,77 @@
+{
+    "tests/consensus/devnet/state_transition/test_block_processing.py::test_block_at_large_slot_number[fork_Devnet][fork_Devnet-state_transition_test]": {
+        "network": "Devnet",
+        "pre": {
+            "config": {
+                "genesisTime": 0
+            },
+            "slot": 0,
+            "latestBlockHeader": {
+                "slot": 0,
+                "proposerIndex": 0,
+                "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "bodyRoot": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
+            },
+            "latestJustified": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "latestFinalized": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "historicalBlockHashes": {
+                "data": []
+            },
+            "justifiedSlots": {
+                "data": []
+            },
+            "validators": {
+                "data": [
+                    {
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    {
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    {
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    {
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    }
+                ]
+            },
+            "justificationsRoots": {
+                "data": []
+            },
+            "justificationsValidators": {
+                "data": []
+            }
+        },
+        "blocks": [
+            {
+                "slot": 100,
+                "proposer_index": 0,
+                "parent_root": "0xc0d44f989da630e63b222085a226fea923e2cc5321ba4c4aa4978b528949827e",
+                "state_root": "0xeb0bc9abc2100717ad621e4146ba0fe9951e115d533332d2b94a067f51a39f51",
+                "body": {
+                    "attestations": {
+                        "data": []
+                    }
+                }
+            }
+        ],
+        "post": {
+            "slot": 100
+        },
+        "_info": {
+            "hash": "0xe44bfd7f4e4d8b47ae4f18f92aefbf9636b87a7ea0c8a7e4aa670b592643cc0c",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/state_transition/test_block_processing.py::test_block_at_large_slot_number[fork_Devnet]",
+            "description": "Test block processing at high slot numbers.\n\nScenario\n--------\nJump directly from genesis to slot 100, simulating:\n- Network bootstrap after long downtime\n- Test environment with artificial time jump\n- Integer overflow boundary testing\n\nExpected Behavior\n-----------------\n1. Process 99 empty slots: 1\u21922\u2192...\u219299\u2192100\n2. Block at slot 100 processes correctly\n3. No integer overflow or wraparound\n4. State remains consistent",
+            "fixtureFormat": "state_transition_test"
+        }
+    }
+}

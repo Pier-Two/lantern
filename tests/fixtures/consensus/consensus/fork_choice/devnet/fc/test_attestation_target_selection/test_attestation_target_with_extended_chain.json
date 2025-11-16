@@ -1,0 +1,227 @@
+{
+    "tests/consensus/devnet/fc/test_attestation_target_selection.py::test_attestation_target_with_extended_chain[fork_Devnet][fork_Devnet-fork_choice_test]": {
+        "network": "Devnet",
+        "anchorState": {
+            "config": {
+                "genesisTime": 0
+            },
+            "slot": 0,
+            "latestBlockHeader": {
+                "slot": 0,
+                "proposerIndex": 0,
+                "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "bodyRoot": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
+            },
+            "latestJustified": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "latestFinalized": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "historicalBlockHashes": {
+                "data": []
+            },
+            "justifiedSlots": {
+                "data": []
+            },
+            "validators": {
+                "data": [
+                    {
+                        "pubkey": "0x8ea1ce003e2a5a7985402c48950af130b876c322891f8721fee78e467fbb55282888074c74dd14023b408405bc540f4620b3f249"
+                    },
+                    {
+                        "pubkey": "0x9cc5383b37f40f5713e234145abf247763900959d5f66300fde8e06d1b0abc3643a6485fe4a71c64d34cac3d201c38170e4e0d59"
+                    },
+                    {
+                        "pubkey": "0xbe6e8c648ea4253ed172da0f40532e01a236da288f8b524b6d165262a460e924b4430c5b894b057cf4d67e088bdec271d5b12721"
+                    },
+                    {
+                        "pubkey": "0x35aae80658fc571894db131391458e194c8f9e738adb3039e732c338578356169135331bef96d43ce02a887c63cf9a6068209732"
+                    }
+                ]
+            },
+            "justificationsRoots": {
+                "data": []
+            },
+            "justificationsValidators": {
+                "data": []
+            }
+        },
+        "anchorBlock": {
+            "slot": 0,
+            "proposerIndex": 0,
+            "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "stateRoot": "0x46dec84529be7412f0adbe7a577187a35ac33584be4ef8608c182ebd6476be49",
+            "body": {
+                "attestations": {
+                    "data": []
+                }
+            }
+        },
+        "steps": [
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 1,
+                    "attestationTargetSlot": 0
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 1,
+                    "proposer_index": 1,
+                    "parent_root": "0xdd922597526bfe424da275630d9d31b7c9e0c672206c4196107fcd65737a7673",
+                    "state_root": "0x171b7d4f80068afbd8e9877441444bd381499961984009c72b1e8c9794448ab0",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 2,
+                    "attestationTargetSlot": 0
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 2,
+                    "proposer_index": 2,
+                    "parent_root": "0xb3edc4511738ab98f078b6869b8f19d30302f309f02457d4a2e054dedcd2517d",
+                    "state_root": "0xe475b1d1600830782917568e386eec07618ee0033fc5b14a2860f456e6259cdc",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 3,
+                    "attestationTargetSlot": 0
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 3,
+                    "proposer_index": 3,
+                    "parent_root": "0x9e31e3b47ee2690dabfb175ce43805dd74fc41aab2d24f6ec64da96eb4147921",
+                    "state_root": "0x5607d1cfaefeb8733e423c0336edcd7eb3ab3b3ebb681926f428431eb5212ea5",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 4,
+                    "attestationTargetSlot": 1
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 4,
+                    "proposer_index": 0,
+                    "parent_root": "0x85123a9611f02841fb85d281c489bebbc5d94c6595dea04563f793b0729ae977",
+                    "state_root": "0x4e6b5b4cc8c8e4c73fe7b0af44b6f51545fb4607de4ba84ed7b423c3c4ad1278",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 5,
+                    "attestationTargetSlot": 2
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 5,
+                    "proposer_index": 1,
+                    "parent_root": "0x1b9358afa09d88f0be4687205126033eaaa8c90634e766228b5906292946ee44",
+                    "state_root": "0x5cbe6f5b134c722b581ac4d7d39b5b4bd9d9b8ea914fdf20d3e4b96cdf4180ec",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 6,
+                    "attestationTargetSlot": 3
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 6,
+                    "proposer_index": 2,
+                    "parent_root": "0x53fe0f6d6207080b216aec6a8fbb24227b7e620ce65ed6f2797c6fb44a180e59",
+                    "state_root": "0x4d139a410747526458cb099e26a05f3b5472c9104dc82da36cbf398d8dafd7fa",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 7,
+                    "attestationTargetSlot": 4
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 7,
+                    "proposer_index": 3,
+                    "parent_root": "0x2a9a930b86c7e757f9ce185af1d4a825b8525b61d6a6881d7c136619793b492b",
+                    "state_root": "0xc6ace9e6a5a579d5d111acd4d3d69a7920ac4e1223b9b6e5a5fe91118e51fd88",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 8,
+                    "attestationTargetSlot": 5
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 8,
+                    "proposer_index": 0,
+                    "parent_root": "0x794378c57706a3a20227b940426bcdd46a1bedac6044cd88d54e463cb2af113b",
+                    "state_root": "0x9c6e575e7f967f32250ffbdf3e91688aa2b8921eca56fa2743e1318b270cee78",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            }
+        ],
+        "maxSlot": 8,
+        "_info": {
+            "hash": "0xd8d3938e5805a057963f91dea9da8cb5ea89e9dcf0dafcb7689328ec645e7f07",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/fc/test_attestation_target_selection.py::test_attestation_target_with_extended_chain[fork_Devnet]",
+            "description": "Attestation target advances progressively over extended chain.\n\nScenario\n--------\nBuild a longer chain (slots 1-8) observing target advancement pattern.\n\nExpected:\n    - Initial slots: target at genesis (conservative)\n    - Middle slots: target advances to slot 1\n    - Target advances gradually, not jumping to head\n\nWhy This Matters\n----------------\nOver extended chains, the target selection should show smooth,\ngradual advancement as attestation weight accumulates.\n\nThe target lags behind the head, providing a stable reference point that\nadvances only when sufficient consensus has formed. This prevents validators\nfrom attesting too far ahead without adequate safety guarantees.",
+            "fixtureFormat": "fork_choice_test"
+        }
+    }
+}

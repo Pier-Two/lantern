@@ -1,0 +1,100 @@
+{
+    "tests/consensus/devnet/state_transition/test_genesis.py::test_genesis_custom_validator_set[fork_Devnet][fork_Devnet-state_transition_test]": {
+        "network": "Devnet",
+        "pre": {
+            "config": {
+                "genesisTime": 0
+            },
+            "slot": 0,
+            "latestBlockHeader": {
+                "slot": 0,
+                "proposerIndex": 0,
+                "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "bodyRoot": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
+            },
+            "latestJustified": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "latestFinalized": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "historicalBlockHashes": {
+                "data": []
+            },
+            "justifiedSlots": {
+                "data": []
+            },
+            "validators": {
+                "data": [
+                    {
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    {
+                        "pubkey": "0x01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
+                    },
+                    {
+                        "pubkey": "0x02020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202"
+                    },
+                    {
+                        "pubkey": "0x03030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303"
+                    },
+                    {
+                        "pubkey": "0x04040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404"
+                    },
+                    {
+                        "pubkey": "0x05050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505"
+                    },
+                    {
+                        "pubkey": "0x06060606060606060606060606060606060606060606060606060606060606060606060606060606060606060606060606060606"
+                    },
+                    {
+                        "pubkey": "0x07070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707070707"
+                    }
+                ]
+            },
+            "justificationsRoots": {
+                "data": []
+            },
+            "justificationsValidators": {
+                "data": []
+            }
+        },
+        "blocks": [],
+        "post": {
+            "slot": 0,
+            "latestJustifiedSlot": 0,
+            "latestJustifiedRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "latestFinalizedSlot": 0,
+            "latestFinalizedRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "validatorCount": 8,
+            "configGenesisTime": 0,
+            "latestBlockHeaderSlot": 0,
+            "latestBlockHeaderProposerIndex": 0,
+            "latestBlockHeaderParentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "latestBlockHeaderStateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "latestBlockHeaderBodyRoot": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136",
+            "historicalBlockHashes": {
+                "data": []
+            },
+            "justifiedSlots": {
+                "data": []
+            },
+            "justificationsRoots": {
+                "data": []
+            },
+            "justificationsValidators": {
+                "data": []
+            }
+        },
+        "_info": {
+            "hash": "0x569ddd11491a1b410a2482e12b1c891fc8f3b571809c9f5a70a07da9b5d47f97",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/state_transition/test_genesis.py::test_genesis_custom_validator_set[fork_Devnet]",
+            "description": "Test genesis state with custom validator set.\n\nScenario\n--------\nGenerate a genesis state with:\n- 8 validators instead of default 4\n- Custom validator pubkeys\n\nExpected Behavior\n-----------------\nGenesis state should contain exactly 8 validators while\nmaintaining all other genesis properties.",
+            "fixtureFormat": "state_transition_test"
+        }
+    }
+}

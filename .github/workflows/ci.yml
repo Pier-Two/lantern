@@ -42,12 +42,6 @@ jobs:
           uv python install 3.12
           uv sync
 
-      - name: Generate consensus fixtures
-        run: ./scripts/fixtures/fill_consensus_fixtures.sh
-
-      - name: Generate genesis fixtures
-        run: ./scripts/fixtures/fill_genesis_fixtures.sh
-
       - name: Generate networking fixtures
         run: uv run --directory tools/leanSpec python ../../scripts/fixtures/generate_networking_ssz.py
 
