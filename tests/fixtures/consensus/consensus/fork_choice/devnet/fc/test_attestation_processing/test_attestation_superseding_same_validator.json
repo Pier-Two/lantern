@@ -1,0 +1,130 @@
+{
+    "tests/consensus/devnet/fc/test_attestation_processing.py::test_attestation_superseding_same_validator[fork_Devnet][fork_Devnet-fork_choice_test]": {
+        "network": "Devnet",
+        "anchorState": {
+            "config": {
+                "genesisTime": 0
+            },
+            "slot": 0,
+            "latestBlockHeader": {
+                "slot": 0,
+                "proposerIndex": 0,
+                "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "bodyRoot": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
+            },
+            "latestJustified": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "latestFinalized": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "historicalBlockHashes": {
+                "data": []
+            },
+            "justifiedSlots": {
+                "data": []
+            },
+            "validators": {
+                "data": [
+                    {
+                        "pubkey": "0x8ea1ce003e2a5a7985402c48950af130b876c322891f8721fee78e467fbb55282888074c74dd14023b408405bc540f4620b3f249"
+                    },
+                    {
+                        "pubkey": "0x9cc5383b37f40f5713e234145abf247763900959d5f66300fde8e06d1b0abc3643a6485fe4a71c64d34cac3d201c38170e4e0d59"
+                    },
+                    {
+                        "pubkey": "0xbe6e8c648ea4253ed172da0f40532e01a236da288f8b524b6d165262a460e924b4430c5b894b057cf4d67e088bdec271d5b12721"
+                    },
+                    {
+                        "pubkey": "0x35aae80658fc571894db131391458e194c8f9e738adb3039e732c338578356169135331bef96d43ce02a887c63cf9a6068209732"
+                    }
+                ]
+            },
+            "justificationsRoots": {
+                "data": []
+            },
+            "justificationsValidators": {
+                "data": []
+            }
+        },
+        "anchorBlock": {
+            "slot": 0,
+            "proposerIndex": 0,
+            "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "stateRoot": "0x46dec84529be7412f0adbe7a577187a35ac33584be4ef8608c182ebd6476be49",
+            "body": {
+                "attestations": {
+                    "data": []
+                }
+            }
+        },
+        "steps": [
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 1,
+                    "attestationChecks": [
+                        {
+                            "validator": 1,
+                            "attestationSlot": 1,
+                            "headSlot": 1,
+                            "sourceSlot": 0,
+                            "targetSlot": 1,
+                            "location": "new"
+                        }
+                    ]
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 1,
+                    "proposer_index": 1,
+                    "parent_root": "0xdd922597526bfe424da275630d9d31b7c9e0c672206c4196107fcd65737a7673",
+                    "state_root": "0x171b7d4f80068afbd8e9877441444bd381499961984009c72b1e8c9794448ab0",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 5,
+                    "attestationChecks": [
+                        {
+                            "validator": 1,
+                            "attestationSlot": 5,
+                            "headSlot": 5,
+                            "targetSlot": 5,
+                            "location": "new"
+                        }
+                    ]
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 5,
+                    "proposer_index": 1,
+                    "parent_root": "0xb3edc4511738ab98f078b6869b8f19d30302f309f02457d4a2e054dedcd2517d",
+                    "state_root": "0xb4a55ecf481e77096fd59ad8bce578a48fd8280692a32912954440b4b9f91137",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            }
+        ],
+        "maxSlot": 5,
+        "_info": {
+            "hash": "0xa1ccb0dde466f9f79dc220adde20775ee6aa056a7954c510eddc233daa24ff13",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/fc/test_attestation_processing.py::test_attestation_superseding_same_validator[fork_Devnet]",
+            "description": "Newer attestation from same validator supersedes older attestation.\n\nScenario\n--------\nProcess blocks at slots 1 and 5 (same proposer: validator 1).\n\nExpected:\n    - After slot 1: validator 1 attests to slot 1\n    - After slot 5: validator 1 attests to slot 5 (supersedes slot 1)\n\nWhy This Matters\n----------------\nWith round-robin proposer selection, slots 1 and 5 use the same validator.\n\nWhen that validator proposes again, their newer attestation supersedes the older one.\nBoth dictionaries are keyed by validator index, so only the most recent\nattestation per validator is retained.\n\nKey insight: Attestations accumulate across validators but supersede within validators.",
+            "fixtureFormat": "fork_choice_test"
+        }
+    }
+}

@@ -33,7 +33,6 @@ struct state_profile_metric {
 struct target_vote_counter {
     LanternCheckpoint target;
     LanternCheckpoint consecutive_source;
-    size_t votes;
     bool has_consecutive_source;
 };
 
@@ -66,6 +65,8 @@ static void record_attestation_validation_metric(double start_seconds, bool vali
     lean_metrics_record_attestation_validation(lantern_time_now_seconds() - start_seconds, valid);
 }
 
+static bool lantern_checkpoint_equal(const LanternCheckpoint *a, const LanternCheckpoint *b);
+
 static struct target_vote_counter *target_vote_counter_find(
     struct target_vote_counter *counters,
     size_t counter_len,
@@ -92,7 +93,6 @@ static int lantern_state_append_historical_root(LanternState *state, const Lante
 static int lantern_state_set_justified_slot_bit(LanternState *state, uint64_t slot, bool value);
 bool lantern_state_slot_in_justified_window(const LanternState *state, uint64_t slot);
 int lantern_state_get_justified_slot_bit(const LanternState *state, uint64_t slot, bool *out_value);
-static bool lantern_checkpoint_equal(const LanternCheckpoint *a, const LanternCheckpoint *b);
 static bool attestation_list_contains_validator(const LanternAttestations *list, uint64_t validator_id);
 static int collect_attestations_for_checkpoint(
     const LanternState *state,
@@ -1256,7 +1256,6 @@ static int lantern_state_process_attestations_internal(
     if (!state->validator_votes || state->validator_votes_len != validator_count) {
         return -1;
     }
-    const size_t quorum = lantern_quorum_threshold(validator_count_u64);
     if (attestations->length > LANTERN_MAX_ATTESTATIONS) {
         return -1;
     }
@@ -1372,14 +1371,13 @@ static int lantern_state_process_attestations_internal(
             memset(counter, 0, sizeof(*counter));
             counter->target = vote->target;
         }
-        counter->votes += 1;
         if (vote->source.slot + 1u == vote->target.slot) {
             counter->has_consecutive_source = true;
             counter->consecutive_source = vote->source;
         }
 
         bool target_now_justified = target_is_justified;
-        if (!target_now_justified && counter->votes >= quorum) {
+        if (!target_now_justified) {
             if (lantern_state_mark_justified_slot(state, vote->target.slot) != 0) {
                 record_attestation_validation_metric(att_validation_start, false);
                 return -1;
@@ -1393,7 +1391,7 @@ static int lantern_state_process_attestations_internal(
             }
         }
 
-        if (target_now_justified && counter->votes >= quorum && counter->has_consecutive_source) {
+        if (target_now_justified && counter->has_consecutive_source) {
             if (
                 counter->consecutive_source.slot + 1u == counter->target.slot
                 && latest_finalized.slot < counter->consecutive_source.slot) {

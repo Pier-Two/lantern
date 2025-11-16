@@ -68,7 +68,6 @@ function(_lantern_define_c_hash_sig target_name source_dir)
         OUTPUT "${c_hash_sig_output}"
         COMMAND "${CARGO_EXECUTABLE}" build --release
         WORKING_DIRECTORY "${source_dir}"
-        BYPRODUCTS "${c_hash_sig_output}"
         DEPENDS "${source_dir}/Cargo.toml" "${source_dir}/Cargo.lock" "${source_dir}/src/lib.rs"
         COMMENT "Building c-hash-sig Rust bindings"
         VERBATIM
@@ -117,6 +116,14 @@ function(lantern_configure_dependencies target)
             endif()
             set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries" FORCE)
             set(ENABLE_COVERAGE OFF CACHE BOOL "Disable coverage when building c-libp2p as a dependency" FORCE)
+            if(DEFINED CMAKE_POSITION_INDEPENDENT_CODE)
+                set(_lantern_had_pic TRUE)
+                set(_lantern_prev_pic "${CMAKE_POSITION_INDEPENDENT_CODE}")
+            else()
+                set(_lantern_had_pic FALSE)
+                set(_lantern_prev_pic "")
+            endif()
+            set(CMAKE_POSITION_INDEPENDENT_CODE ON)
             set(_saved_fetchcontent_basedir "${FETCHCONTENT_BASE_DIR}")
             set(FETCHCONTENT_BASE_DIR ${CMAKE_BINARY_DIR}/c-libp2p/_deps)
             add_subdirectory(${libp2p_source_dir} ${CMAKE_BINARY_DIR}/c-libp2p EXCLUDE_FROM_ALL)
@@ -127,9 +134,18 @@ function(lantern_configure_dependencies target)
             else()
                 unset(BUILD_SHARED_LIBS CACHE)
             endif()
+            if(_lantern_had_pic)
+                set(CMAKE_POSITION_INDEPENDENT_CODE "${_lantern_prev_pic}")
+            else()
+                unset(CMAKE_POSITION_INDEPENDENT_CODE)
+            endif()
             if(TARGET libtomcrypt)
                 target_include_directories(libtomcrypt PRIVATE ${libp2p_source_dir}/external/libtommath)
                 target_include_directories(libtomcrypt PRIVATE ${libp2p_source_dir}/external/libtomcrypt/src/headers)
+            endif()
+            if(TARGET secp256k1)
+                # The shared libp2p peer-id target links against secp256k1; force PIC to avoid linker failures on Linux.
+                set_target_properties(secp256k1 PROPERTIES POSITION_INDEPENDENT_CODE ON)
             endif()
             if(TARGET libp2p_unified)
                 target_include_directories(libp2p_unified PUBLIC ${libp2p_source_dir})

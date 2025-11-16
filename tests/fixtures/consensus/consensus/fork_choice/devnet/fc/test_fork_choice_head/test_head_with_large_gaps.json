@@ -1,0 +1,147 @@
+{
+    "tests/consensus/devnet/fc/test_fork_choice_head.py::test_head_with_large_gaps[fork_Devnet][fork_Devnet-fork_choice_test]": {
+        "network": "Devnet",
+        "anchorState": {
+            "config": {
+                "genesisTime": 0
+            },
+            "slot": 0,
+            "latestBlockHeader": {
+                "slot": 0,
+                "proposerIndex": 0,
+                "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "bodyRoot": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
+            },
+            "latestJustified": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "latestFinalized": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "historicalBlockHashes": {
+                "data": []
+            },
+            "justifiedSlots": {
+                "data": []
+            },
+            "validators": {
+                "data": [
+                    {
+                        "pubkey": "0x0b6e98494092a96f6e02143387fa1071c7ddf846a8cfc31abd16f91ccd1bdb6e6e070f16cc39e307c495991828b2b639662c3d2d"
+                    },
+                    {
+                        "pubkey": "0xdabdbc5f0274dc753f26a552940f796397bbcc59dbe7ac2bd9a1a17e7c8f18519ed8b7648070b90ec3d40e3ef8d76a3a82540179"
+                    },
+                    {
+                        "pubkey": "0x51706b1743c02c5a2c34a3653422294bec195a363d18c83c5a9f6b5dbe9c3a3eb331576398d8cf607b0264091d6cf10ecc9c7203"
+                    },
+                    {
+                        "pubkey": "0xfe29c956f80d7d709da5fd2907ad901b710dda15fcb82d6a4243671648da560647706a3d44c83343626801321ea0a556d16bad32"
+                    }
+                ]
+            },
+            "justificationsRoots": {
+                "data": []
+            },
+            "justificationsValidators": {
+                "data": []
+            }
+        },
+        "anchorBlock": {
+            "slot": 0,
+            "proposerIndex": 0,
+            "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "stateRoot": "0x84b76e4f48617778448e80a7bde86234e1f3d42f885a34487fcc5538802ccd89",
+            "body": {
+                "attestations": {
+                    "data": []
+                }
+            }
+        },
+        "steps": [
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 1
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 1,
+                    "proposer_index": 1,
+                    "parent_root": "0x68c843698b820972110c3847371b2d5ae703ba1d021f740edd9f9da0ad0a56b8",
+                    "state_root": "0xf72330864457220f06b2e64484cb5693a00c565ebff1c06d5bbdaa35a816fafe",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 10
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 10,
+                    "proposer_index": 2,
+                    "parent_root": "0x3b7169ed5794a0e8151681805a27b532e9270aae95baf798e97c3002d7c6b677",
+                    "state_root": "0xea555ceefaf8907c644fd5f31a4c2d246e8e2ffe625310a524ffcfa01c07e176",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 20
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 20,
+                    "proposer_index": 0,
+                    "parent_root": "0x4cfd428d22a759cd47eabba06a0f4b358c83aaab5a4af8bbb25186e22c5eeec4",
+                    "state_root": "0x97590f14265aa03d2d7094479fe720227675523862bbbdc2b7136cecc457819b",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 30
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 30,
+                    "proposer_index": 2,
+                    "parent_root": "0xdbb8439916cafdec5d572903b546c7ba1b658f63672e8b26a0b6e4b0e313c73e",
+                    "state_root": "0xa928e557019af46cf9a833554ec2f9e8787ee8844d4e581efb9f73cae749f2de",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                }
+            }
+        ],
+        "maxSlot": 30,
+        "_info": {
+            "hash": "0x5c85cc98a311af3f57e522b705154da71f0d8b1a3e5a39864ac4dd749f34f2b7",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/fc/test_fork_choice_head.py::test_head_with_large_gaps[fork_Devnet]",
+            "description": "Fork choice head handles large gaps between blocks.\n\nScenario\n--------\nBuild blocks at slots 1, 10, 20, 30 (gaps of 9-10 slots).\n\nExpected Behavior:\n    - Head advances despite large gaps\n    - Fork choice is gap-size independent\n    - Head reaches the furthest block\n\nWhy This Matters\n----------------\nLarge gaps can occur during:\n- Extended network partitions\n- Chain reorganizations\n- Periods of high validator downtime\n- Initial sync after being offline\n\nThe fork choice algorithm must remain correct regardless of gap size.\nDistance between blocks should not affect the correctness of head selection -\nonly the tree structure matters.\n\nThis test verifies that even with dramatic gaps (representing severe network\nconditions), fork choice still identifies the correct head.",
+            "fixtureFormat": "fork_choice_test"
+        }
+    }
+}

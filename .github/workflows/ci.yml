@@ -25,11 +25,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config
 
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Bootstrap submodules
         run: ./scripts/bootstrap.sh
+
+      - name: Sync LeanSpec environment
+        working-directory: tools/leanSpec
+        run: |
+          uv python install 3.12
+          uv sync
+
+      - name: Generate networking fixtures
+        run: uv run --directory tools/leanSpec python ../../scripts/fixtures/generate_networking_ssz.py
 
       - name: Configure (CMake)
         run: cmake -S . -B build -GNinja -DLANTERN_BUILD_TESTS=ON
