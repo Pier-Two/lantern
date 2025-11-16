@@ -1376,13 +1376,13 @@ static int lantern_state_process_attestations_internal(
             counter->consecutive_source = vote->source;
         }
 
-        bool target_now_justified = target_is_justified;
-        if (!target_now_justified) {
+        bool target_was_justified = target_is_justified;
+        if (!target_is_justified) {
             if (lantern_state_mark_justified_slot(state, vote->target.slot) != 0) {
                 record_attestation_validation_metric(att_validation_start, false);
                 return -1;
             }
-            target_now_justified = true;
+            target_is_justified = true;
             if (vote->target.slot > latest_justified.slot) {
                 latest_justified = vote->target;
             }
@@ -1391,10 +1391,11 @@ static int lantern_state_process_attestations_internal(
             }
         }
 
-        if (target_now_justified && counter->has_consecutive_source) {
+        if (target_was_justified && counter->has_consecutive_source) {
             if (
                 counter->consecutive_source.slot + 1u == counter->target.slot
-                && latest_finalized.slot < counter->consecutive_source.slot) {
+                && latest_finalized.slot < counter->consecutive_source.slot
+                && latest_justified.slot < counter->target.slot) {
                 latest_finalized = counter->consecutive_source;
                 if (counter->target.slot > latest_justified.slot) {
                     latest_justified = counter->target;
