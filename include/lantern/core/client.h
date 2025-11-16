@@ -18,88 +18,17 @@
 #include "lantern/networking/reqresp_service.h"
 #include "lantern/support/string_list.h"
 
+#include "lantern/core/client/options.h"
+#include "lantern/core/client/types.h"
 #include "pq-bindings-c-rust.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define LANTERN_DEFAULT_DATA_DIR "./data"
-#define LANTERN_DEFAULT_GENESIS_CONFIG "./genesis/config.yaml"
-#define LANTERN_DEFAULT_VALIDATOR_REGISTRY "./genesis/validators.yaml"
-#define LANTERN_DEFAULT_NODES_FILE "./genesis/nodes.yaml"
-#define LANTERN_DEFAULT_GENESIS_STATE "./genesis/genesis.ssz"
-#define LANTERN_DEFAULT_VALIDATOR_CONFIG "./genesis/validator-config.yaml"
-#define LANTERN_DEFAULT_NODE_ID "lantern_0"
-#define LANTERN_DEFAULT_LISTEN_ADDR "/ip4/0.0.0.0/udp/9000/quic-v1"
-#define LANTERN_DEFAULT_HTTP_PORT 5052
-#define LANTERN_DEFAULT_METRICS_PORT 8080
-#define LANTERN_DEFAULT_DEVNET "devnet"
-
-struct lantern_client_options {
-    const char *data_dir;
-    const char *genesis_config_path;
-    const char *validator_registry_path;
-    const char *nodes_path;
-    const char *genesis_state_path;
-    const char *validator_config_path;
-    const char *node_id;
-    const char *node_key_hex;
-    const char *node_key_path;
-    const char *listen_address;
-    uint16_t http_port;
-    uint16_t metrics_port;
-    const char *devnet;
-    struct lantern_string_list bootnodes;
-    const char *hash_sig_key_dir;
-    const char *hash_sig_public_path;
-    const char *hash_sig_secret_path;
-    const char *hash_sig_public_template;
-    const char *hash_sig_secret_template;
-};
-
 struct libp2p_subscription;
 struct libp2p_protocol_server;
 struct lantern_peer_status_entry;
-struct lantern_pending_block {
-    LanternSignedBlock block;
-    LanternRoot root;
-    LanternRoot parent_root;
-    char peer_text[128];
-    bool parent_requested;
-};
-
-struct lantern_pending_block_list {
-    struct lantern_pending_block *items;
-    size_t length;
-    size_t capacity;
-};
-
-struct lantern_validator_duty_state {
-    uint64_t last_slot;
-    uint32_t last_interval;
-    bool have_timepoint;
-    bool slot_proposed;
-    bool slot_attested;
-    bool pending_local_proposal;
-    uint64_t pending_local_index;
-    bool proposal_signal_pending;
-};
-
-struct lantern_local_validator {
-    uint64_t global_index;
-    const struct lantern_validator_record *registry;
-    uint8_t *secret;
-    size_t secret_len;
-    bool has_secret;
-    struct PQSignatureSchemeSecretKey *secret_key;
-    bool has_secret_handle;
-    uint64_t last_proposed_slot;
-    uint64_t last_attested_slot;
-    LanternSignedVote pending_attestation;
-    uint64_t pending_attestation_slot;
-    bool has_pending_attestation;
-};
 
 struct lantern_client {
     char *data_dir;
@@ -174,10 +103,6 @@ struct lantern_client {
     char *hash_sig_public_path;
     char *hash_sig_secret_path;
 };
-
-void lantern_client_options_init(struct lantern_client_options *options);
-void lantern_client_options_free(struct lantern_client_options *options);
-int lantern_client_options_add_bootnode(struct lantern_client_options *options, const char *bootnode);
 
 int lantern_init(struct lantern_client *client, const struct lantern_client_options *options);
 void lantern_shutdown(struct lantern_client *client);

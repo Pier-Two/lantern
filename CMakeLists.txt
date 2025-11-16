@@ -36,6 +36,10 @@ add_library(lantern STATIC
     src/consensus/state.c
     src/consensus/ssz.c
     src/core/client.c
+    src/core/client/common.c
+    src/core/client/http_handlers.c
+    src/core/client/options.c
+    src/core/client/validator_service.c
     src/genesis/genesis.c
     src/encoding/snappy.c
     src/networking/enr.c
