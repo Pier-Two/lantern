@@ -182,16 +182,21 @@ def describe_fixture(name: str, values: Sequence[str]) -> None:
 
 
 GOSSIP_SNAPPY_ENV = "LANTERN_GOSSIP_SNAPPY"
+GOSSIP_BUILD_SUBDIR = "gossip_snappy"
 
 
 def _maybe_build_gossip_tool(repo_root: Path, build_dir: Path, target_name: str) -> None:
     cmake = shutil.which("cmake")
     if not cmake:
-        return
+        raise FileNotFoundError("cmake is required to build lantern_generate_gossip_snappy")
     cache = build_dir / "CMakeCache.txt"
+    cmake_cmd = [cmake, "-S", str(repo_root), "-B", str(build_dir)]
+    generator = os.environ.get("CMAKE_GENERATOR")
+    if generator:
+        cmake_cmd.extend(["-G", generator])
     if not cache.exists():
         build_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.run([cmake, "-S", str(repo_root), "-B", str(build_dir)], check=True)
+        subprocess.run(cmake_cmd, check=True)
     subprocess.run([cmake, "--build", str(build_dir), "--target", target_name], check=True)
 
 
@@ -201,17 +206,20 @@ def _resolve_gossip_tool(repo_root: Path) -> Path:
     if env_path:
         candidates.append(Path(env_path))
     build_dir = repo_root / "build"
+    alt_build_dir = build_dir / GOSSIP_BUILD_SUBDIR
     candidates.extend(
         [
             build_dir / "lantern_generate_gossip_snappy",
             build_dir / "lantern_generate_gossip_snappy.exe",
+            alt_build_dir / "lantern_generate_gossip_snappy",
+            alt_build_dir / "lantern_generate_gossip_snappy.exe",
         ]
     )
     for candidate in candidates:
         if candidate.exists():
             return candidate
 
-    _maybe_build_gossip_tool(repo_root, build_dir, "lantern_generate_gossip_snappy")
+    _maybe_build_gossip_tool(repo_root, alt_build_dir, "lantern_generate_gossip_snappy")
 
     for candidate in candidates:
         if candidate.exists():
@@ -220,8 +228,8 @@ def _resolve_gossip_tool(repo_root: Path) -> Path:
     pretty_candidates = ", ".join(str(path) for path in candidates)
     raise FileNotFoundError(
         f"Unable to locate lantern_generate_gossip_snappy. Checked: {pretty_candidates}. "
-        f"Set {GOSSIP_SNAPPY_ENV} to the executable path or run `cmake --build build --target "
-        "lantern_generate_gossip_snappy` first."
+        f"Set {GOSSIP_SNAPPY_ENV} to the executable path or let the script build it by ensuring "
+        "CMake is available."
     )
 
 
