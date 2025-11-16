@@ -308,7 +308,6 @@ if(LANTERN_BUILD_TESTS)
         lantern_enr
         lantern_ssz
         lantern_duties
-        lantern_signature
         lantern_consensus_runtime
         lantern_state
         lantern_slot_clock
