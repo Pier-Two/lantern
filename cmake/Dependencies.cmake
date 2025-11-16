@@ -68,7 +68,6 @@ function(_lantern_define_c_hash_sig target_name source_dir)
         OUTPUT "${c_hash_sig_output}"
         COMMAND "${CARGO_EXECUTABLE}" build --release
         WORKING_DIRECTORY "${source_dir}"
-        BYPRODUCTS "${c_hash_sig_output}"
         DEPENDS "${source_dir}/Cargo.toml" "${source_dir}/Cargo.lock" "${source_dir}/src/lib.rs"
         COMMENT "Building c-hash-sig Rust bindings"
         VERBATIM
