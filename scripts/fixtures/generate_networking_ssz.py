@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import subprocess
+import os
+import shutil
 from pathlib import Path
 from typing import Sequence
 
@@ -179,17 +181,57 @@ def describe_fixture(name: str, values: Sequence[str]) -> None:
     print(f"wrote {name}: {summary}")
 
 
+GOSSIP_SNAPPY_ENV = "LANTERN_GOSSIP_SNAPPY"
+
+
+def _maybe_build_gossip_tool(repo_root: Path, build_dir: Path, target_name: str) -> None:
+    cmake = shutil.which("cmake")
+    if not cmake:
+        return
+    cache = build_dir / "CMakeCache.txt"
+    if not cache.exists():
+        build_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run([cmake, "-S", str(repo_root), "-B", str(build_dir)], check=True)
+    subprocess.run([cmake, "--build", str(build_dir), "--target", target_name], check=True)
+
+
+def _resolve_gossip_tool(repo_root: Path) -> Path:
+    env_path = os.environ.get(GOSSIP_SNAPPY_ENV)
+    candidates: list[Path] = []
+    if env_path:
+        candidates.append(Path(env_path))
+    build_dir = repo_root / "build"
+    candidates.extend(
+        [
+            build_dir / "lantern_generate_gossip_snappy",
+            build_dir / "lantern_generate_gossip_snappy.exe",
+        ]
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    _maybe_build_gossip_tool(repo_root, build_dir, "lantern_generate_gossip_snappy")
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    pretty_candidates = ", ".join(str(path) for path in candidates)
+    raise FileNotFoundError(
+        f"Unable to locate lantern_generate_gossip_snappy. Checked: {pretty_candidates}. "
+        f"Set {GOSSIP_SNAPPY_ENV} to the executable path or run `cmake --build build --target "
+        "lantern_generate_gossip_snappy` first."
+    )
+
+
 def encode_gossip_fixture(
     repo_root: Path,
     kind: str,
     ssz_path: Path,
     snappy_path: Path,
 ) -> None:
-    tool = repo_root / "build" / "lantern_generate_gossip_snappy"
-    if not tool.exists():
-        raise FileNotFoundError(
-            f"{tool} not found. Build it via `cmake --build build --target lantern_generate_gossip_snappy`.",
-        )
+    tool = _resolve_gossip_tool(repo_root)
     snappy_path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [str(tool), kind, str(ssz_path), str(snappy_path)],
