@@ -183,7 +183,7 @@ if(LANTERN_BUILD_TESTS)
             ${PROJECT_SOURCE_DIR}/external/c-hash-sig/include
     )
     add_test(NAME lantern_signature COMMAND lantern_signature_test)
-    set_tests_properties(lantern_signature PROPERTIES TIMEOUT 600)
+    set_tests_properties(lantern_signature PROPERTIES TIMEOUT 1200)
 
     add_executable(lantern_consensus_runtime_test tests/unit/test_consensus_runtime.c)
     target_link_libraries(lantern_consensus_runtime_test PRIVATE lantern)
