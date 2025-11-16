@@ -1335,73 +1335,160 @@ static void *blocks_worker(void *arg) {
     }
 
     size_t block_count = response.length;
-    size_t buffer_capacity = 4096;
-    uint8_t *buffer = NULL;
-    size_t written = 0;
-    size_t response_raw_len = 0;
-    int encode_rc = -1;
+    const struct lantern_log_metadata meta = {.peer = peer_text};
+    uint8_t *ssz_buffer = NULL;
+    size_t ssz_capacity = 4096u;
+    uint8_t *snappy_buffer = NULL;
+    size_t snappy_capacity = 0;
+    bool response_code_pending = include_response_code;
 
-    for (unsigned attempt = 0; attempt < 8; ++attempt) {
-        uint8_t *resized = (uint8_t *)realloc(buffer, buffer_capacity);
-        if (!resized) {
-            free(buffer);
+    if (block_count == 0) {
+        lantern_log_info(
+            "reqresp",
+            &meta,
+            "blocks_by_root response has zero blocks for peer=%s",
+            peer_text[0] ? peer_text : "-");
+        if (send_response_chunk(
+                stream,
+                &meta,
+                protocol_id,
+                "blocks_by_root response (empty)",
+                peer_text[0] ? peer_text : NULL,
+                response_code_pending,
+                LANTERN_REQRESP_RESPONSE_SUCCESS,
+                NULL,
+                0)
+            != 0) {
             lantern_blocks_by_root_response_reset(&response);
-            log_stream_error("encode", protocol_id, NULL);
+            log_stream_error("write", protocol_id, peer_text[0] ? peer_text : NULL);
+            close_stream(stream);
+            free(ssz_buffer);
+            free(snappy_buffer);
+            return NULL;
+        }
+        response_code_pending = false;
+    }
+
+    for (size_t i = 0; i < block_count; ++i) {
+        const LanternSignedBlock *block = &response.blocks[i];
+        size_t ssz_written = 0;
+        bool encoded = false;
+        for (unsigned attempt = 0; attempt < 8; ++attempt) {
+            if (attempt > 0) {
+                if (ssz_capacity > SIZE_MAX / 2) {
+                    break;
+                }
+                ssz_capacity *= 2u;
+            }
+
+            uint8_t *resized = (uint8_t *)realloc(ssz_buffer, ssz_capacity);
+            if (!resized) {
+                free(ssz_buffer);
+                free(snappy_buffer);
+                lantern_blocks_by_root_response_reset(&response);
+                log_stream_error("encode", protocol_id, peer_text[0] ? peer_text : NULL);
+                close_stream(stream);
+                return NULL;
+            }
+            ssz_buffer = resized;
+
+            if (lantern_ssz_encode_signed_block(block, ssz_buffer, ssz_capacity, &ssz_written) == 0) {
+                encoded = true;
+                break;
+            }
+        }
+        if (!encoded || ssz_written == 0) {
+            free(ssz_buffer);
+            free(snappy_buffer);
+            lantern_blocks_by_root_response_reset(&response);
+            log_stream_error("encode", protocol_id, peer_text[0] ? peer_text : NULL);
             close_stream(stream);
             return NULL;
         }
-        buffer = resized;
 
-        written = 0;
-        response_raw_len = 0;
-        encode_rc = lantern_network_blocks_by_root_response_encode_snappy(
-            &response,
-            buffer,
-            buffer_capacity,
-            &written,
-            &response_raw_len);
-        if (encode_rc == 0) {
-            break;
+        size_t max_compressed = 0;
+        if (lantern_snappy_max_compressed_size(ssz_written, &max_compressed) != LANTERN_SNAPPY_OK
+            || max_compressed == 0) {
+            free(ssz_buffer);
+            free(snappy_buffer);
+            lantern_blocks_by_root_response_reset(&response);
+            log_stream_error("compress", protocol_id, peer_text[0] ? peer_text : NULL);
+            close_stream(stream);
+            return NULL;
         }
-        buffer_capacity *= 2u;
-    }
 
-    lantern_blocks_by_root_response_reset(&response);
+        if (max_compressed > snappy_capacity) {
+            uint8_t *resized = (uint8_t *)realloc(snappy_buffer, max_compressed);
+            if (!resized) {
+                free(ssz_buffer);
+                free(snappy_buffer);
+                lantern_blocks_by_root_response_reset(&response);
+                log_stream_error("compress", protocol_id, peer_text[0] ? peer_text : NULL);
+                close_stream(stream);
+                return NULL;
+            }
+            snappy_buffer = resized;
+            snappy_capacity = max_compressed;
+        }
 
-    if (encode_rc != 0) {
-        free(buffer);
-        log_stream_error("encode", protocol_id, peer_text[0] ? peer_text : NULL);
-        close_stream(stream);
-        return NULL;
-    }
+        size_t compressed_len = 0;
+        if (lantern_snappy_compress(
+                ssz_buffer,
+                ssz_written,
+                snappy_buffer,
+                snappy_capacity,
+                &compressed_len)
+            != LANTERN_SNAPPY_OK) {
+            free(ssz_buffer);
+            free(snappy_buffer);
+            lantern_blocks_by_root_response_reset(&response);
+            log_stream_error("compress", protocol_id, peer_text[0] ? peer_text : NULL);
+            close_stream(stream);
+            return NULL;
+        }
 
-    log_payload_preview("blocks_by_root response raw", peer_text, buffer, written);
-
-    const struct lantern_log_metadata meta = {.peer = peer_text};
-    lantern_log_info(
-        "reqresp",
-        &meta,
-        "blocks_by_root response lengths raw=%zu compressed=%zu",
-        response_raw_len,
-        written);
-
-    if (send_response_chunk(
-            stream,
+        char chunk_label[64];
+        snprintf(
+            chunk_label,
+            sizeof(chunk_label),
+            "blocks_by_root chunk[%zu/%zu]",
+            i + 1,
+            block_count);
+        log_payload_preview(chunk_label, peer_text, snappy_buffer, compressed_len);
+        lantern_log_info(
+            "reqresp",
             &meta,
-            protocol_id,
-            "blocks_by_root response",
-            peer_text[0] ? peer_text : NULL,
-            include_response_code,
-            LANTERN_REQRESP_RESPONSE_SUCCESS,
-            buffer,
-            written)
-        != 0) {
-        free(buffer);
-        log_stream_error("write", protocol_id, peer_text[0] ? peer_text : NULL);
-        close_stream(stream);
-        return NULL;
+            "%s slot=%" PRIu64 " raw=%zu compressed=%zu",
+            chunk_label,
+            block->message.slot,
+            ssz_written,
+            compressed_len);
+
+        bool include_code = response_code_pending;
+        if (send_response_chunk(
+                stream,
+                &meta,
+                protocol_id,
+                chunk_label,
+                peer_text[0] ? peer_text : NULL,
+                include_code,
+                LANTERN_REQRESP_RESPONSE_SUCCESS,
+                snappy_buffer,
+                compressed_len)
+            != 0) {
+            free(ssz_buffer);
+            free(snappy_buffer);
+            lantern_blocks_by_root_response_reset(&response);
+            log_stream_error("write", protocol_id, peer_text[0] ? peer_text : NULL);
+            close_stream(stream);
+            return NULL;
+        }
+        response_code_pending = false;
     }
-    free(buffer);
+
+    free(ssz_buffer);
+    free(snappy_buffer);
+    lantern_blocks_by_root_response_reset(&response);
     close_stream(stream);
 
     lantern_log_info(
