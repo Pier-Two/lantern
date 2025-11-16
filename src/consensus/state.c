@@ -66,6 +66,8 @@ static void record_attestation_validation_metric(double start_seconds, bool vali
     lean_metrics_record_attestation_validation(lantern_time_now_seconds() - start_seconds, valid);
 }
 
+static bool lantern_checkpoint_equal(const LanternCheckpoint *a, const LanternCheckpoint *b);
+
 static struct target_vote_counter *target_vote_counter_find(
     struct target_vote_counter *counters,
     size_t counter_len,
@@ -92,7 +94,6 @@ static int lantern_state_append_historical_root(LanternState *state, const Lante
 static int lantern_state_set_justified_slot_bit(LanternState *state, uint64_t slot, bool value);
 bool lantern_state_slot_in_justified_window(const LanternState *state, uint64_t slot);
 int lantern_state_get_justified_slot_bit(const LanternState *state, uint64_t slot, bool *out_value);
-static bool lantern_checkpoint_equal(const LanternCheckpoint *a, const LanternCheckpoint *b);
 static bool attestation_list_contains_validator(const LanternAttestations *list, uint64_t validator_id);
 static int collect_attestations_for_checkpoint(
     const LanternState *state,
