@@ -30,11 +30,6 @@ struct state_profile_metric {
     size_t calls;
 };
 
-struct target_vote_counter {
-    LanternCheckpoint target;
-    LanternCheckpoint consecutive_source;
-    bool has_consecutive_source;
-};
 
 static bool state_profile_enabled(void) {
     static bool initialized = false;
@@ -66,21 +61,6 @@ static void record_attestation_validation_metric(double start_seconds, bool vali
 }
 
 static bool lantern_checkpoint_equal(const LanternCheckpoint *a, const LanternCheckpoint *b);
-
-static struct target_vote_counter *target_vote_counter_find(
-    struct target_vote_counter *counters,
-    size_t counter_len,
-    const LanternCheckpoint *target) {
-    if (!counters || !target) {
-        return NULL;
-    }
-    for (size_t i = 0; i < counter_len; ++i) {
-        if (lantern_checkpoint_equal(&counters[i].target, target)) {
-            return &counters[i];
-        }
-    }
-    return NULL;
-}
 
 static int lantern_root_list_append(struct lantern_root_list *list, const LanternRoot *root);
 static int lantern_root_list_drop_front(struct lantern_root_list *list, size_t count);
@@ -1082,7 +1062,17 @@ int lantern_state_process_slots(LanternState *state, uint64_t target_slot) {
     if (!state) {
         return -1;
     }
-    if (target_slot < state->slot) {
+    if (target_slot <= state->slot) {
+        const struct lantern_log_metadata meta = {
+            .has_slot = true,
+            .slot = state->slot,
+        };
+        lantern_log_warn(
+            "state",
+            &meta,
+            "process slots target=%" PRIu64 " must be in the future (current=%" PRIu64 ")",
+            target_slot,
+            state->slot);
         return -1;
     }
     while (state->slot < target_slot) {
@@ -1260,9 +1250,6 @@ static int lantern_state_process_attestations_internal(
         return -1;
     }
 
-    struct target_vote_counter vote_counters[LANTERN_MAX_ATTESTATIONS];
-    size_t vote_counter_len = 0;
-
     LanternCheckpoint latest_justified = state->latest_justified;
     LanternCheckpoint latest_finalized = state->latest_finalized;
     const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
@@ -1360,22 +1347,7 @@ static int lantern_state_process_attestations_internal(
             continue;
         }
 
-        struct target_vote_counter *counter =
-            target_vote_counter_find(vote_counters, vote_counter_len, &vote->target);
-        if (!counter) {
-            if (vote_counter_len >= LANTERN_MAX_ATTESTATIONS) {
-                record_attestation_validation_metric(att_validation_start, false);
-                return -1;
-            }
-            counter = &vote_counters[vote_counter_len++];
-            memset(counter, 0, sizeof(*counter));
-            counter->target = vote->target;
-        }
-        if (vote->source.slot + 1u == vote->target.slot) {
-            counter->has_consecutive_source = true;
-            counter->consecutive_source = vote->source;
-        }
-
+        bool vote_has_consecutive_source = vote->source.slot + 1u == vote->target.slot;
         bool target_was_justified = target_is_justified;
         if (!target_is_justified) {
             if (lantern_state_mark_justified_slot(state, vote->target.slot) != 0) {
@@ -1391,19 +1363,19 @@ static int lantern_state_process_attestations_internal(
             }
         }
 
-        if (target_was_justified && counter->has_consecutive_source) {
+        if (target_was_justified && vote_has_consecutive_source) {
             if (
-                counter->consecutive_source.slot + 1u == counter->target.slot
-                && latest_finalized.slot < counter->consecutive_source.slot
-                && latest_justified.slot < counter->target.slot) {
-                latest_finalized = counter->consecutive_source;
-                if (counter->target.slot > latest_justified.slot) {
-                    latest_justified = counter->target;
+                latest_finalized.slot < vote->source.slot
+                && latest_justified.slot < vote->target.slot) {
+                latest_finalized = vote->source;
+                if (vote->target.slot > latest_justified.slot) {
+                    latest_justified = vote->target;
                 }
                 if (debug_hash && debug_hash[0] != '\0') {
                     char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                    if (lantern_bytes_to_hex(
-                            counter->target.root.bytes,
+                    if (
+                        lantern_bytes_to_hex(
+                            vote->target.root.bytes,
                             LANTERN_ROOT_SIZE,
                             target_hex,
                             sizeof(target_hex),
@@ -1413,7 +1385,7 @@ static int lantern_state_process_attestations_internal(
                             "state",
                             &meta,
                             "finalized slot=%" PRIu64 " root=%s",
-                            counter->consecutive_source.slot,
+                            vote->source.slot,
                             target_hex);
                     }
                 }

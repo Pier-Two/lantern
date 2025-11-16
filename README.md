@@ -1,8 +1,6 @@
 # ![Lantern Logo](docs/assets/lantern_logo.svg)
 
-Lantern is a C implementation for Lean consensus. It
-implements gossip, fork-choice, state transition, and storage against the
-Devnet containers defined in [`tools/leanSpec`](../tools/leanSpec).
+Lantern is a C implementation for [`Lean consensus`](../tools/leanSpec).
 
 ## Prerequisites
 
@@ -23,12 +21,6 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-## Logging
-
-Lantern emits structured log lines with color-coded levels (TRACE/DEBUG/INFO/WARN/ERROR) when the output stream is a TTY. Set `LANTERN_LOG_COLOR=always|never|auto` to override the detection.
-
-Libp2p internals are now routed through the Lantern logger and are suppressed unless they are fatal. To inspect verbose libp2p traces, run Lantern with `--log-level trace` (or `LANTERN_LOG_LEVEL=trace`) and the libp2p entries will appear under the `component=libp2p` namespace.
-
 ## Regenerating Fixtures
 
 The consensus JSON and SSZ fixtures live in `tests/fixtures`. To refresh them from LeanSpec, run:
@@ -36,6 +28,15 @@ The consensus JSON and SSZ fixtures live in `tests/fixtures`. To refresh them fr
 ```sh
 ./scripts/fixtures/fill_consensus_fixtures.sh
 ```
+
+Networking fixtures (Status, BlocksByRoot, gossip payloads) come from LeanSpec as well. Build the helper encoder once and regenerate the SSZ + Snappy blobs with:
+
+```sh
+cmake --build build --target lantern_generate_gossip_snappy
+PYTHONPATH=tools/leanSpec/src python3 scripts/fixtures/generate_networking_ssz.py
+```
+
+The helper ensures the Snappy frames exactly match Lantern’s `lantern_gossip_encode_*` outputs.
 
 ## License
 
