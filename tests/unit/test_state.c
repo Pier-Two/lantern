@@ -9,6 +9,7 @@
 #include "lantern/consensus/duties.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/fork_choice.h"
+#include "lantern/consensus/quorum.h"
 #include "lantern/consensus/state.h"
 
 static void expect_zero(int rc, const char *label) {
@@ -468,7 +469,11 @@ static const LanternVote *find_vote_by_validator(const LanternAttestations *atte
 static int test_attestations_require_quorum(void) {
     LanternState state;
     lantern_state_init(&state);
-    expect_zero(lantern_state_generate_genesis(&state, 500, 4), "genesis for quorum test");
+    const uint64_t genesis_time = 500;
+    const uint64_t validator_count = 12;
+    expect_zero(
+        lantern_state_generate_genesis(&state, genesis_time, validator_count),
+        "genesis for quorum test");
     mark_slot_justified_for_tests(&state, state.latest_justified.slot);
 
     LanternAttestations attestations;
@@ -476,19 +481,53 @@ static int test_attestations_require_quorum(void) {
     LanternBlockSignatures signatures;
     lantern_block_signatures_init(&signatures);
 
-    LanternCheckpoint target_checkpoint = state.latest_justified;
-    target_checkpoint.slot = 1;
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
+    assert(quorum > 1);
+
+    LanternCheckpoint source_checkpoint = state.latest_justified;
+    LanternCheckpoint target_checkpoint = source_checkpoint;
+    target_checkpoint.slot = source_checkpoint.slot + 1u;
     fill_root(&target_checkpoint.root, 0xAB);
 
-    expect_zero(lantern_attestations_resize(&attestations, 1), "resize single attestation");
-    expect_zero(lantern_block_signatures_resize(&signatures, 1), "resize single attestation signature");
-    build_vote(&attestations.data[0], &signatures.data[0], 0, 1, &state.latest_justified, &target_checkpoint, 0);
+    expect_zero(
+        lantern_attestations_resize(&attestations, quorum - 1u),
+        "resize sub-quorum attestations");
+    expect_zero(
+        lantern_block_signatures_resize(&signatures, quorum - 1u),
+        "resize sub-quorum signatures");
+    for (size_t i = 0; i < quorum - 1u; ++i) {
+        build_vote(
+            &attestations.data[i],
+            &signatures.data[i],
+            (uint64_t)i,
+            target_checkpoint.slot,
+            &source_checkpoint,
+            &target_checkpoint,
+            (uint8_t)(0x10u + i));
+    }
 
     expect_zero(
         lantern_state_process_attestations(&state, &attestations, &signatures),
-        "process single attestation");
-    assert(state.latest_justified.slot == 1);
-    assert(state.latest_finalized.slot == 0);
+        "process sub-quorum attestations");
+    assert(state.latest_justified.slot == source_checkpoint.slot);
+    assert(state.latest_finalized.slot == source_checkpoint.slot);
+
+    expect_zero(lantern_attestations_resize(&attestations, 1), "resize quorum attestation");
+    expect_zero(lantern_block_signatures_resize(&signatures, 1), "resize quorum signature");
+    build_vote(
+        &attestations.data[0],
+        &signatures.data[0],
+        (uint64_t)(quorum - 1u),
+        target_checkpoint.slot,
+        &source_checkpoint,
+        &target_checkpoint,
+        0x20);
+
+    expect_zero(
+        lantern_state_process_attestations(&state, &attestations, &signatures),
+        "process quorum-completing attestation");
+    assert(state.latest_justified.slot == target_checkpoint.slot);
+    assert(state.latest_finalized.slot == source_checkpoint.slot);
 
     lantern_attestations_reset(&attestations);
     lantern_block_signatures_reset(&signatures);
@@ -514,16 +553,23 @@ static int test_attestations_require_justified_source(void) {
     target_checkpoint.slot = source_checkpoint.slot + 1;
     fill_root(&target_checkpoint.root, 0xDC);
 
-    expect_zero(lantern_attestations_resize(&attestations, 1), "resize unjustified source attestation");
-    expect_zero(lantern_block_signatures_resize(&signatures, 1), "resize unjustified source signature");
-    build_vote(
-        &attestations.data[0],
-        &signatures.data[0],
-        0,
-        target_checkpoint.slot,
-        &source_checkpoint,
-        &target_checkpoint,
-        0);
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
+    expect_zero(
+        lantern_attestations_resize(&attestations, quorum),
+        "resize unjustified source attestations");
+    expect_zero(
+        lantern_block_signatures_resize(&signatures, quorum),
+        "resize unjustified source signatures");
+    for (size_t i = 0; i < quorum; ++i) {
+        build_vote(
+            &attestations.data[i],
+            &signatures.data[i],
+            (uint64_t)i,
+            target_checkpoint.slot,
+            &source_checkpoint,
+            &target_checkpoint,
+            (uint8_t)(0x30u + i));
+    }
 
     expect_zero(
         lantern_state_process_attestations(&state, &attestations, &signatures),
@@ -582,8 +628,12 @@ static int test_attestations_ignore_out_of_range_validator(void) {
     LanternBlockSignatures signatures;
     lantern_block_signatures_init(&signatures);
 
-    expect_zero(lantern_attestations_resize(&attestations, 2), "resize mixed attestations");
-    expect_zero(lantern_block_signatures_resize(&signatures, 2), "resize mixed attestation signatures");
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
+    size_t att_count = quorum + 1u;
+    expect_zero(lantern_attestations_resize(&attestations, att_count), "resize mixed attestations");
+    expect_zero(
+        lantern_block_signatures_resize(&signatures, att_count),
+        "resize mixed attestation signatures");
 
     LanternCheckpoint target_checkpoint = state.latest_justified;
     target_checkpoint.slot = state.latest_justified.slot + 1u;
@@ -598,14 +648,17 @@ static int test_attestations_ignore_out_of_range_validator(void) {
         &state.latest_justified,
         &target_checkpoint,
         0x31);
-    build_vote(
-        &attestations.data[1],
-        &signatures.data[1],
-        0,
-        target_checkpoint.slot,
-        &state.latest_justified,
-        &target_checkpoint,
-        0x32);
+    for (size_t i = 1; i <= quorum; ++i) {
+        uint64_t validator_id = (uint64_t)(i - 1u);
+        build_vote(
+            &attestations.data[i],
+            &signatures.data[i],
+            validator_id,
+            target_checkpoint.slot,
+            &state.latest_justified,
+            &target_checkpoint,
+            (uint8_t)(0x32u + i));
+    }
 
     expect_zero(
         lantern_state_process_attestations(&state, &attestations, &signatures),
@@ -637,11 +690,17 @@ static int test_process_block_accepts_mixed_attestations(void) {
     expect_zero(lantern_state_select_block_parent(&state, &block.parent_root), "parent root for mixed block");
     lantern_block_body_init(&block.body);
 
-    expect_zero(lantern_attestations_resize(&block.body.attestations, 2), "resize mixed block attestations");
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(validator_count);
+    size_t att_count = quorum + 1u;
+    expect_zero(
+        lantern_attestations_resize(&block.body.attestations, att_count),
+        "resize mixed block attestations");
 
     LanternBlockSignatures signatures;
     lantern_block_signatures_init(&signatures);
-    expect_zero(lantern_block_signatures_resize(&signatures, 2), "resize mixed block signatures");
+    expect_zero(
+        lantern_block_signatures_resize(&signatures, att_count),
+        "resize mixed block signatures");
 
     LanternCheckpoint target_checkpoint = state.latest_justified;
     target_checkpoint.slot = state.latest_justified.slot + 1u;
@@ -656,14 +715,17 @@ static int test_process_block_accepts_mixed_attestations(void) {
         &state.latest_justified,
         &target_checkpoint,
         0x41);
-    build_vote(
-        &block.body.attestations.data[1],
-        &signatures.data[1],
-        1,
-        target_checkpoint.slot,
-        &state.latest_justified,
-        &target_checkpoint,
-        0x42);
+    for (size_t i = 1; i <= quorum; ++i) {
+        uint64_t validator_id = (uint64_t)(i - 1u);
+        build_vote(
+            &block.body.attestations.data[i],
+            &signatures.data[i],
+            validator_id,
+            target_checkpoint.slot,
+            &state.latest_justified,
+            &target_checkpoint,
+            (uint8_t)(0x41u + i));
+    }
 
     expect_zero(lantern_state_process_slots(&state, block.slot), "advance slots for mixed attestation block");
     expect_zero(
@@ -848,15 +910,29 @@ static int test_process_attestations_preserves_signed_votes(void) {
     LanternBlockSignatures signatures;
     lantern_block_signatures_init(&signatures);
 
-    expect_zero(lantern_attestations_resize(&attestations, 1), "resize attestation input");
-    expect_zero(lantern_block_signatures_resize(&signatures, 1), "resize attestation signatures");
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
+    expect_zero(
+        lantern_attestations_resize(&attestations, quorum),
+        "resize attestation input");
+    expect_zero(
+        lantern_block_signatures_resize(&signatures, quorum),
+        "resize attestation signatures");
 
     LanternCheckpoint source = state.latest_justified;
     LanternCheckpoint target = source;
     target.slot = source.slot + 1u;
     fill_root(&target.root, 0xC1);
 
-    build_vote(&attestations.data[0], &signatures.data[0], 0, target.slot, &source, &target, 0xD1);
+    for (size_t i = 0; i < quorum; ++i) {
+        build_vote(
+            &attestations.data[i],
+            &signatures.data[i],
+            (uint64_t)i,
+            target.slot,
+            &source,
+            &target,
+            (uint8_t)(0xD1u + i));
+    }
 
     LanternSignedVote expected_signed;
     memset(&expected_signed, 0, sizeof(expected_signed));
@@ -904,13 +980,13 @@ cleanup:
     return rc;
 }
 
-static int test_process_block_applies_proposer_attestation(void) {
+static int test_process_block_defers_proposer_attestation(void) {
     LanternState without_vote;
     LanternState with_vote;
     lantern_state_init(&without_vote);
     lantern_state_init(&with_vote);
     const uint64_t genesis_time = 777;
-    const uint64_t validator_count = 4;
+    const uint64_t validator_count = 1;
     expect_zero(
         lantern_state_generate_genesis(&without_vote, genesis_time, validator_count),
         "genesis for proposer block (without vote)");
@@ -952,7 +1028,15 @@ static int test_process_block_applies_proposer_attestation(void) {
     expect_zero(
         lantern_state_process_block(&with_vote, &block, &block_sigs, &proposer_vote),
         "process block with proposer vote");
-    assert(with_vote.latest_justified.slot == next.slot);
+    assert(with_vote.latest_justified.slot == base.slot);
+
+    LanternSignedVote stored_vote;
+    memset(&stored_vote, 0, sizeof(stored_vote));
+    expect_zero(
+        lantern_state_get_signed_validator_vote(&with_vote, (size_t)block.proposer_index, &stored_vote),
+        "retrieve staged proposer attestation");
+    assert(checkpoints_equal(&stored_vote.data.source, &base));
+    assert(checkpoints_equal(&stored_vote.data.target, &next));
 
     lantern_block_body_reset(&block.body);
     lantern_block_signatures_reset(&block_sigs);
@@ -1575,7 +1659,7 @@ int main(void) {
     if (test_process_attestations_preserves_signed_votes() != 0) {
         return 1;
     }
-    if (test_process_block_applies_proposer_attestation() != 0) {
+    if (test_process_block_defers_proposer_attestation() != 0) {
         return 1;
     }
     if (test_collect_attestations_fixed_point() != 0) {

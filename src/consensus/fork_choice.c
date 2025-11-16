@@ -405,6 +405,26 @@ static int update_global_checkpoints(
     return 0;
 }
 
+static int lantern_fork_choice_stage_proposer_vote(
+    LanternForkChoice *store,
+    const LanternSignedVote *vote,
+    uint64_t block_slot,
+    uint64_t proposer_index) {
+    if (!store) {
+        return -1;
+    }
+    if (!vote) {
+        return 0;
+    }
+    if (vote->data.slot != block_slot) {
+        return -1;
+    }
+    if (vote->data.validator_id != proposer_index) {
+        return -1;
+    }
+    return lantern_fork_choice_add_vote(store, vote, false);
+}
+
 int lantern_fork_choice_add_block(
     LanternForkChoice *store,
     const LanternBlock *block,
@@ -443,10 +463,9 @@ int lantern_fork_choice_add_block(
     if (lantern_fork_choice_recompute_head(store) != 0) {
         return -1;
     }
-    if (proposer_attestation) {
-        if (lantern_fork_choice_add_vote(store, proposer_attestation, false) != 0) {
-            return -1;
-        }
+    if (lantern_fork_choice_stage_proposer_vote(store, proposer_attestation, block->slot, block->proposer_index)
+        != 0) {
+        return -1;
     }
     lean_metrics_record_fork_choice_block_time(lantern_time_now_seconds() - metrics_start);
     return 0;

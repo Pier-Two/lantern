@@ -30,6 +30,13 @@ struct state_profile_metric {
     size_t calls;
 };
 
+struct target_vote_counter {
+    LanternCheckpoint target;
+    LanternCheckpoint consecutive_source;
+    size_t votes;
+    bool has_consecutive_source;
+};
+
 static bool state_profile_enabled(void) {
     static bool initialized = false;
     static bool enabled = false;
@@ -59,6 +66,21 @@ static void record_attestation_validation_metric(double start_seconds, bool vali
     lean_metrics_record_attestation_validation(lantern_time_now_seconds() - start_seconds, valid);
 }
 
+static struct target_vote_counter *target_vote_counter_find(
+    struct target_vote_counter *counters,
+    size_t counter_len,
+    const LanternCheckpoint *target) {
+    if (!counters || !target) {
+        return NULL;
+    }
+    for (size_t i = 0; i < counter_len; ++i) {
+        if (lantern_checkpoint_equal(&counters[i].target, target)) {
+            return &counters[i];
+        }
+    }
+    return NULL;
+}
+
 static int lantern_root_list_append(struct lantern_root_list *list, const LanternRoot *root);
 static int lantern_root_list_drop_front(struct lantern_root_list *list, size_t count);
 static int lantern_bitlist_set_bit(struct lantern_bitlist *list, size_t index, bool value);
@@ -77,6 +99,11 @@ static int collect_attestations_for_checkpoint(
     const LanternCheckpoint *checkpoint,
     LanternAttestations *out_attestations,
     LanternBlockSignatures *out_signatures);
+static int lantern_state_process_attestations_internal(
+    LanternState *state,
+    const LanternAttestations *attestations,
+    const LanternBlockSignatures *signatures,
+    bool apply_consensus_effects);
 
 static bool signature_is_zero(const LanternSignature *signature) {
     if (!signature) {
@@ -1213,10 +1240,11 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
     return 0;
 }
 
-int lantern_state_process_attestations(
+static int lantern_state_process_attestations_internal(
     LanternState *state,
     const LanternAttestations *attestations,
-    const LanternBlockSignatures *signatures) {
+    const LanternBlockSignatures *signatures,
+    bool apply_consensus_effects) {
     if (!state || !attestations) {
         return -1;
     }
@@ -1228,6 +1256,13 @@ int lantern_state_process_attestations(
     if (!state->validator_votes || state->validator_votes_len != validator_count) {
         return -1;
     }
+    const size_t quorum = lantern_quorum_threshold(validator_count_u64);
+    if (attestations->length > LANTERN_MAX_ATTESTATIONS) {
+        return -1;
+    }
+
+    struct target_vote_counter vote_counters[LANTERN_MAX_ATTESTATIONS];
+    size_t vote_counter_len = 0;
 
     LanternCheckpoint latest_justified = state->latest_justified;
     LanternCheckpoint latest_finalized = state->latest_finalized;
@@ -1321,35 +1356,67 @@ int lantern_state_process_attestations(
             return -1;
         }
 
-        if (!target_is_justified) {
+        if (!apply_consensus_effects) {
+            record_attestation_validation_metric(att_validation_start, true);
+            continue;
+        }
+
+        struct target_vote_counter *counter =
+            target_vote_counter_find(vote_counters, vote_counter_len, &vote->target);
+        if (!counter) {
+            if (vote_counter_len >= LANTERN_MAX_ATTESTATIONS) {
+                record_attestation_validation_metric(att_validation_start, false);
+                return -1;
+            }
+            counter = &vote_counters[vote_counter_len++];
+            memset(counter, 0, sizeof(*counter));
+            counter->target = vote->target;
+        }
+        counter->votes += 1;
+        if (vote->source.slot + 1u == vote->target.slot) {
+            counter->has_consecutive_source = true;
+            counter->consecutive_source = vote->source;
+        }
+
+        bool target_now_justified = target_is_justified;
+        if (!target_now_justified && counter->votes >= quorum) {
             if (lantern_state_mark_justified_slot(state, vote->target.slot) != 0) {
                 record_attestation_validation_metric(att_validation_start, false);
                 return -1;
             }
+            target_now_justified = true;
             if (vote->target.slot > latest_justified.slot) {
                 latest_justified = vote->target;
             }
             if (debug_hash && debug_hash[0] != '\0') {
                 fprintf(stderr, "marked slot %" PRIu64 " justified\n", vote->target.slot);
             }
-        } else if ((vote->source.slot + 1 == vote->target.slot) && (latest_justified.slot < vote->target.slot)) {
-            latest_finalized = vote->source;
-            latest_justified = vote->target;
-            if (debug_hash && debug_hash[0] != '\0') {
-                char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                if (lantern_bytes_to_hex(
-                        vote->target.root.bytes,
-                        LANTERN_ROOT_SIZE,
-                        target_hex,
-                        sizeof(target_hex),
-                        1)
-                    == 0) {
-                    lantern_log_debug(
-                        "state",
-                        &meta,
-                        "finalized slot=%" PRIu64 " root=%s",
-                        vote->source.slot,
-                        target_hex);
+        }
+
+        if (target_now_justified && counter->votes >= quorum && counter->has_consecutive_source) {
+            if (
+                counter->consecutive_source.slot + 1u == counter->target.slot
+                && latest_finalized.slot < counter->consecutive_source.slot) {
+                latest_finalized = counter->consecutive_source;
+                if (counter->target.slot > latest_justified.slot) {
+                    latest_justified = counter->target;
+                }
+                if (debug_hash && debug_hash[0] != '\0') {
+                    char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+                    if (lantern_bytes_to_hex(
+                            counter->target.root.bytes,
+                            LANTERN_ROOT_SIZE,
+                            target_hex,
+                            sizeof(target_hex),
+                            1)
+                        == 0) {
+                        lantern_log_debug(
+                            "state",
+                            &meta,
+                            "finalized slot=%" PRIu64 " root=%s",
+                            counter->consecutive_source.slot,
+                            target_hex);
+                    }
                 }
             }
         }
@@ -1357,26 +1424,42 @@ int lantern_state_process_attestations(
         record_attestation_validation_metric(att_validation_start, true);
     }
 
-    if (lantern_state_mark_justified_slot(state, latest_justified.slot) != 0) {
-        return -1;
-    }
-    if (lantern_state_mark_justified_slot(state, latest_finalized.slot) != 0) {
-        return -1;
-    }
-
-    state->latest_justified = latest_justified;
-    state->latest_finalized = latest_finalized;
-    if (state->fork_choice) {
-        if (lantern_fork_choice_update_checkpoints(
-                state->fork_choice,
-                &state->latest_justified,
-                &state->latest_finalized)
-            != 0) {
+    if (apply_consensus_effects) {
+        if (lantern_state_mark_justified_slot(state, latest_justified.slot) != 0) {
             return -1;
+        }
+        if (lantern_state_mark_justified_slot(state, latest_finalized.slot) != 0) {
+            return -1;
+        }
+
+        state->latest_justified = latest_justified;
+        state->latest_finalized = latest_finalized;
+        if (state->fork_choice) {
+            if (lantern_fork_choice_update_checkpoints(
+                    state->fork_choice,
+                    &state->latest_justified,
+                    &state->latest_finalized)
+                != 0) {
+                return -1;
+            }
         }
     }
     lean_metrics_record_state_transition_attestations(att_attempted, lantern_time_now_seconds() - att_batch_start);
     return 0;
+}
+
+int lantern_state_process_attestations(
+    LanternState *state,
+    const LanternAttestations *attestations,
+    const LanternBlockSignatures *signatures) {
+    return lantern_state_process_attestations_internal(state, attestations, signatures, true);
+}
+
+static int lantern_state_stage_attestations(
+    LanternState *state,
+    const LanternAttestations *attestations,
+    const LanternBlockSignatures *signatures) {
+    return lantern_state_process_attestations_internal(state, attestations, signatures, false);
 }
 
 int lantern_state_process_block(
@@ -1419,7 +1502,7 @@ int lantern_state_process_block(
                 .capacity = 1,
             };
             const LanternBlockSignatures *sig_view = signature_is_zero(&proposer_sig) ? NULL : &proposer_sig_batch;
-            if (lantern_state_process_attestations(state, &proposer_batch, sig_view) != 0) {
+            if (lantern_state_stage_attestations(state, &proposer_batch, sig_view) != 0) {
                 return -1;
             }
         }

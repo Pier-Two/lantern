@@ -931,7 +931,7 @@ static void test_leanspec_vectors(void) {
     lantern_state_reset(&state_decoded);
 }
 
-static void test_state_accepts_empty_justification_validators_payload(void) {
+static void test_state_rejects_truncated_state_payload(void) {
     LanternState genesis_state;
     lantern_state_init(&genesis_state);
     expect_ok(lantern_state_generate_genesis(&genesis_state, 1234, 7), "genesis state");
@@ -954,6 +954,16 @@ static void test_state_accepts_empty_justification_validators_payload(void) {
         lantern_ssz_encode_state(&genesis_state, encoded, sizeof(encoded), &written),
         "encode genesis state");
 
+    LanternState decoded_full;
+    lantern_state_init(&decoded_full);
+    expect_ok(
+        lantern_ssz_decode_state(&decoded_full, encoded, written),
+        "decode full state");
+    assert(decoded_full.justification_validators.bit_length == 0);
+    assert(decoded_full.config.num_validators == genesis_state.config.num_validators);
+    assert(decoded_full.justified_slots.bit_length == genesis_state.justified_slots.bit_length);
+    lantern_state_reset(&decoded_full);
+
     /*
      * The offsets table for the State container begins immediately after the
      * fixed-size fields (config, slot, latest_block_header, latest_justified,
@@ -966,18 +976,14 @@ static void test_state_accepts_empty_justification_validators_payload(void) {
     memcpy(offsets, encoded + offsets_offset, sizeof(offsets));
 
     size_t truncated_len = offsets[4];
-    assert(truncated_len <= written);
+    assert(truncated_len < written);
 
-    LanternState decoded;
-    lantern_state_init(&decoded);
-    expect_ok(
-        lantern_ssz_decode_state(&decoded, encoded, truncated_len),
-        "decode state with empty justification validators payload");
-    assert(decoded.justification_validators.bit_length == 0);
-    assert(decoded.config.num_validators == genesis_state.config.num_validators);
-    assert(decoded.justified_slots.bit_length == genesis_state.justified_slots.bit_length);
+    LanternState truncated_state;
+    lantern_state_init(&truncated_state);
+    int truncated_rc = lantern_ssz_decode_state(&truncated_state, encoded, truncated_len);
+    assert(truncated_rc != 0);
 
-    lantern_state_reset(&decoded);
+    lantern_state_reset(&truncated_state);
     lantern_state_reset(&genesis_state);
 }
 
@@ -993,7 +999,7 @@ int main(void) {
     test_signed_block_signature_validation();
     test_signed_block_decode_without_signature_section();
     test_state_roundtrip();
-    test_state_accepts_empty_justification_validators_payload();
+    test_state_rejects_truncated_state_payload();
     test_leanspec_vectors();
     puts("lantern_ssz_test OK");
     return 0;

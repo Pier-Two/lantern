@@ -1058,20 +1058,13 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
     int debug_stage = 0;
     size_t offset = 0;
     const size_t offsets_size = var_field_count * SSZ_BYTE_SIZE_OF_UINT32;
-    const size_t min_truncated_size =
-        LANTERN_CONFIG_SSZ_SIZE + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + offsets_size;
     const size_t min_full_size = LANTERN_CONFIG_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT64 + LANTERN_BLOCK_HEADER_SSZ_SIZE
         + (2 * LANTERN_CHECKPOINT_SSZ_SIZE) + offsets_size;
-    bool truncated = false;
-
     if (data_len < min_full_size) {
-        if (data_len < min_truncated_size) {
-            return -1;
-        }
-        truncated = true;
+        return -1;
     }
     if (debug_ssz) {
-        fprintf(stderr, "ssz decode state: entry data_len=%zu truncated=%d\n", data_len, truncated ? 1 : 0);
+        fprintf(stderr, "ssz decode state: entry data_len=%zu\n", data_len);
         fflush(stderr);
     }
 
@@ -1084,24 +1077,18 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
         fflush(stderr);
     }
 
-    if (truncated) {
-        state->slot = 0;
-        memset(&state->latest_block_header, 0, sizeof(state->latest_block_header));
-        memset(state->validator_registry_root.bytes, 0, sizeof(state->validator_registry_root.bytes));
-    } else {
-        if (read_u64(data + offset, data_len - offset, &state->slot) != 0) {
-            return -1;
-        }
-        offset += SSZ_BYTE_SIZE_OF_UINT64;
-
-        if (data_len - offset < LANTERN_BLOCK_HEADER_SSZ_SIZE) {
-            return -1;
-        }
-        if (lantern_ssz_decode_block_header(&state->latest_block_header, data + offset, LANTERN_BLOCK_HEADER_SSZ_SIZE) != 0) {
-            return -1;
-        }
-        offset += LANTERN_BLOCK_HEADER_SSZ_SIZE;
+    if (read_u64(data + offset, data_len - offset, &state->slot) != 0) {
+        return -1;
     }
+    offset += SSZ_BYTE_SIZE_OF_UINT64;
+
+    if (data_len - offset < LANTERN_BLOCK_HEADER_SSZ_SIZE) {
+        return -1;
+    }
+    if (lantern_ssz_decode_block_header(&state->latest_block_header, data + offset, LANTERN_BLOCK_HEADER_SSZ_SIZE) != 0) {
+        return -1;
+    }
+    offset += LANTERN_BLOCK_HEADER_SSZ_SIZE;
     if (debug_ssz) {
         fprintf(stderr, "ssz decode state: stage %d slot=%" PRIu64 "\n", debug_stage++, state->slot);
         fprintf(stderr, "ssz decode state: stage %d header slot=%" PRIu64 "\n", debug_stage++, state->latest_block_header.slot);
