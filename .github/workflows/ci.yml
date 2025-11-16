@@ -49,7 +49,7 @@ jobs:
         run: ./scripts/fixtures/fill_genesis_fixtures.sh
 
       - name: Generate networking fixtures
-        run: uv run --directory tools/leanSpec python scripts/fixtures/generate_networking_ssz.py
+        run: uv run --directory tools/leanSpec python ../../scripts/fixtures/generate_networking_ssz.py
 
       - name: Configure (CMake)
         run: cmake -S . -B build -GNinja -DLANTERN_BUILD_TESTS=ON
