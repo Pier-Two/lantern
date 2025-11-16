@@ -279,10 +279,6 @@ static int test_block_header_rejects_duplicate_slot(void) {
     make_block(&state, first_block.slot, &latest_header_root, &duplicate_block, &duplicate_block_root);
     (void)duplicate_block_root;
 
-    expect_zero(
-        lantern_state_process_slots(&state, duplicate_block.slot),
-        "align slots for duplicate block test");
-
     if (lantern_state_process_block(&state, &duplicate_block, NULL, NULL) == 0) {
         fprintf(stderr, "duplicate slot block was incorrectly accepted\n");
         lantern_block_body_reset(&duplicate_block.body);
@@ -335,6 +331,28 @@ static int test_process_slots_sets_state_root(void) {
     expect_zero(lantern_state_process_slots(&state, 1), "process slot 1");
     assert(state.slot == 1);
     assert(memcmp(state.latest_block_header.state_root.bytes, pre_root.bytes, LANTERN_ROOT_SIZE) == 0);
+
+    lantern_state_reset(&state);
+    return 0;
+}
+
+static int test_process_slots_rejects_non_future_target(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, 1337, 4), "genesis for process-slots guard");
+
+    expect_zero(lantern_state_process_slots(&state, 1), "advance to slot 1 for guard test");
+
+    if (lantern_state_process_slots(&state, state.slot) == 0) {
+        fprintf(stderr, "process_slots should reject target equal to current slot\n");
+        lantern_state_reset(&state);
+        return 1;
+    }
+    if (lantern_state_process_slots(&state, state.slot - 1) == 0) {
+        fprintf(stderr, "process_slots should reject target behind current slot\n");
+        lantern_state_reset(&state);
+        return 1;
+    }
 
     lantern_state_reset(&state);
     return 0;
@@ -585,6 +603,154 @@ static int test_attestations_accept_duplicate_votes(void) {
 
     lantern_attestations_reset(&attestations);
     lantern_block_signatures_reset(&signatures);
+    lantern_state_reset(&state);
+    return 0;
+}
+
+static void setup_prejustified_consecutive_source(
+    LanternState *state,
+    LanternCheckpoint *out_source,
+    LanternCheckpoint *out_target,
+    LanternCheckpoint *out_alt_source,
+    uint8_t source_marker,
+    uint8_t target_marker,
+    uint8_t alt_marker) {
+    assert(state != NULL);
+    assert(out_source != NULL);
+    assert(out_target != NULL);
+    assert(out_alt_source != NULL);
+
+    mark_slot_justified_for_tests(state, state->latest_justified.slot);
+    uint64_t slot_one = state->latest_justified.slot + 1u;
+    mark_slot_justified_for_tests(state, slot_one);
+    state->latest_justified.slot = slot_one;
+    fill_root(&state->latest_justified.root, source_marker);
+
+    *out_source = state->latest_justified;
+    *out_target = *out_source;
+    out_target->slot = out_source->slot + 1u;
+    fill_root(&out_target->root, target_marker);
+
+    *out_alt_source = *out_source;
+    out_alt_source->slot = out_source->slot - 1u;
+    fill_root(&out_alt_source->root, alt_marker);
+}
+
+static int test_attestations_nonconsecutive_followup_does_not_finalize(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, 730, 5), "genesis for nonconsecutive attestation test");
+
+    LanternCheckpoint consecutive_source;
+    LanternCheckpoint target_checkpoint;
+    LanternCheckpoint non_consecutive_source;
+    setup_prejustified_consecutive_source(
+        &state,
+        &consecutive_source,
+        &target_checkpoint,
+        &non_consecutive_source,
+        0xA1,
+        0xA2,
+        0xA3);
+
+    LanternAttestations attestations;
+    lantern_attestations_init(&attestations);
+    LanternBlockSignatures signatures;
+    lantern_block_signatures_init(&signatures);
+    expect_zero(lantern_attestations_resize(&attestations, 2), "resize nonconsecutive attestations");
+    expect_zero(lantern_block_signatures_resize(&signatures, 2), "resize nonconsecutive signatures");
+
+    build_vote(
+        &attestations.data[0],
+        &signatures.data[0],
+        0,
+        target_checkpoint.slot,
+        &consecutive_source,
+        &target_checkpoint,
+        0x51);
+    build_vote(
+        &attestations.data[1],
+        &signatures.data[1],
+        1,
+        target_checkpoint.slot,
+        &non_consecutive_source,
+        &target_checkpoint,
+        0x52);
+
+    uint64_t expected_finalized_slot = state.latest_finalized.slot;
+    expect_zero(
+        lantern_state_process_attestations(&state, &attestations, &signatures),
+        "process nonconsecutive attestations");
+    assert(state.latest_justified.slot == target_checkpoint.slot);
+    assert(state.latest_finalized.slot == expected_finalized_slot);
+
+    lantern_attestations_reset(&attestations);
+    lantern_block_signatures_reset(&signatures);
+    lantern_state_reset(&state);
+    return 0;
+}
+
+static int test_attestations_finalize_after_second_consecutive_vote(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, 740, 5), "genesis for consecutive attestation test");
+
+    LanternCheckpoint consecutive_source;
+    LanternCheckpoint target_checkpoint;
+    LanternCheckpoint unused_alt_source;
+    setup_prejustified_consecutive_source(
+        &state,
+        &consecutive_source,
+        &target_checkpoint,
+        &unused_alt_source,
+        0xB1,
+        0xB2,
+        0xB3);
+
+    LanternAttestations single_vote;
+    lantern_attestations_init(&single_vote);
+    LanternBlockSignatures single_sig;
+    lantern_block_signatures_init(&single_sig);
+    expect_zero(lantern_attestations_resize(&single_vote, 1), "resize single vote for pre-finalization");
+    expect_zero(lantern_block_signatures_resize(&single_sig, 1), "resize single signature for pre-finalization");
+    build_vote(
+        &single_vote.data[0],
+        &single_sig.data[0],
+        0,
+        target_checkpoint.slot,
+        &consecutive_source,
+        &target_checkpoint,
+        0x61);
+
+    expect_zero(
+        lantern_state_process_attestations(&state, &single_vote, &single_sig),
+        "process initial consecutive attestation");
+    assert(state.latest_finalized.slot != consecutive_source.slot);
+
+    LanternAttestations second_vote;
+    lantern_attestations_init(&second_vote);
+    LanternBlockSignatures second_sig;
+    lantern_block_signatures_init(&second_sig);
+    expect_zero(lantern_attestations_resize(&second_vote, 1), "resize follow-up attestation");
+    expect_zero(lantern_block_signatures_resize(&second_sig, 1), "resize follow-up signature");
+    build_vote(
+        &second_vote.data[0],
+        &second_sig.data[0],
+        1,
+        target_checkpoint.slot,
+        &consecutive_source,
+        &target_checkpoint,
+        0x62);
+
+    expect_zero(
+        lantern_state_process_attestations(&state, &second_vote, &second_sig),
+        "process finalizing consecutive attestation");
+    assert(state.latest_finalized.slot == consecutive_source.slot);
+
+    lantern_attestations_reset(&single_vote);
+    lantern_block_signatures_reset(&single_sig);
+    lantern_attestations_reset(&second_vote);
+    lantern_block_signatures_reset(&second_sig);
     lantern_state_reset(&state);
     return 0;
 }
@@ -1605,6 +1771,9 @@ int main(void) {
     if (test_process_slots_sets_state_root() != 0) {
         return 1;
     }
+    if (test_process_slots_rejects_non_future_target() != 0) {
+        return 1;
+    }
     if (test_state_transition_applies_block() != 0) {
         return 1;
     }
@@ -1618,6 +1787,12 @@ int main(void) {
         return 1;
     }
     if (test_attestations_accept_duplicate_votes() != 0) {
+        return 1;
+    }
+    if (test_attestations_nonconsecutive_followup_does_not_finalize() != 0) {
+        return 1;
+    }
+    if (test_attestations_finalize_after_second_consecutive_vote() != 0) {
         return 1;
     }
     if (test_attestations_ignore_out_of_range_validator() != 0) {
