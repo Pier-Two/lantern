@@ -66,3 +66,6 @@ Testing*
 
 # Regenerated test fixtures
 tests/fixtures/**/*.json
+
+# Hash-sig key fixtures are part of the repository so CI can run vote tests.
+!tests/fixtures/genesis/hash-sig-keys/*.json

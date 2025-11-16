@@ -48,6 +48,9 @@ jobs:
       - name: Generate genesis fixtures
         run: ./scripts/fixtures/fill_genesis_fixtures.sh
 
+      - name: Generate hash-sig keys
+        run: cargo run --manifest-path tools/hash-sig-keygen/Cargo.toml -- --out tests/fixtures/genesis/hash-sig-keys --count 8
+
       - name: Generate networking fixtures
         run: uv run --directory tools/leanSpec python ../../scripts/fixtures/generate_networking_ssz.py
 
