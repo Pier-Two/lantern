@@ -6,23 +6,62 @@ Usage:
     python tools/debug/generate_lean_genesis.py <config_yaml> <output_ssz>
 
 Reads GENESIS_TIME and VALIDATOR_COUNT from the YAML config and builds
-that many zeroed validators (the same placeholder values the unit tests expect).
+validators using any available hash-sig public keys found under
+<config_dir>/hash-sig-keys/.
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+from typing import List, Optional
 
 import yaml
+REPO_ROOT = Path(__file__).resolve().parents[1]
+LEAN_SPEC_SRC = REPO_ROOT / "leanSpec" / "src"
+if LEAN_SPEC_SRC.exists():
+    sys.path.insert(0, str(LEAN_SPEC_SRC))
+
 from lean_spec.subspecs.containers.state import State, Validators
 from lean_spec.subspecs.containers.validator import Validator
+from lean_spec.subspecs.koalabear.field import Fp
+from lean_spec.subspecs.xmss.constants import PROD_CONFIG
+from lean_spec.subspecs.xmss.containers import PublicKey
 from lean_spec.types import Bytes52, Uint64
 
 
-def build_state(genesis_time: int, validator_count: int) -> bytes:
+def load_hash_sig_pubkeys(count: int, hash_sig_dir: Path) -> List[Optional[bytes]]:
+    """Return serialized XMSS public keys for each validator index."""
+    results: List[Optional[bytes]] = []
+    for index in range(count):
+        pk_path = hash_sig_dir / f"validator_{index}_pk.json"
+        if not pk_path.exists():
+            results.append(None)
+            continue
+        try:
+            data = json.loads(pk_path.read_text())
+            root = [Fp(value=int(value)) for value in data["root"]]
+            parameter = [Fp(value=int(value)) for value in data["parameter"]]
+            public_key = PublicKey(root=root, parameter=parameter)
+            results.append(public_key.to_bytes(PROD_CONFIG))
+        except Exception as exc:  # pragma: no cover - defensive parsing
+            print(f"warning: failed to parse {pk_path}: {exc}", file=sys.stderr)
+            results.append(None)
+    return results
+
+
+def build_state(genesis_time: int, validator_count: int, hash_sig_dir: Path) -> bytes:
+    pubkeys = load_hash_sig_pubkeys(validator_count, hash_sig_dir)
     validators = Validators(
-        data=[Validator(pubkey=Bytes52.zero()) for _ in range(validator_count)]
+        data=[
+            Validator(
+                pubkey=Bytes52(pk_bytes)
+                if pk_bytes is not None
+                else Bytes52.zero()
+            )
+            for pk_bytes in pubkeys
+        ]
     )
     state = State.generate_genesis(
         genesis_time=Uint64(genesis_time), validators=validators
@@ -50,7 +89,14 @@ def main() -> None:
         print("validator count must be positive", file=sys.stderr)
         sys.exit(1)
 
-    ssz_bytes = build_state(genesis_time, validator_count)
+    hash_sig_dir = config_path.parent / "hash-sig-keys"
+    if not hash_sig_dir.is_dir():
+        print(
+            f"warning: hash-sig key directory {hash_sig_dir} missing; using zeroed pubkeys",
+            file=sys.stderr,
+        )
+
+    ssz_bytes = build_state(genesis_time, validator_count, hash_sig_dir)
     output_path.write_bytes(ssz_bytes)
     print(
         f"Wrote genesis SSZ ({len(ssz_bytes)} bytes) to {output_path}",
