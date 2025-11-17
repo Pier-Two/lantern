@@ -1,5 +1,5 @@
 {
-    "tests/consensus/devnet/fc/test_fork_choice_head.py::test_head_with_deep_fork_split[fork_Devnet][fork_Devnet-fork_choice_test]": {
+    "tests/consensus/devnet/fc/test_lexicographic_tiebreaker.py::test_equal_weight_forks_use_lexicographic_tiebreaker[fork_Devnet][fork_Devnet-fork_choice_test]": {
         "network": "Devnet",
         "anchorState": {
             "config": {
@@ -66,7 +66,7 @@
                 "valid": true,
                 "checks": {
                     "headSlot": 1,
-                    "headRootLabel": "common"
+                    "headRootLabel": "base"
                 },
                 "stepType": "block",
                 "block": {
@@ -122,27 +122,8 @@
             {
                 "valid": true,
                 "checks": {
-                    "headSlot": 4,
-                    "headRootLabel": "fork_a_4"
-                },
-                "stepType": "block",
-                "block": {
-                    "slot": 4,
-                    "proposer_index": 0,
-                    "parent_root": "0xdfc52a42d1030aad437a1fd2809146970d70c8d685ebabb7733c4ef9c75d4b38",
-                    "state_root": "0xecde6ecde227ddb15f7e5d19d2bea486a2f974fa5bfeb56555a234613e45a672",
-                    "body": {
-                        "attestations": {
-                            "data": []
-                        }
-                    }
-                }
-            },
-            {
-                "valid": true,
-                "checks": {
-                    "headSlot": 4,
-                    "headRootLabel": "fork_a_4"
+                    "headSlot": 3,
+                    "headRootLabel": "fork_a_3"
                 },
                 "stepType": "block",
                 "block": {
@@ -160,8 +141,11 @@
             {
                 "valid": true,
                 "checks": {
-                    "headSlot": 4,
-                    "headRootLabel": "fork_a_4"
+                    "headSlot": 3,
+                    "lexicographicHeadAmong": [
+                        "fork_a_3",
+                        "fork_b_3"
+                    ]
                 },
                 "stepType": "block",
                 "block": {
@@ -175,52 +159,14 @@
                         }
                     }
                 }
-            },
-            {
-                "valid": true,
-                "checks": {
-                    "headSlot": 4,
-                    "headRootLabel": "fork_a_4"
-                },
-                "stepType": "block",
-                "block": {
-                    "slot": 4,
-                    "proposer_index": 0,
-                    "parent_root": "0xdfc52a42d1030aad437a1fd2809146970d70c8d685ebabb7733c4ef9c75d4b38",
-                    "state_root": "0xecde6ecde227ddb15f7e5d19d2bea486a2f974fa5bfeb56555a234613e45a672",
-                    "body": {
-                        "attestations": {
-                            "data": []
-                        }
-                    }
-                }
-            },
-            {
-                "valid": true,
-                "checks": {
-                    "headSlot": 5,
-                    "headRootLabel": "fork_b_5"
-                },
-                "stepType": "block",
-                "block": {
-                    "slot": 5,
-                    "proposer_index": 1,
-                    "parent_root": "0xfd4c5f985fdb344b987c5076756d0ca646761979cd2ea9aa375a1988c5a6003f",
-                    "state_root": "0x2570b644cfbed4a355b7a96e4235778ef5fd0b8f1ffacb315abbc0cb4b148b5f",
-                    "body": {
-                        "attestations": {
-                            "data": []
-                        }
-                    }
-                }
             }
         ],
-        "maxSlot": 5,
+        "maxSlot": 3,
         "_info": {
-            "hash": "0x4ef7ad84e0782b15f04234ca4bff9b90192b2d5a314aedb746617288453e810c",
+            "hash": "0x415f50198254df3348cb91ba0453e676582de5a0eaf9fb460ba1bfced4e66ef2",
             "comment": "`leanSpec` generated test",
-            "testId": "tests/consensus/devnet/fc/test_fork_choice_head.py::test_head_with_deep_fork_split[fork_Devnet]",
-            "description": "Fork choice handles deep fork splits correctly.\n\nScenario\n--------\nCreate two forks that diverge at slot 2 and extend to different depths.\n\nExpected Behavior:\n    - Fork A extends to slot 4\n    - Fork B extends to slot 5\n    - Head follows the longer (heavier) fork B\n\nWhy This Matters\n----------------\nIn practice, forks can persist for multiple slots before one gains dominance.\nThis tests that fork choice correctly follows the deeper fork, which has\naccumulated more proposer attestations along its chain.\n\nEach block in a fork adds weight from its proposer's attestation. A longer\nfork has more accumulated weight from the proposers along its length.\n\nThis is how the protocol ensures liveness: the chain that continues to grow\n(accumulating blocks and attestations) becomes the canonical chain.",
+            "testId": "tests/consensus/devnet/fc/test_lexicographic_tiebreaker.py::test_equal_weight_forks_use_lexicographic_tiebreaker[fork_Devnet]",
+            "description": "Fork choice selects lexicographically highest branch when fork weights tie.\n\nScenario\n--------\n- Slot 1: Build common ancestor\n- Slots 2-3: Build fork A to depth 2 (slots 2 & 3)\n- Slots 2-3: Build fork B to depth 2 (slots 2 & 3)\n\nBoth forks have identical structure:\n- Same depth (2 blocks each)\n- Same attestation weight (2 proposer attestations each)\n- Same parent (common ancestor at slot 1)\n\nExpected Behavior\n-----------------\nThe competing forks have identical attestation weight. The head is chosen\nvia lexicographic ordering of the block roots. The framework automatically\nverifies that:\n1. Both forks are at the same slot (equal depth)\n2. The head is the lexicographically highest root among them",
             "fixtureFormat": "fork_choice_test"
         }
     }
