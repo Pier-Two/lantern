@@ -76,6 +76,7 @@ static int append_unique_bootnode(struct lantern_string_list *list, const char *
 static int append_genesis_bootnodes(struct lantern_client *client);
 static int compute_local_validator_assignment(struct lantern_client *client);
 static int populate_local_validators(struct lantern_client *client);
+static void persist_anchor_block(struct lantern_client *client, const LanternBlock *anchor_block, const LanternRoot *anchor_root);
 static int init_consensus_runtime(struct lantern_client *client);
 static int find_local_validator_index(const struct lantern_client *client, uint64_t global_index, size_t *out_index);
 static void reset_local_validators(struct lantern_client *client);
@@ -234,6 +235,49 @@ static int read_varint_payload_chunk(
     ssize_t *out_err,
     const struct lantern_log_metadata *meta,
     const char *label);
+
+static void persist_anchor_block(struct lantern_client *client, const LanternBlock *anchor_block, const LanternRoot *anchor_root) {
+    if (!client || !client->data_dir || !anchor_block) {
+        return;
+    }
+
+    LanternSignedBlock stored_anchor;
+    lantern_signed_block_with_attestation_init(&stored_anchor);
+    LanternBlock *block = &stored_anchor.message.block;
+    block->slot = anchor_block->slot;
+    block->proposer_index = anchor_block->proposer_index;
+    block->parent_root = anchor_block->parent_root;
+    block->state_root = anchor_block->state_root;
+
+    LanternRoot computed_root;
+    const LanternRoot *root_to_log = anchor_root;
+    if (!root_to_log) {
+        if (lantern_hash_tree_root_block(block, &computed_root) == 0) {
+            root_to_log = &computed_root;
+        }
+    }
+    char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    root_hex[0] = '\0';
+    if (root_to_log) {
+        format_root_hex(root_to_log, root_hex, sizeof(root_hex));
+    }
+
+    struct lantern_log_metadata meta = {.validator = client->node_id};
+    if (lantern_storage_store_block(client->data_dir, &stored_anchor) != 0) {
+        lantern_log_warn(
+            "storage",
+            &meta,
+            "failed to persist genesis anchor block root=%s",
+            root_hex[0] ? root_hex : "0x0");
+    } else {
+        lantern_log_debug(
+            "storage",
+            &meta,
+            "persisted genesis anchor block root=%s",
+            root_hex[0] ? root_hex : "0x0");
+    }
+    lantern_signed_block_with_attestation_reset(&stored_anchor);
+}
 
 struct lantern_peer_status_entry {
     char peer_id[128];
@@ -6260,15 +6304,14 @@ static int initialize_fork_choice(struct lantern_client *client) {
     lantern_block_body_init(&anchor.body);
 
     LanternRoot anchor_root;
-    if (lantern_hash_tree_root_block(&anchor, &anchor_root) != 0) {
+    if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &anchor_root) != 0) {
         lantern_block_body_reset(&anchor.body);
         lantern_log_error(
             "forkchoice",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to hash anchor block");
+            "failed to hash anchor block header");
         return -1;
     }
-
     if (lantern_fork_choice_set_anchor(
             &client->fork_choice,
             &anchor,
@@ -6283,6 +6326,21 @@ static int initialize_fork_choice(struct lantern_client *client) {
             "failed to set fork choice anchor");
         return -1;
     }
+    if (memcmp(client->state.latest_justified.root.bytes, anchor_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        client->state.latest_justified.root = anchor_root;
+        lantern_log_debug(
+            "forkchoice",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "updated justified checkpoint root to anchor");
+    }
+    if (memcmp(client->state.latest_finalized.root.bytes, anchor_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        client->state.latest_finalized.root = anchor_root;
+        lantern_log_debug(
+            "forkchoice",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "updated finalized checkpoint root to anchor");
+    }
+    persist_anchor_block(client, &anchor, &anchor_root);
     lantern_block_body_reset(&anchor.body);
     lantern_state_attach_fork_choice(&client->state, &client->fork_choice);
     client->has_fork_choice = true;
