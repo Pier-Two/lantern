@@ -30,16 +30,16 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x8ea1ce003e2a5a7985402c48950af130b876c322891f8721fee78e467fbb55282888074c74dd14023b408405bc540f4620b3f249"
+                        "pubkey": "0x311ccc2238e5e67351343d4b58c9395d8b18d20bf783394452019559664423634a36e427aa8ec44741db0c2570e7d528b5b3fd63"
                     },
                     {
-                        "pubkey": "0x9cc5383b37f40f5713e234145abf247763900959d5f66300fde8e06d1b0abc3643a6485fe4a71c64d34cac3d201c38170e4e0d59"
+                        "pubkey": "0x42d8e30e36c3316bf01345507adef9464baa320e7882012abc3ff05a101ec2265807e264294ab90a3246584bb8452a6f15d0f31c"
                     },
                     {
-                        "pubkey": "0xbe6e8c648ea4253ed172da0f40532e01a236da288f8b524b6d165262a460e924b4430c5b894b057cf4d67e088bdec271d5b12721"
+                        "pubkey": "0x581b860c0351607059a3e82b498eee1a5086e503ebc83b1b4f43571c45f50261c769d27ca1963f0717c256266413e9621918081d"
                     },
                     {
-                        "pubkey": "0x35aae80658fc571894db131391458e194c8f9e738adb3039e732c338578356169135331bef96d43ce02a887c63cf9a6068209732"
+                        "pubkey": "0xc817105dda7c676c274dda1b9a3fda18a24f9769d20f2576e5477970d57c95362431ae06c5aebb3602745f353829e1225383d435"
                     }
                 ]
             },
@@ -54,7 +54,7 @@
             "slot": 0,
             "proposerIndex": 0,
             "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
-            "stateRoot": "0x46dec84529be7412f0adbe7a577187a35ac33584be4ef8608c182ebd6476be49",
+            "stateRoot": "0xeeda245cc4fe91d1ecbe4bfb6bd9c917afc9cb6cde40081f7cbbff6806b349e0",
             "body": {
                 "attestations": {
                     "data": []
@@ -72,8 +72,8 @@
                 "block": {
                     "slot": 1,
                     "proposer_index": 1,
-                    "parent_root": "0xdd922597526bfe424da275630d9d31b7c9e0c672206c4196107fcd65737a7673",
-                    "state_root": "0x171b7d4f80068afbd8e9877441444bd381499961984009c72b1e8c9794448ab0",
+                    "parent_root": "0x82361ec214ca05d24804fee678f667016929e7cd1c13d797f6a47555f8dfc227",
+                    "state_root": "0xeb6ebeed5ed581555afdf6feac7ccc61ef18ce5d26cd0313b3d5cda8665c679f",
                     "body": {
                         "attestations": {
                             "data": []
@@ -91,8 +91,8 @@
                 "block": {
                     "slot": 2,
                     "proposer_index": 2,
-                    "parent_root": "0xb3edc4511738ab98f078b6869b8f19d30302f309f02457d4a2e054dedcd2517d",
-                    "state_root": "0xe475b1d1600830782917568e386eec07618ee0033fc5b14a2860f456e6259cdc",
+                    "parent_root": "0xa472d3be6c32ea7ea6e925e060acd8e9dbae25cca4485845cef62189d333a9c7",
+                    "state_root": "0xfb485d69fef38ac1c0906f531d3676e890e3fc18c6b14bb4c33b1056a8ec3f70",
                     "body": {
                         "attestations": {
                             "data": []
@@ -110,8 +110,8 @@
                 "block": {
                     "slot": 2,
                     "proposer_index": 2,
-                    "parent_root": "0xb3edc4511738ab98f078b6869b8f19d30302f309f02457d4a2e054dedcd2517d",
-                    "state_root": "0xe475b1d1600830782917568e386eec07618ee0033fc5b14a2860f456e6259cdc",
+                    "parent_root": "0xa472d3be6c32ea7ea6e925e060acd8e9dbae25cca4485845cef62189d333a9c7",
+                    "state_root": "0xfb485d69fef38ac1c0906f531d3676e890e3fc18c6b14bb4c33b1056a8ec3f70",
                     "body": {
                         "attestations": {
                             "data": []
@@ -129,8 +129,8 @@
                 "block": {
                     "slot": 3,
                     "proposer_index": 3,
-                    "parent_root": "0x9e31e3b47ee2690dabfb175ce43805dd74fc41aab2d24f6ec64da96eb4147921",
-                    "state_root": "0x5607d1cfaefeb8733e423c0336edcd7eb3ab3b3ebb681926f428431eb5212ea5",
+                    "parent_root": "0xe6dcd0b1860262a8db400d7634087a19a9060ee184c4b2b53b4e7b954a1cf8c4",
+                    "state_root": "0xe347f4c8576e6afd005152e5e71238484dc26f6ccaba9f36ed4592da3b070e9b",
                     "body": {
                         "attestations": {
                             "data": []
@@ -148,8 +148,8 @@
                 "block": {
                     "slot": 3,
                     "proposer_index": 3,
-                    "parent_root": "0x9e31e3b47ee2690dabfb175ce43805dd74fc41aab2d24f6ec64da96eb4147921",
-                    "state_root": "0x5607d1cfaefeb8733e423c0336edcd7eb3ab3b3ebb681926f428431eb5212ea5",
+                    "parent_root": "0xe6dcd0b1860262a8db400d7634087a19a9060ee184c4b2b53b4e7b954a1cf8c4",
+                    "state_root": "0xe347f4c8576e6afd005152e5e71238484dc26f6ccaba9f36ed4592da3b070e9b",
                     "body": {
                         "attestations": {
                             "data": []
@@ -167,8 +167,8 @@
                 "block": {
                     "slot": 4,
                     "proposer_index": 0,
-                    "parent_root": "0x85123a9611f02841fb85d281c489bebbc5d94c6595dea04563f793b0729ae977",
-                    "state_root": "0x4e6b5b4cc8c8e4c73fe7b0af44b6f51545fb4607de4ba84ed7b423c3c4ad1278",
+                    "parent_root": "0xdfc52a42d1030aad437a1fd2809146970d70c8d685ebabb7733c4ef9c75d4b38",
+                    "state_root": "0xecde6ecde227ddb15f7e5d19d2bea486a2f974fa5bfeb56555a234613e45a672",
                     "body": {
                         "attestations": {
                             "data": []
@@ -186,8 +186,8 @@
                 "block": {
                     "slot": 4,
                     "proposer_index": 0,
-                    "parent_root": "0x85123a9611f02841fb85d281c489bebbc5d94c6595dea04563f793b0729ae977",
-                    "state_root": "0x4e6b5b4cc8c8e4c73fe7b0af44b6f51545fb4607de4ba84ed7b423c3c4ad1278",
+                    "parent_root": "0xdfc52a42d1030aad437a1fd2809146970d70c8d685ebabb7733c4ef9c75d4b38",
+                    "state_root": "0xecde6ecde227ddb15f7e5d19d2bea486a2f974fa5bfeb56555a234613e45a672",
                     "body": {
                         "attestations": {
                             "data": []
@@ -205,8 +205,8 @@
                 "block": {
                     "slot": 5,
                     "proposer_index": 1,
-                    "parent_root": "0x1b9358afa09d88f0be4687205126033eaaa8c90634e766228b5906292946ee44",
-                    "state_root": "0x5cbe6f5b134c722b581ac4d7d39b5b4bd9d9b8ea914fdf20d3e4b96cdf4180ec",
+                    "parent_root": "0xfd4c5f985fdb344b987c5076756d0ca646761979cd2ea9aa375a1988c5a6003f",
+                    "state_root": "0x2570b644cfbed4a355b7a96e4235778ef5fd0b8f1ffacb315abbc0cb4b148b5f",
                     "body": {
                         "attestations": {
                             "data": []
@@ -217,7 +217,7 @@
         ],
         "maxSlot": 5,
         "_info": {
-            "hash": "0x63a75bb9e9667d01c188aa0b0a88f84e61a1d28a46f388fb765f57b0cf95d2c6",
+            "hash": "0x3145374e66fe524028f1912c7849fc5c5b7edb2ef28b2761fbdc14f11f601b4c",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_fork_choice_reorgs.py::test_three_block_deep_reorg[fork_Devnet]",
             "description": "Deep three-block reorg from established fork to alternative.\n\nScenario\n--------\n- Slot 1: Common base\n- Slots 2-4: Fork A builds 3-block lead\n- Slots 2-5: Fork B slowly builds, then surpasses with 4 blocks\n\nTimeline:\n    Slot 2: Fork A leads (1 vs 0)\n    Slot 3: Fork A leads (2 vs 1)\n    Slot 4: Fork A leads (3 vs 2)\n    Slot 5: Fork B overtakes (4 vs 3) \u2192 3-block deep reorg\n\nExpected Behavior\n-----------------\n1. Fork A establishes 3-block canonical chain (slots 2-4)\n2. Fork B steadily builds parallel chain\n3. At slot 5, fork B has 4 blocks vs fork A's 3 blocks\n4. Fork choice switches to fork B\n5. Three blocks (fork_a slots 2-4) become non-canonical\n\nReorg Details:\n    - **Depth**: 3 blocks (deepest in this test suite)\n    - **Trigger**: Alternative fork becomes longer\n    - **Weight advantage**: 4 proposer attestations vs 3\n\nWhy This Matters\n----------------\nDeep reorgs (3+ blocks) are rare in healthy networks but can happen:\n- Network partitions lasting multiple slots\n- Coordinated validator behavior (intentional or accidental)\n- Major network latency events\n\nProperties verified:\n- Fork choice correctly switches even after multiple canonical blocks\n- Weight calculation works correctly over extended depth\n- No \"stickiness\" bias toward existing head\n- Objective heaviest fork always wins\n\nThis tests the protocol's ability to recover from significant disagreement\nabout chain history, ensuring safety and liveness even in adversarial scenarios.",

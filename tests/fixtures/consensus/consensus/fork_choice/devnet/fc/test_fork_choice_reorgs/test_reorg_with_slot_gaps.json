@@ -30,34 +30,34 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x8ea1ce003e2a5a7985402c48950af130b876c322891f8721fee78e467fbb55282888074c74dd14023b408405bc540f4620b3f249"
+                        "pubkey": "0x311ccc2238e5e67351343d4b58c9395d8b18d20bf783394452019559664423634a36e427aa8ec44741db0c2570e7d528b5b3fd63"
                     },
                     {
-                        "pubkey": "0x9cc5383b37f40f5713e234145abf247763900959d5f66300fde8e06d1b0abc3643a6485fe4a71c64d34cac3d201c38170e4e0d59"
+                        "pubkey": "0x42d8e30e36c3316bf01345507adef9464baa320e7882012abc3ff05a101ec2265807e264294ab90a3246584bb8452a6f15d0f31c"
                     },
                     {
-                        "pubkey": "0xbe6e8c648ea4253ed172da0f40532e01a236da288f8b524b6d165262a460e924b4430c5b894b057cf4d67e088bdec271d5b12721"
+                        "pubkey": "0x581b860c0351607059a3e82b498eee1a5086e503ebc83b1b4f43571c45f50261c769d27ca1963f0717c256266413e9621918081d"
                     },
                     {
-                        "pubkey": "0x35aae80658fc571894db131391458e194c8f9e738adb3039e732c338578356169135331bef96d43ce02a887c63cf9a6068209732"
+                        "pubkey": "0xc817105dda7c676c274dda1b9a3fda18a24f9769d20f2576e5477970d57c95362431ae06c5aebb3602745f353829e1225383d435"
                     },
                     {
-                        "pubkey": "0x7a59e22eb5c77f2d51ed691a2becba0b3fe8c673ac9e334695388901ab82974d742f544218778836e8b7742a4a5d077e33ab8f53"
+                        "pubkey": "0x98def13d63461a444b442a5b1e14ab30d63aff6d2998c21d90db2e3a872de958f0e6af514120616be04a3307e6c77f1fdbacf206"
                     },
                     {
-                        "pubkey": "0x9872b43076c41762f279ac541b3aa53705dffc7e9c9c8a2ab6c8c528ba60420c9c1a3b79de8ca10fb5ad5462068c951c2e460a14"
+                        "pubkey": "0xf9b5630d31bbcd1afa59ae265d30fe6e7818106e739ede7dd098ac545a369b7755dd157a4deaba5c7ab84b584fb3d50da62aac40"
                     },
                     {
-                        "pubkey": "0x8feb4940dca0177e23cf956610ea7f21e4abd6251539e11456acbd48cafbb21be70e03578e92ba2a521e1e54b87a1e46a3d09677"
+                        "pubkey": "0x0685310c6504531791f37200298b6c075c01910253dd6a1400975512135d1167526b660d9219131576b47725df52c40ddf2c5855"
                     },
                     {
-                        "pubkey": "0x86c84a6d2774de28e1267417ef45fa3aaea5e55c41893f04af117a7eaafd8449dbdec81a8f7bb43af3bc89101acd5d36d3c7376f"
+                        "pubkey": "0x083281257691b33cf395123d6e901367c5833874aab26913b75e2c63e76aec1e6831fd3ae7fc9f2e5df65d5197c8bf4a103e8173"
                     },
                     {
-                        "pubkey": "0xaa3adf1e036e802447067e3cb702ec142c16b01d43b63d1c1f7e4943afae2463367d5326af054a6f0cb9d720b9f8a00446ff146f"
+                        "pubkey": "0x9f6b8a21de33800529c33b5ee20f803cef350777e1043e5293bd811986f403762aa7f1663ca45b13580ab95a53368d6815097e28"
                     },
                     {
-                        "pubkey": "0x0e39a9080aa3e76724ab9649df14f5317c11d45f8ac57237409e262156a87f0433290c67e2f8e77cae68776be4470f24282aec21"
+                        "pubkey": "0xf559d55f7c57e05becdc6c2aba83725314bb7d20a0ebbd28374e47192564d825acf04a578d5b5746fcfa7d3a5897251ccaa8173c"
                     }
                 ]
             },
@@ -72,7 +72,7 @@
             "slot": 0,
             "proposerIndex": 0,
             "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
-            "stateRoot": "0x5cbb239c78c084527177eb44eaa53e90cc6bc51f141bc49b03f1cf9eed7b7462",
+            "stateRoot": "0x96ac953225f2400081afba8880bfaf780ce8333bbc0558e51675181c606fe47b",
             "body": {
                 "attestations": {
                     "data": []
@@ -90,8 +90,8 @@
                 "block": {
                     "slot": 1,
                     "proposer_index": 1,
-                    "parent_root": "0x69bc7924cf0eab26a2a95c65437d63f3e29ff1aa7de01f0ef8e463c964c77c16",
-                    "state_root": "0x1abe026f50a9840f621b3f55fa68cddc2240cb3def54f7de71da679933b9d9f3",
+                    "parent_root": "0x96b7ce3f49a6d3a29cefe70e5679014fccd410cb4b8d2731cc9598f710ba1177",
+                    "state_root": "0x52203301bf2340c036ec3454c36d7816a62351562fc0fcd4ebeb597009a95b2f",
                     "body": {
                         "attestations": {
                             "data": []
@@ -109,8 +109,8 @@
                 "block": {
                     "slot": 3,
                     "proposer_index": 3,
-                    "parent_root": "0x6d9356ca1822eaa2c64c8c940cadabf2af28a462af225a18b197d45c06256927",
-                    "state_root": "0xd795777648e6a46cd97fc7b5fa43faccf8da10b97e4bb30ad1a977660eedb4dd",
+                    "parent_root": "0x2c854a796bc0ede9deb1ed90f2de8b3be759945d5c3dca0ed6caf7ac50b697f4",
+                    "state_root": "0xcf4ff7b13be990f66eab78b453174a13e8359a8deca22038906095ddd18d0c55",
                     "body": {
                         "attestations": {
                             "data": []
@@ -128,8 +128,8 @@
                 "block": {
                     "slot": 4,
                     "proposer_index": 4,
-                    "parent_root": "0x6d9356ca1822eaa2c64c8c940cadabf2af28a462af225a18b197d45c06256927",
-                    "state_root": "0xcf895a6e7e4a183349e504ca949accff8fd1cf6f566e8b444d6b71f2c972eb7e",
+                    "parent_root": "0x2c854a796bc0ede9deb1ed90f2de8b3be759945d5c3dca0ed6caf7ac50b697f4",
+                    "state_root": "0xd226f0edd1eb7f112372fe034a17a5fee69f1f815c78e79cdc8b883bbee0d007",
                     "body": {
                         "attestations": {
                             "data": []
@@ -143,8 +143,8 @@
                 "block": {
                     "slot": 7,
                     "proposer_index": 7,
-                    "parent_root": "0xcdad97d406a4bc79c48701dcc7a2a4b6fecd0486d5b9c277ceef4fa980c89674",
-                    "state_root": "0xcb3033781f4cc3965d092a358f0eea7f57a6a64d53fe5b7c8041364da79169df",
+                    "parent_root": "0x3877779cbf89cc378fc3b2b3f1d5fcfa9ed2150640d590a8cc6255e733fb2697",
+                    "state_root": "0xc96cad20aeea1261332811b2b7321178ee077af727ce5d6b82a6ec428cebe4f4",
                     "body": {
                         "attestations": {
                             "data": []
@@ -171,8 +171,8 @@
                 "block": {
                     "slot": 8,
                     "proposer_index": 8,
-                    "parent_root": "0xe3952d23534a54c23378950f7a25845ef009cd8a72c45d675351ddc9f1f2c638",
-                    "state_root": "0xd48066bf1eb61aaa9cefaf8b47091184a78e302dedae907a77580fc6bbba21ce",
+                    "parent_root": "0xcb37836f0896a696d9764a8570ac1252a04667c76f02ce1f94c88c5aa1d7cbff",
+                    "state_root": "0x1416a0044549df5ad381810254337d26244ca58e7e8e88cfc21f18bda4a3cdb7",
                     "body": {
                         "attestations": {
                             "data": []
@@ -186,8 +186,8 @@
                 "block": {
                     "slot": 9,
                     "proposer_index": 9,
-                    "parent_root": "0xb849cf8ec6cda4aa29da00c2245102d8a68a4d7aceb355f43a2bc049bb183626",
-                    "state_root": "0xdee5cdb40b820eee192b52c91f6032ad574d24e5659d2c08c6855dfe54c7c581",
+                    "parent_root": "0x8fcb428b36d9211c90cf967d0494d123f4c13311dc283e00467eef4b2ee45408",
+                    "state_root": "0x6fd7d43e916e11a212888e68b34cd59edfe560465d3553f5dda42d755142f2f8",
                     "body": {
                         "attestations": {
                             "data": []
@@ -207,7 +207,7 @@
         ],
         "maxSlot": 9,
         "_info": {
-            "hash": "0x662a5ab989c267e9b37a314624212623193e321a92a6c94acd62d655cc3d2a68",
+            "hash": "0xbf3239e01348793cfd9bbcf1385aef623ffe42eeafac981732f74258b0aa06b7",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_fork_choice_reorgs.py::test_reorg_with_slot_gaps[fork_Devnet]",
             "description": "Reorg occurs correctly even with missed slots in the chain.\n\nScenario\n--------\n- Slot 1: Base\n- Slot 3: Fork A (skipping slot 2)\n- Slot 4: Fork B (competing)\n- Slot 7: Fork A extended (skipping slots 4-6)\n- Slot 8: Fork B extended (skipping slots 5-7)\n- Slot 9: Fork B extended again \u2192 triggers reorg\n\nMissed Slots: 2, 5, 6 (no blocks produced)\n\nExpected Behavior\n-----------------\n1. Sparse block production doesn't affect fork choice logic\n2. Weight calculation only considers actual blocks\n3. Reorg happens based on block count, not slot numbers\n4. Fork B with 3 blocks beats fork A with 2 blocks\n\nReorg Details:\n    - **Depth**: 2 blocks (fork_a slots 3, 7)\n    - **Trigger**: Progressive building despite gaps\n    - **Weight**: 3 proposer attestations vs 2\n\nWhy This Matters\n----------------\nMissed slots are extremely common in production:\n- Offline validators (expected ~1% downtime)\n- Network issues preventing timely block propagation\n- Intentional skips during network congestion\n\nFork choice must remain robust with sparse block production:\n- Gaps don't create bias toward any fork\n- Only actual blocks contribute weight\n- Reorg logic works identically whether slots are consecutive or sparse\n\nThis test ensures the algorithm works correctly in realistic network\nconditions where perfect block production is impossible.",

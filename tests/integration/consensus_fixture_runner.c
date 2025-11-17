@@ -518,6 +518,183 @@ static int label_registry_assign(
     return -1;
 }
 
+static int lantern_root_compare_bytes(const LanternRoot *a, const LanternRoot *b) {
+    if (!a || !b) {
+        return 0;
+    }
+    return memcmp(a->bytes, b->bytes, sizeof(a->bytes));
+}
+
+static bool lantern_root_equal(const LanternRoot *a, const LanternRoot *b) {
+    return lantern_root_compare_bytes(a, b) == 0;
+}
+
+static size_t fork_choice_find_block_index(const LanternForkChoice *store, const LanternRoot *root) {
+    if (!store || !root || !store->blocks) {
+        return SIZE_MAX;
+    }
+    for (size_t i = 0; i < store->block_len; ++i) {
+        if (lantern_root_equal(&store->blocks[i].root, root)) {
+            return i;
+        }
+    }
+    return SIZE_MAX;
+}
+
+static uint64_t *fork_choice_compute_known_weights(const LanternForkChoice *store, uint64_t *out_anchor_slot) {
+    if (!store || store->block_len == 0) {
+        return NULL;
+    }
+    uint64_t *weights = calloc(store->block_len, sizeof(*weights));
+    if (!weights) {
+        return NULL;
+    }
+    uint64_t anchor_slot = 0;
+    size_t anchor_index = fork_choice_find_block_index(store, &store->latest_justified.root);
+    if (anchor_index != SIZE_MAX) {
+        anchor_slot = store->blocks[anchor_index].slot;
+    }
+    for (size_t i = 0; i < store->validator_count; ++i) {
+        const struct lantern_fork_choice_vote_entry *vote = &store->known_votes[i];
+        if (!vote->has_checkpoint) {
+            continue;
+        }
+        size_t node_index = fork_choice_find_block_index(store, &vote->checkpoint.root);
+        while (node_index != SIZE_MAX) {
+            const struct lantern_fork_choice_block_entry *node = &store->blocks[node_index];
+            if (node->slot <= anchor_slot) {
+                break;
+            }
+            if (weights[node_index] < UINT64_MAX) {
+                weights[node_index] += 1;
+            }
+            if (node->parent_index == SIZE_MAX || node->parent_index >= store->block_len) {
+                break;
+            }
+            node_index = node->parent_index;
+        }
+    }
+    if (out_anchor_slot) {
+        *out_anchor_slot = anchor_slot;
+    }
+    return weights;
+}
+
+static void format_root_hex(const LanternRoot *root, char *buf, size_t buf_len) {
+    if (!root || !buf || buf_len == 0) {
+        return;
+    }
+    if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, buf, buf_len, 1) != 0) {
+        buf[0] = '\0';
+    }
+}
+
+static int validate_lexicographic_head_among(
+    const LanternForkChoice *store,
+    const LanternRoot *head_root,
+    size_t label_count,
+    const char **labels,
+    const char *fixture_path,
+    int step_index) {
+    if (!store || !head_root || label_count < 2) {
+        fprintf(
+            stderr,
+            "lexicographicHeadAmong requires at least two labels (fixture=%s step=%d)\n",
+            fixture_path,
+            step_index);
+        return -1;
+    }
+    if (!store->has_head || store->block_len == 0) {
+        fprintf(stderr, "fork choice store is not initialized for lexicographic check\n");
+        return -1;
+    }
+    size_t head_index = fork_choice_find_block_index(store, head_root);
+    if (head_index == SIZE_MAX) {
+        fprintf(stderr, "head root not found in fork choice blocks for lexicographic check\n");
+        return -1;
+    }
+    uint64_t anchor_slot = 0;
+    uint64_t *weights = fork_choice_compute_known_weights(store, &anchor_slot);
+    if (!weights) {
+        fprintf(stderr, "failed to compute attestation weights for lexicographic check\n");
+        return -1;
+    }
+    uint64_t head_slot = store->blocks[head_index].slot;
+    uint64_t head_weight = weights[head_index];
+
+    size_t candidate_count = 0;
+    LanternRoot best_root = store->blocks[head_index].root;
+    for (size_t i = 0; i < store->block_len; ++i) {
+        const struct lantern_fork_choice_block_entry *entry = &store->blocks[i];
+        if (entry->slot != head_slot) {
+            continue;
+        }
+        if (weights[i] != head_weight) {
+            continue;
+        }
+        candidate_count += 1;
+        if (lantern_root_compare_bytes(&entry->root, &best_root) > 0) {
+            best_root = entry->root;
+        }
+    }
+    if (candidate_count < 2) {
+        free(weights);
+        return 0;
+    }
+    if (candidate_count != label_count) {
+        fprintf(
+            stderr,
+            "lexicographicHeadAmong mismatch in %s (step %d): expected %zu forks with equal weight "
+            "but found %zu (weight=%" PRIu64 ")\n",
+            fixture_path,
+            step_index,
+            label_count,
+            candidate_count,
+            head_weight);
+        fprintf(stderr, "available forks at slot %" PRIu64 ":\n", head_slot);
+        for (size_t i = 0; i < store->block_len; ++i) {
+            const struct lantern_fork_choice_block_entry *entry = &store->blocks[i];
+            if (entry->slot != head_slot) {
+                continue;
+            }
+            char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+            format_root_hex(&entry->root, root_hex, sizeof(root_hex));
+            fprintf(
+                stderr,
+                "  root=%s weight=%" PRIu64 " parent_index=%zu\n",
+                root_hex[0] ? root_hex : "0x0",
+                weights[i],
+                entry->parent_index);
+        }
+        free(weights);
+        return -1;
+    }
+    if (!lantern_root_equal(head_root, &best_root)) {
+        char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        char best_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        format_root_hex(head_root, head_hex, sizeof(head_hex));
+        format_root_hex(&best_root, best_hex, sizeof(best_hex));
+        fprintf(
+            stderr,
+            "lexicographic tiebreaker failed in %s (step %d): head %s is not lexicographically "
+            "highest equal-weight fork (expected %s). Labels: ",
+            fixture_path,
+            step_index,
+            head_hex,
+            best_hex);
+        if (labels && label_count > 0) {
+            for (size_t i = 0; i < label_count; ++i) {
+                fprintf(stderr, "%s%s", i == 0 ? "" : ", ", labels[i] ? labels[i] : "?");
+            }
+        }
+        fprintf(stderr, "\n");
+        free(weights);
+        return -1;
+    }
+    free(weights);
+    return 0;
+}
+
 static void reset_plain_block(LanternBlock *block) {
     if (!block) {
         return;
@@ -1327,6 +1504,90 @@ static int run_fork_choice_fixture(const char *path) {
                 memcpy(label_buf, label, label_len);
                 label_buf[label_len] = '\0';
                 if (label_registry_assign(&labels, label_buf, &head_root) != 0) {
+                    reset_block(&signed_block.message);
+                    reset_block(&anchor_block);
+                    lantern_fork_choice_reset(&store);
+                    lantern_state_reset(&state);
+                    lantern_fixture_document_reset(&doc);
+                    stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
+                    return -1;
+                }
+            }
+
+            int lexicographic_idx = lantern_fixture_object_get_field(&doc, checks_idx, "lexicographicHeadAmong");
+            if (lexicographic_idx >= 0) {
+                int label_count = lantern_fixture_array_get_length(&doc, lexicographic_idx);
+                if (label_count < 0) {
+                    reset_block(&signed_block.message);
+                    reset_block(&anchor_block);
+                    lantern_fork_choice_reset(&store);
+                    lantern_state_reset(&state);
+                    lantern_fixture_document_reset(&doc);
+                    stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
+                    return -1;
+                }
+                if (label_count < 2) {
+                    fprintf(
+                        stderr,
+                        "lexicographicHeadAmong requires at least two labels in %s (step %d)\n",
+                        path,
+                        i);
+                    reset_block(&signed_block.message);
+                    reset_block(&anchor_block);
+                    lantern_fork_choice_reset(&store);
+                    lantern_state_reset(&state);
+                    lantern_fixture_document_reset(&doc);
+                    stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
+                    return -1;
+                }
+                char **lex_labels = calloc((size_t)label_count, sizeof(*lex_labels));
+                if (!lex_labels) {
+                    reset_block(&signed_block.message);
+                    reset_block(&anchor_block);
+                    lantern_fork_choice_reset(&store);
+                    lantern_state_reset(&state);
+                    lantern_fixture_document_reset(&doc);
+                    stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
+                    return -1;
+                }
+                bool lexicographic_ok = true;
+                for (int label_idx = 0; label_idx < label_count; ++label_idx) {
+                    int token_idx = lantern_fixture_array_get_element(&doc, lexicographic_idx, label_idx);
+                    if (token_idx < 0) {
+                        lexicographic_ok = false;
+                        break;
+                    }
+                    size_t label_len = 0;
+                    const char *label_token = lantern_fixture_token_string(&doc, token_idx, &label_len);
+                    if (!label_token || label_len == 0) {
+                        lexicographic_ok = false;
+                        break;
+                    }
+                    lex_labels[label_idx] = malloc(label_len + 1u);
+                    if (!lex_labels[label_idx]) {
+                        lexicographic_ok = false;
+                        break;
+                    }
+                    memcpy(lex_labels[label_idx], label_token, label_len);
+                    lex_labels[label_idx][label_len] = '\0';
+                }
+                if (lexicographic_ok) {
+                    if (validate_lexicographic_head_among(
+                            &store,
+                            &head_root,
+                            (size_t)label_count,
+                            (const char **)lex_labels,
+                            path,
+                            i)
+                        != 0) {
+                        lexicographic_ok = false;
+                    }
+                }
+                for (int label_idx = 0; label_idx < label_count; ++label_idx) {
+                    free(lex_labels[label_idx]);
+                }
+                free(lex_labels);
+                if (!lexicographic_ok) {
                     reset_block(&signed_block.message);
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
