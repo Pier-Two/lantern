@@ -143,9 +143,10 @@ int lantern_hash_tree_root_config(const LanternConfig *config, LanternRoot *out_
     if (!config || !out_root) {
         return -1;
     }
-    uint8_t chunk[SSZ_BYTES_PER_CHUNK];
-    chunk_from_uint64(config->genesis_time, chunk);
-    return merkleize_chunks(chunk, 1, 0, out_root);
+    uint8_t chunks[2][SSZ_BYTES_PER_CHUNK];
+    chunk_from_uint64(config->num_validators, chunks[0]);
+    chunk_from_uint64(config->genesis_time, chunks[1]);
+    return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
 }
 
 int lantern_hash_tree_root_checkpoint(const LanternCheckpoint *checkpoint, LanternRoot *out_root) {

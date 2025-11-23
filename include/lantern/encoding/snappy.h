@@ -20,6 +20,15 @@ int lantern_snappy_compress(
     size_t output_len,
     size_t *written);
 
+/* Raw (unframed) Snappy compression. Useful when the peer expects a plain
+ * Snappy block instead of the Snappy framed stream with CRCs. */
+int lantern_snappy_compress_raw(
+    const uint8_t *input,
+    size_t input_len,
+    uint8_t *output,
+    size_t output_len,
+    size_t *written);
+
 int lantern_snappy_uncompressed_length(
     const uint8_t *input,
     size_t input_len,

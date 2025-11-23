@@ -643,12 +643,18 @@ static int send_response_chunk(
         return -1;
     }
 
+    /* Force response-code for status RPC (Zeam expects code byte) */
+    bool include_code = include_response_code;
+    if (protocol_id && strstr(protocol_id, "/status/1/ssz_snappy") != NULL) {
+        include_code = true;
+    }
+
     lantern_log_info(
         "reqresp",
         meta,
         "%s framing include_code=%s code=%u payload_len=%zu",
         phase ? phase : "response",
-        include_response_code ? "true" : "false",
+        include_code ? "true" : "false",
         (unsigned)response_code,
         payload_len);
 
@@ -664,7 +670,7 @@ static int send_response_chunk(
         return -1;
     }
 
-    size_t frame_len = header_len + payload_len + (include_response_code ? 1u : 0u);
+    size_t frame_len = header_len + payload_len + (include_code ? 1u : 0u);
     uint8_t *frame = (uint8_t *)malloc(frame_len > 0 ? frame_len : 1u);
     if (!frame) {
         lantern_log_error(
@@ -676,7 +682,7 @@ static int send_response_chunk(
         return -1;
     }
     size_t frame_offset = 0;
-    if (include_response_code) {
+    if (include_code) {
         frame[frame_offset++] = response_code;
     }
     if (header_len > 0) {
@@ -685,6 +691,28 @@ static int send_response_chunk(
     }
     if (payload_len > 0) {
         memcpy(frame + frame_offset, payload, payload_len);
+    }
+
+    /* Debug aid: summarize the outgoing frame (response path) so we can match consumer expectations */
+    if (protocol_id && strstr(protocol_id, "/status/1/ssz_snappy") != NULL) {
+        char frame_hex[(LANTERN_STATUS_PREVIEW_BYTES * 2u) + 1u];
+        frame_hex[0] = '\0';
+        size_t preview = frame_len < LANTERN_STATUS_PREVIEW_BYTES ? frame_len : LANTERN_STATUS_PREVIEW_BYTES;
+        if (preview > 0
+            && lantern_bytes_to_hex(frame, preview, frame_hex, sizeof(frame_hex), 0) != 0) {
+            frame_hex[0] = '\0';
+        }
+        lantern_log_info(
+            "reqresp",
+            meta,
+            "%s frame summary code_byte=0x%02x header_len=%zu payload_len=%zu frame_len=%zu%s%s",
+            phase ? phase : "response",
+            (unsigned)response_code,
+            header_len,
+            payload_len,
+            frame_len,
+            frame_hex[0] ? " frame_hex=" : "",
+            frame_hex[0] ? frame_hex : "");
     }
 
     if (write_stream_all(
@@ -1074,6 +1102,30 @@ static void *status_request_worker(void *arg) {
     if (payload_len > 0) {
         memcpy(frame + header_len, payload, payload_len);
     }
+
+    /* Debug aid: log the outgoing frame structure so we can compare with Zeam's decoder expectations */
+    {
+        const size_t frame_len = header_len + payload_len;
+        char frame_hex[(LANTERN_STATUS_PREVIEW_BYTES * 2u) + 1u];
+        frame_hex[0] = '\0';
+        size_t preview = frame_len < LANTERN_STATUS_PREVIEW_BYTES ? frame_len : LANTERN_STATUS_PREVIEW_BYTES;
+        if (preview > 0
+            && lantern_bytes_to_hex(frame, preview, frame_hex, sizeof(frame_hex), 0) != 0) {
+            frame_hex[0] = '\0';
+        }
+        lantern_log_info(
+            "reqresp",
+            &meta,
+            "status[%" PRIu64 "] response frame summary code_byte=0x%02x header_len=%zu payload_len=%zu frame_len=%zu%s%s",
+            trace_id,
+            (unsigned)LANTERN_REQRESP_RESPONSE_SUCCESS,
+            header_len,
+            payload_len,
+            frame_len,
+            frame_hex[0] ? " frame_hex=" : "",
+            frame_hex[0] ? frame_hex : "");
+    }
+
     rc = write_stream_all(
         stream,
         frame,
