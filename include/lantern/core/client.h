@@ -140,6 +140,11 @@ struct lantern_client {
     bool *validator_enabled;
     pthread_mutex_t validator_lock;
     bool validator_lock_initialized;
+    struct lantern_peer_vote_metric *peer_vote_stats;
+    size_t peer_vote_stats_len;
+    size_t peer_vote_stats_cap;
+    pthread_mutex_t peer_vote_lock;
+    bool peer_vote_lock_initialized;
     pthread_t validator_thread;
     bool validator_thread_started;
     int validator_stop_flag;
@@ -153,11 +158,13 @@ struct lantern_client {
     struct libp2p_subscription *connection_subscription;
     struct lantern_string_list dialer_peers;
     struct lantern_string_list connected_peer_ids;
-    struct lantern_string_list pending_status_peer_ids;
     struct lantern_string_list status_failure_peer_ids;
     struct lantern_pending_block_list pending_blocks;
     pthread_mutex_t pending_lock;
     bool pending_lock_initialized;
+    size_t status_requests_inflight_total;
+    size_t status_requests_peak;
+    bool status_guard_disabled;
     pthread_t dialer_thread;
     bool dialer_thread_started;
     int dialer_stop_flag;
@@ -186,6 +193,13 @@ size_t lantern_client_local_validator_count(const struct lantern_client *client)
 const struct lantern_local_validator *lantern_client_local_validator(
     const struct lantern_client *client,
     size_t index);
+int lantern_validator_refresh_cached_vote(
+    struct lantern_local_validator *validator,
+    uint64_t slot,
+    const LanternCheckpoint *head,
+    const LanternCheckpoint *target,
+    const LanternCheckpoint *source,
+    LanternSignedVote *vote);
 int lantern_client_publish_block(struct lantern_client *client, const LanternSignedBlock *block);
 
 int lantern_client_debug_record_vote(

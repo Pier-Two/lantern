@@ -194,6 +194,109 @@ static int format_metrics_body(
         return -1;
     }
 
+    if (snapshot->peer_vote_metrics_count > 0) {
+        if (metrics_buffer_appendf(
+                &buf,
+                "# HELP lean_gossip_votes_received_total Vote gossip messages received per peer\n"
+                "# TYPE lean_gossip_votes_received_total counter\n")
+            != 0) {
+            metrics_buffer_free(&buf);
+            return -1;
+        }
+        for (size_t i = 0; i < snapshot->peer_vote_metrics_count; ++i) {
+            const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
+            if (metrics_buffer_appendf(
+                    &buf,
+                    "lean_gossip_votes_received_total{peer=\"%s\"} %" PRIu64 "\n",
+                    metric->peer_id,
+                    metric->received_total)
+                != 0) {
+                metrics_buffer_free(&buf);
+                return -1;
+            }
+        }
+        if (metrics_buffer_appendf(
+                &buf,
+                "# HELP lean_gossip_votes_accepted_total Vote gossip messages accepted per peer\n"
+                "# TYPE lean_gossip_votes_accepted_total counter\n")
+            != 0) {
+            metrics_buffer_free(&buf);
+            return -1;
+        }
+        for (size_t i = 0; i < snapshot->peer_vote_metrics_count; ++i) {
+            const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
+            if (metrics_buffer_appendf(
+                    &buf,
+                    "lean_gossip_votes_accepted_total{peer=\"%s\"} %" PRIu64 "\n",
+                    metric->peer_id,
+                    metric->accepted_total)
+                != 0) {
+                metrics_buffer_free(&buf);
+                return -1;
+            }
+        }
+        if (metrics_buffer_appendf(
+                &buf,
+                "# HELP lean_gossip_votes_rejected_total Vote gossip messages rejected per peer\n"
+                "# TYPE lean_gossip_votes_rejected_total counter\n")
+            != 0) {
+            metrics_buffer_free(&buf);
+            return -1;
+        }
+        for (size_t i = 0; i < snapshot->peer_vote_metrics_count; ++i) {
+            const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
+            if (metrics_buffer_appendf(
+                    &buf,
+                    "lean_gossip_votes_rejected_total{peer=\"%s\"} %" PRIu64 "\n",
+                    metric->peer_id,
+                    metric->rejected_total)
+                != 0) {
+                metrics_buffer_free(&buf);
+                return -1;
+            }
+        }
+        if (metrics_buffer_appendf(
+                &buf,
+                "# HELP lean_gossip_votes_last_validator_id Last validator id observed per peer\n"
+                "# TYPE lean_gossip_votes_last_validator_id gauge\n")
+            != 0) {
+            metrics_buffer_free(&buf);
+            return -1;
+        }
+        for (size_t i = 0; i < snapshot->peer_vote_metrics_count; ++i) {
+            const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
+            if (metrics_buffer_appendf(
+                    &buf,
+                    "lean_gossip_votes_last_validator_id{peer=\"%s\"} %" PRIu64 "\n",
+                    metric->peer_id,
+                    metric->last_validator_id)
+                != 0) {
+                metrics_buffer_free(&buf);
+                return -1;
+            }
+        }
+        if (metrics_buffer_appendf(
+                &buf,
+                "# HELP lean_gossip_votes_last_slot Last vote slot observed per peer\n"
+                "# TYPE lean_gossip_votes_last_slot gauge\n")
+            != 0) {
+            metrics_buffer_free(&buf);
+            return -1;
+        }
+        for (size_t i = 0; i < snapshot->peer_vote_metrics_count; ++i) {
+            const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
+            if (metrics_buffer_appendf(
+                    &buf,
+                    "lean_gossip_votes_last_slot{peer=\"%s\"} %" PRIu64 "\n",
+                    metric->peer_id,
+                    metric->last_slot)
+                != 0) {
+                metrics_buffer_free(&buf);
+                return -1;
+            }
+        }
+    }
+
     if (append_histogram_metrics(
             &buf,
             "lean_fork_choice_block_processing_time_seconds",

@@ -11,12 +11,25 @@
 extern "C" {
 #endif
 
+#define LANTERN_METRICS_MAX_PEER_VOTE_STATS 64u
+
+struct lantern_peer_vote_metric {
+    char peer_id[128];
+    uint64_t received_total;
+    uint64_t accepted_total;
+    uint64_t rejected_total;
+    uint64_t last_validator_id;
+    uint64_t last_slot;
+};
+
 struct lantern_metrics_snapshot {
     uint64_t lean_head_slot;
     uint64_t lean_latest_justified_slot;
     uint64_t lean_latest_finalized_slot;
     size_t lean_validators_count;
     struct lean_metrics_snapshot lean_metrics;
+    size_t peer_vote_metrics_count;
+    struct lantern_peer_vote_metric peer_vote_metrics[LANTERN_METRICS_MAX_PEER_VOTE_STATS];
 };
 
 struct lantern_metrics_callbacks {

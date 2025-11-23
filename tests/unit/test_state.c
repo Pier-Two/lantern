@@ -79,6 +79,34 @@ static void mark_slot_justified_for_tests(LanternState *state, uint64_t slot) {
     state->justified_slots.bytes[byte_index] |= (uint8_t)(1u << bit_index);
 }
 
+static bool slot_is_justifiable_for_tests(uint64_t candidate_slot, uint64_t finalized_slot) {
+    if (candidate_slot < finalized_slot) {
+        return false;
+    }
+    uint64_t delta = candidate_slot - finalized_slot;
+    if (delta <= 5) {
+        return true;
+    }
+    for (uint64_t i = 1; i <= delta; ++i) {
+        if (i > delta / i) {
+            break;
+        }
+        if (i * i == delta) {
+            return true;
+        }
+    }
+    for (uint64_t a = 1; a < delta; ++a) {
+        uint64_t b = a + 1;
+        if (a > delta / b) {
+            break;
+        }
+        if (a * b == delta) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool checkpoints_equal(const LanternCheckpoint *a, const LanternCheckpoint *b) {
     if (!a || !b) {
         return false;
@@ -749,6 +777,53 @@ static int test_attestations_finalize_after_second_consecutive_vote(void) {
 
     lantern_attestations_reset(&single_vote);
     lantern_block_signatures_reset(&single_sig);
+    lantern_attestations_reset(&second_vote);
+    lantern_block_signatures_reset(&second_sig);
+    lantern_state_reset(&state);
+    return 0;
+}
+
+static int test_attestations_finalize_across_gap(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, 745, 4), "genesis for gap finalization test");
+
+    mark_slot_justified_for_tests(&state, state.latest_justified.slot);
+    uint64_t source_slot = state.latest_justified.slot + 1u;
+    mark_slot_justified_for_tests(&state, source_slot);
+    state.latest_justified.slot = source_slot;
+    fill_root(&state.latest_justified.root, 0xC1);
+
+    LanternCheckpoint source = state.latest_justified;
+    LanternCheckpoint target = source;
+    target.slot = source.slot + 3u;
+    fill_root(&target.root, 0xC2);
+
+    LanternAttestations first_vote;
+    lantern_attestations_init(&first_vote);
+    LanternBlockSignatures first_sig;
+    lantern_block_signatures_init(&first_sig);
+    expect_zero(lantern_attestations_resize(&first_vote, 1), "resize first gap vote");
+    expect_zero(lantern_block_signatures_resize(&first_sig, 1), "resize first gap signature");
+    build_vote(&first_vote.data[0], &first_sig.data[0], 0, target.slot, &source, &target, 0x71);
+
+    expect_zero(lantern_state_process_attestations(&state, &first_vote, &first_sig), "process first gap vote");
+    assert(state.latest_finalized.slot != source.slot);
+    assert(state.latest_justified.slot == target.slot);
+
+    LanternAttestations second_vote;
+    lantern_attestations_init(&second_vote);
+    LanternBlockSignatures second_sig;
+    lantern_block_signatures_init(&second_sig);
+    expect_zero(lantern_attestations_resize(&second_vote, 1), "resize second gap vote");
+    expect_zero(lantern_block_signatures_resize(&second_sig, 1), "resize second gap signature");
+    build_vote(&second_vote.data[0], &second_sig.data[0], 1, target.slot, &source, &target, 0x72);
+
+    expect_zero(lantern_state_process_attestations(&state, &second_vote, &second_sig), "process second gap vote");
+    assert(state.latest_finalized.slot == source.slot);
+
+    lantern_attestations_reset(&first_vote);
+    lantern_block_signatures_reset(&first_sig);
     lantern_attestations_reset(&second_vote);
     lantern_block_signatures_reset(&second_sig);
     lantern_state_reset(&state);
@@ -1662,7 +1737,15 @@ static int test_compute_vote_checkpoints_justifiable(void) {
         lantern_fork_choice_reset(&fork_choice);
         return 1;
     }
-    if (target.slot != 6 || memcmp(target.root.bytes, block_roots[6].bytes, LANTERN_ROOT_SIZE) != 0) {
+    uint64_t expected_target_slot = head.slot;
+    while (!slot_is_justifiable_for_tests(expected_target_slot, state.latest_finalized.slot)) {
+        if (expected_target_slot == 0) {
+            break;
+        }
+        expected_target_slot -= 1u;
+    }
+    if (target.slot != expected_target_slot
+        || memcmp(target.root.bytes, block_roots[expected_target_slot].bytes, LANTERN_ROOT_SIZE) != 0) {
         fprintf(stderr, "target checkpoint not adjusted for justifiability\n");
         lantern_state_reset(&state);
         lantern_fork_choice_reset(&fork_choice);
@@ -1670,6 +1753,151 @@ static int test_compute_vote_checkpoints_justifiable(void) {
     }
     if (!checkpoints_equal(&source, &state.latest_justified)) {
         fprintf(stderr, "source checkpoint mismatch in justifiable test\n");
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+
+    lantern_state_reset(&state);
+    lantern_fork_choice_reset(&fork_choice);
+    return 0;
+}
+
+static int test_compute_vote_checkpoints_consecutive_target(void) {
+    LanternState state;
+    LanternForkChoice fork_choice;
+    LanternRoot genesis_root;
+    setup_state_and_fork_choice(&state, &fork_choice, 1750, 6, &genesis_root);
+
+    LanternRoot block_roots[6];
+    block_roots[0] = genesis_root;
+    LanternRoot parent_root = genesis_root;
+    for (uint64_t slot = 1; slot <= 5; ++slot) {
+        LanternBlock block;
+        LanternRoot block_root;
+        make_block(&state, slot, &parent_root, &block, &block_root);
+        expect_zero(
+            lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, NULL, &block_root),
+            "add block for consecutive target test");
+        block_roots[slot] = block_root;
+        parent_root = block_root;
+        lantern_block_body_reset(&block.body);
+    }
+
+    fork_choice.head = block_roots[5];
+    fork_choice.has_head = true;
+    fork_choice.safe_target = block_roots[5];
+    fork_choice.has_safe_target = true;
+
+    state.latest_finalized.slot = 3;
+    state.latest_finalized.root = block_roots[3];
+    state.latest_justified.slot = 4;
+    state.latest_justified.root = block_roots[4];
+
+    LanternCheckpoint head;
+    LanternCheckpoint target;
+    LanternCheckpoint source;
+    if (lantern_state_compute_vote_checkpoints(&state, &head, &target, &source) != 0) {
+        fprintf(stderr, "compute vote checkpoints consecutive target failed\n");
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (target.slot != head.slot || memcmp(target.root.bytes, block_roots[5].bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "target checkpoint not aligned with head in consecutive target test\n");
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (target.slot <= source.slot) {
+        fprintf(stderr, "target did not advance beyond source in consecutive target test\n");
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (!checkpoints_equal(&source, &state.latest_justified)) {
+        fprintf(stderr, "source checkpoint mismatch in consecutive target test\n");
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+
+    lantern_state_reset(&state);
+    lantern_fork_choice_reset(&fork_choice);
+    return 0;
+}
+
+static int test_compute_vote_checkpoints_advances_beyond_source(void) {
+    LanternState state;
+    LanternForkChoice fork_choice;
+    LanternRoot genesis_root;
+    setup_state_and_fork_choice(&state, &fork_choice, 1800, 8, &genesis_root);
+
+    LanternRoot block_roots[11];
+    block_roots[0] = genesis_root;
+    LanternRoot parent_root = genesis_root;
+    for (uint64_t slot = 1; slot <= 10; ++slot) {
+        LanternBlock block;
+        LanternRoot block_root;
+        make_block(&state, slot, &parent_root, &block, &block_root);
+        expect_zero(
+            lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, NULL, &block_root),
+            "add block for advance target test");
+        block_roots[slot] = block_root;
+        parent_root = block_root;
+        lantern_block_body_reset(&block.body);
+    }
+
+    fork_choice.head = block_roots[10];
+    fork_choice.has_head = true;
+    fork_choice.safe_target = block_roots[10];
+    fork_choice.has_safe_target = true;
+
+    for (uint64_t slot = 0; slot <= 6; ++slot) {
+        mark_slot_justified_for_tests(&state, slot);
+    }
+    state.latest_finalized.slot = 0;
+    state.latest_finalized.root = block_roots[0];
+    state.latest_justified.slot = 6;
+    state.latest_justified.root = block_roots[6];
+
+    LanternCheckpoint head;
+    LanternCheckpoint target;
+    LanternCheckpoint source;
+    if (lantern_state_compute_vote_checkpoints(&state, &head, &target, &source) != 0) {
+        fprintf(stderr, "compute vote checkpoints advance test failed\n");
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (head.slot != 10 || memcmp(head.root.bytes, block_roots[10].bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "head checkpoint mismatch in advance test\n");
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    uint64_t expected_slot = head.slot;
+    while (!slot_is_justifiable_for_tests(expected_slot, state.latest_finalized.slot)) {
+        if (expected_slot == 0) {
+            break;
+        }
+        expected_slot -= 1u;
+    }
+    if (expected_slot <= state.latest_justified.slot) {
+        fprintf(stderr, "expected slot did not advance beyond source in advance test\n");
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (target.slot != expected_slot
+        || memcmp(target.root.bytes, block_roots[expected_slot].bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "target checkpoint mismatch in advance test\n");
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (!checkpoints_equal(&source, &state.latest_justified)) {
+        fprintf(stderr, "source checkpoint mismatch in advance test\n");
         lantern_state_reset(&state);
         lantern_fork_choice_reset(&fork_choice);
         return 1;
@@ -1795,6 +2023,9 @@ int main(void) {
     if (test_attestations_finalize_after_second_consecutive_vote() != 0) {
         return 1;
     }
+    if (test_attestations_finalize_across_gap() != 0) {
+        return 1;
+    }
     if (test_attestations_ignore_out_of_range_validator() != 0) {
         return 1;
     }
@@ -1826,6 +2057,12 @@ int main(void) {
         return 1;
     }
     if (test_compute_vote_checkpoints_justifiable() != 0) {
+        return 1;
+    }
+    if (test_compute_vote_checkpoints_consecutive_target() != 0) {
+        return 1;
+    }
+    if (test_compute_vote_checkpoints_advances_beyond_source() != 0) {
         return 1;
     }
     if (test_history_limits_enforced() != 0) {

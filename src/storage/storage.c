@@ -1,6 +1,7 @@
 #include "lantern/storage/storage.h"
 
 #include <errno.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -696,6 +697,7 @@ int lantern_storage_collect_blocks(
     if (build_blocks_dir(data_dir, &blocks_dir) != 0) {
         return -1;
     }
+    struct lantern_log_metadata meta = {0};
     for (size_t i = 0; i < root_count; ++i) {
         char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
         if (lantern_bytes_to_hex(roots[i].bytes, LANTERN_ROOT_SIZE, root_hex, sizeof(root_hex), 0) != 0) {
@@ -713,11 +715,23 @@ int lantern_storage_collect_blocks(
             free_path(blocks_dir);
             return -1;
         }
+        lantern_log_trace(
+            "storage",
+            &meta,
+            "collect_blocks search root=%s path=%s",
+            root_hex,
+            block_path ? block_path : "null");
         uint8_t *data = NULL;
         size_t data_len = 0;
         int read_rc = read_file_buffer(block_path, &data, &data_len);
         free_path(block_path);
         if (read_rc != 0) {
+            lantern_log_debug(
+                "storage",
+                &meta,
+                "collect_blocks miss root=%s rc=%d",
+                root_hex,
+                read_rc);
             continue;
         }
         size_t current = out_blocks->length;
@@ -743,6 +757,13 @@ int lantern_storage_collect_blocks(
             free_path(blocks_dir);
             return -1;
         }
+        lantern_log_trace(
+            "storage",
+            &meta,
+            "collect_blocks loaded root=%s slot=%" PRIu64 " attestations=%zu",
+            root_hex,
+            dest->message.block.slot,
+            dest->message.block.body.attestations.length);
         free(data);
     }
     free_path(blocks_dir);

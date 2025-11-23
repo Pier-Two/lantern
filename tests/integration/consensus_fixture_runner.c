@@ -1149,7 +1149,7 @@ static int run_fork_choice_fixture(const char *path) {
         }
 
         LanternRoot block_root;
-        if (lantern_hash_tree_root_block(&signed_block.message, &block_root) != 0) {
+        if (lantern_hash_tree_root_block(&signed_block.message.block, &block_root) != 0) {
             reset_block(&signed_block.message);
             reset_block(&anchor_block);
             lantern_fork_choice_reset(&store);

@@ -41,6 +41,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdarg.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -53,7 +54,6 @@
 #define LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_MS 300000u
 #define LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_FAILURES 8u
 #define LANTERN_BLOCKS_REQUEST_MIN_POLL_MS 2000u
-#define LANTERN_STATUS_POLL_INTERVAL_MS 6000u
 #define LANTERN_PENDING_BLOCK_LIMIT 256u
 #define LANTERN_PEER_DIAL_TIMEOUT_MS 4000
 
@@ -62,6 +62,8 @@ enum lantern_blocks_request_outcome {
     LANTERN_BLOCKS_REQUEST_FAILED,
     LANTERN_BLOCKS_REQUEST_ABORTED
 };
+
+struct lantern_vote_rejection_info;
 
 static uint64_t monotonic_millis(void);
 static uint64_t blocks_request_backoff_ms(uint32_t failures);
@@ -96,9 +98,23 @@ static int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *o
 static void format_root_hex(const LanternRoot *root, char *out, size_t out_len);
 static bool lantern_client_lock_state(struct lantern_client *client);
 static void lantern_client_unlock_state(struct lantern_client *client, bool locked);
+static void lantern_client_note_vote_delivery(
+    struct lantern_client *client,
+    const char *peer_id,
+    const LanternSignedVote *vote);
+static void lantern_client_note_vote_outcome(
+    struct lantern_client *client,
+    const char *peer_id,
+    const LanternSignedVote *vote,
+    bool accepted);
+static void lantern_client_register_vote_peer(
+    struct lantern_client *client,
+    const char *peer_id);
 static bool lantern_client_lock_pending(struct lantern_client *client);
 static void lantern_client_unlock_pending(struct lantern_client *client, bool locked);
 static int lantern_client_refresh_state_validators(struct lantern_client *client);
+static size_t lantern_client_enabled_validator_count(struct lantern_client *client);
+static void lantern_vote_rejection_set(struct lantern_vote_rejection_info *info, const char *fmt, ...);
 static bool lantern_validator_pubkey_is_zero(const uint8_t *pubkey);
 static bool lantern_client_block_known_locked(
     struct lantern_client *client,
@@ -110,7 +126,8 @@ static bool lantern_client_validate_vote_constraints(
     const LanternVote *vote,
     const char *facility,
     const struct lantern_log_metadata *meta,
-    const char *context);
+    const char *context,
+    struct lantern_vote_rejection_info *out_rejection);
 static bool lantern_client_import_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
@@ -149,10 +166,13 @@ static void connection_counter_update(
     int reason);
 static void connection_counter_reset(struct lantern_client *client);
 static void request_status_now(struct lantern_client *client, const peer_id_t *peer, const char *peer_text);
-static inline void drain_pending_status_requests(struct lantern_client *client);
-static void request_status_from_bootnodes(struct lantern_client *client);
 static bool lantern_client_is_peer_connected(struct lantern_client *client, const char *peer_id);
-static void lantern_client_enqueue_status_peer(struct lantern_client *client, const char *peer_id);
+static void lantern_client_status_request_update_locked(
+    struct lantern_client *client,
+    struct lantern_peer_status_entry *entry,
+    const char *peer_id,
+    int delta,
+    const char *phase);
 static int start_peer_dialer(struct lantern_client *client);
 static void stop_peer_dialer(struct lantern_client *client);
 static uint64_t validator_wall_time_now_seconds(void);
@@ -211,7 +231,8 @@ static void lantern_client_record_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const LanternRoot *root,
-    const char *peer_text);
+    const char *peer_text,
+    const char *context);
 static void lantern_client_record_vote(
     struct lantern_client *client,
     const LanternSignedVote *vote,
@@ -285,9 +306,9 @@ struct lantern_peer_status_entry {
     bool has_status;
     bool requested_head;
     bool status_request_inflight;
-    uint64_t last_status_request_ms;
     uint64_t last_blocks_request_ms;
     uint32_t consecutive_blocks_failures;
+    uint32_t outstanding_status_requests;
 };
 
 struct block_request_ctx {
@@ -302,6 +323,11 @@ struct block_request_ctx {
 struct block_request_worker_args {
     struct block_request_ctx *ctx;
     libp2p_stream_t *stream;
+};
+
+struct lantern_vote_rejection_info {
+    bool has_reason;
+    char message[256];
 };
 
 static size_t lantern_peer_id_capacity(void) {
@@ -355,7 +381,122 @@ lantern_client_ensure_status_entry_locked(struct lantern_client *client, const c
     const size_t peer_cap = lantern_peer_id_capacity();
     strncpy(entry->peer_id, peer_id, peer_cap - 1);
     entry->peer_id[peer_cap - 1] = '\0';
+    lantern_client_register_vote_peer(client, peer_id);
     return entry;
+}
+
+static struct lantern_peer_vote_metric *
+lantern_client_find_vote_metric_locked(struct lantern_client *client, const char *peer_id) {
+    if (!client || !peer_id || !peer_id[0] || !client->peer_vote_stats || client->peer_vote_stats_len == 0) {
+        return NULL;
+    }
+    const size_t peer_cap = sizeof(((struct lantern_peer_vote_metric *)0)->peer_id);
+    for (size_t i = 0; i < client->peer_vote_stats_len; ++i) {
+        struct lantern_peer_vote_metric *entry = &client->peer_vote_stats[i];
+        if (strncmp(entry->peer_id, peer_id, peer_cap) == 0) {
+            return entry;
+        }
+    }
+    return NULL;
+}
+
+static struct lantern_peer_vote_metric *
+lantern_client_ensure_vote_metric_locked(struct lantern_client *client, const char *peer_id) {
+    if (!client || !peer_id || !peer_id[0]) {
+        return NULL;
+    }
+    struct lantern_peer_vote_metric *entry = lantern_client_find_vote_metric_locked(client, peer_id);
+    if (entry) {
+        return entry;
+    }
+    size_t new_capacity = client->peer_vote_stats_cap == 0 ? 4u : client->peer_vote_stats_cap * 2u;
+    if (new_capacity > (SIZE_MAX / sizeof(*client->peer_vote_stats))) {
+        return NULL;
+    }
+    if (client->peer_vote_stats_len == client->peer_vote_stats_cap) {
+        struct lantern_peer_vote_metric *grown = realloc(
+            client->peer_vote_stats,
+            new_capacity * sizeof(*client->peer_vote_stats));
+        if (!grown) {
+            return NULL;
+        }
+        memset(
+            grown + client->peer_vote_stats_cap,
+            0,
+            (new_capacity - client->peer_vote_stats_cap) * sizeof(*grown));
+        client->peer_vote_stats = grown;
+        client->peer_vote_stats_cap = new_capacity;
+    }
+    entry = &client->peer_vote_stats[client->peer_vote_stats_len++];
+    memset(entry, 0, sizeof(*entry));
+    const size_t peer_cap = sizeof(entry->peer_id);
+    strncpy(entry->peer_id, peer_id, peer_cap - 1u);
+    entry->peer_id[peer_cap - 1u] = '\0';
+    return entry;
+}
+
+static void lantern_client_register_vote_peer(struct lantern_client *client, const char *peer_id) {
+    if (!client || !peer_id || !peer_id[0] || !client->peer_vote_lock_initialized) {
+        return;
+    }
+    if (pthread_mutex_lock(&client->peer_vote_lock) != 0) {
+        return;
+    }
+    (void)lantern_client_ensure_vote_metric_locked(client, peer_id);
+    pthread_mutex_unlock(&client->peer_vote_lock);
+}
+
+static void lantern_client_note_vote_delivery(
+    struct lantern_client *client,
+    const char *peer_id,
+    const LanternSignedVote *vote) {
+    if (!client || !peer_id || !peer_id[0] || !client->peer_vote_lock_initialized) {
+        return;
+    }
+    if (pthread_mutex_lock(&client->peer_vote_lock) != 0) {
+        return;
+    }
+    struct lantern_peer_vote_metric *metrics = lantern_client_ensure_vote_metric_locked(client, peer_id);
+    if (metrics) {
+        if (metrics->received_total < UINT64_MAX) {
+            metrics->received_total += 1u;
+        }
+        if (vote) {
+            metrics->last_validator_id = vote->data.validator_id;
+            metrics->last_slot = vote->data.slot;
+        }
+    }
+    pthread_mutex_unlock(&client->peer_vote_lock);
+}
+
+static void lantern_client_note_vote_outcome(
+    struct lantern_client *client,
+    const char *peer_id,
+    const LanternSignedVote *vote,
+    bool accepted) {
+    if (!client || !peer_id || !peer_id[0] || !client->peer_vote_lock_initialized) {
+        return;
+    }
+    if (pthread_mutex_lock(&client->peer_vote_lock) != 0) {
+        return;
+    }
+    struct lantern_peer_vote_metric *metrics = lantern_client_ensure_vote_metric_locked(client, peer_id);
+    if (metrics) {
+        if (accepted) {
+            if (metrics->accepted_total < UINT64_MAX) {
+                metrics->accepted_total += 1u;
+            }
+        } else {
+            if (metrics->rejected_total < UINT64_MAX) {
+                metrics->rejected_total += 1u;
+            }
+        }
+        if (vote) {
+            metrics->last_validator_id = vote->data.validator_id;
+            metrics->last_slot = vote->data.slot;
+        }
+    }
+    pthread_mutex_unlock(&client->peer_vote_lock);
 }
 
 static bool lantern_client_try_begin_status_request(struct lantern_client *client, const char *peer_id) {
@@ -384,7 +525,7 @@ static void lantern_client_note_status_request_start(struct lantern_client *clie
     }
     struct lantern_peer_status_entry *entry = lantern_client_find_status_entry_locked(client, peer_id);
     if (entry) {
-        entry->last_status_request_ms = monotonic_millis();
+        lantern_client_status_request_update_locked(client, entry, peer_id, 1, "dispatch");
     }
     pthread_mutex_unlock(&client->status_lock);
 }
@@ -399,7 +540,7 @@ static void lantern_client_status_request_failed(struct lantern_client *client, 
     struct lantern_peer_status_entry *entry = lantern_client_find_status_entry_locked(client, peer_id);
     if (entry) {
         entry->status_request_inflight = false;
-        entry->last_status_request_ms = 0;
+        lantern_client_status_request_update_locked(client, entry, peer_id, -1, "failure");
     }
     pthread_mutex_unlock(&client->status_lock);
 }
@@ -460,23 +601,17 @@ static void connection_counter_reset(struct lantern_client *client) {
         client->connected_peers = 0;
         lantern_string_list_reset(&client->connected_peer_ids);
         lantern_string_list_init(&client->connected_peer_ids);
-        lantern_string_list_reset(&client->pending_status_peer_ids);
-        lantern_string_list_init(&client->pending_status_peer_ids);
         return;
     }
     if (pthread_mutex_lock(&client->connection_lock) == 0) {
         client->connected_peers = 0;
         lantern_string_list_reset(&client->connected_peer_ids);
         lantern_string_list_init(&client->connected_peer_ids);
-        lantern_string_list_reset(&client->pending_status_peer_ids);
-        lantern_string_list_init(&client->pending_status_peer_ids);
         pthread_mutex_unlock(&client->connection_lock);
     } else {
         client->connected_peers = 0;
         lantern_string_list_reset(&client->connected_peer_ids);
         lantern_string_list_init(&client->connected_peer_ids);
-        lantern_string_list_reset(&client->pending_status_peer_ids);
-        lantern_string_list_init(&client->pending_status_peer_ids);
     }
 }
 
@@ -562,8 +697,7 @@ static void request_status_now(struct lantern_client *client, const peer_id_t *p
             &(const struct lantern_log_metadata){
                 .validator = client->node_id,
                 .peer = status_peer},
-            "deferring status request until peer is connected");
-        lantern_client_enqueue_status_peer(client, status_peer);
+            "cannot request status; peer is not connected");
         return;
     }
 
@@ -573,7 +707,8 @@ static void request_status_now(struct lantern_client *client, const peer_id_t *p
     };
 
     bool guard_claimed = false;
-    if (status_peer && client->status_lock_initialized) {
+    bool guard_enabled = !client->status_guard_disabled;
+    if (status_peer && client->status_lock_initialized && guard_enabled) {
         guard_claimed = lantern_client_try_begin_status_request(client, status_peer);
         if (!guard_claimed) {
             lantern_log_trace(
@@ -582,6 +717,11 @@ static void request_status_now(struct lantern_client *client, const peer_id_t *p
                 "status request already in flight; skipping");
             return;
         }
+    } else if (status_peer && client->status_guard_disabled) {
+        lantern_log_debug(
+            "reqresp",
+            &meta,
+            "status guard disabled; allowing concurrent request");
     }
 
     int status_rc = lantern_reqresp_service_request_status(&client->reqresp, peer, status_peer);
@@ -603,10 +743,7 @@ static void request_status_now(struct lantern_client *client, const peer_id_t *p
                 .validator = client->node_id},
             "initiated status request to peer");
     }
-    if (status_rc != 0 && status_peer) {
-        lantern_client_enqueue_status_peer(client, status_peer);
-    }
-    if (status_peer && guard_claimed) {
+    if (status_peer) {
         if (status_rc == 0) {
             lantern_client_note_status_request_start(client, status_peer);
         } else {
@@ -615,117 +752,11 @@ static void request_status_now(struct lantern_client *client, const peer_id_t *p
     }
 }
 
-static inline void drain_pending_status_requests(struct lantern_client *client) {
-    if (!client || !client->reqresp_running || !client->connection_lock_initialized) {
-        return;
-    }
-
-    struct lantern_string_list snapshot;
-    lantern_string_list_init(&snapshot);
-
-    if (pthread_mutex_lock(&client->connection_lock) == 0) {
-        if (client->pending_status_peer_ids.len > 0) {
-            if (lantern_string_list_copy(&snapshot, &client->pending_status_peer_ids) != 0) {
-                lantern_log_warn(
-                    "reqresp",
-                    &(const struct lantern_log_metadata){.validator = client->node_id},
-                    "failed to copy pending status peers");
-            }
-            lantern_string_list_reset(&client->pending_status_peer_ids);
-            lantern_string_list_init(&client->pending_status_peer_ids);
-        }
-        pthread_mutex_unlock(&client->connection_lock);
-    } else {
-        lantern_log_warn(
-            "reqresp",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to lock connection state to drain status requests");
-        return;
-    }
-
-    for (size_t i = 0; i < snapshot.len; ++i) {
-        const char *peer_text = snapshot.items[i];
-        if (!peer_text) {
-            continue;
-        }
-        if (!lantern_client_is_peer_connected(client, peer_text)) {
-            lantern_client_enqueue_status_peer(client, peer_text);
-            continue;
-        }
-        peer_id_t parsed = {0};
-        if (peer_id_create_from_string(peer_text, &parsed) != PEER_ID_SUCCESS) {
-            lantern_log_trace(
-                "reqresp",
-                &(const struct lantern_log_metadata){
-                    .validator = client->node_id,
-                    .peer = peer_text},
-                "unable to parse peer id for deferred status request");
-            lantern_client_enqueue_status_peer(client, peer_text);
-            continue;
-        }
-        request_status_now(client, &parsed, peer_text);
-        peer_id_destroy(&parsed);
-    }
-
-    lantern_string_list_reset(&snapshot);
-}
-
-static void request_status_from_bootnodes(struct lantern_client *client) {
-    if (!client || !client->reqresp_running) {
-        return;
-    }
-    const struct lantern_enr_record_list *enrs = &client->genesis.enrs;
-    if (!enrs || enrs->count == 0) {
-        return;
-    }
-
-    peer_id_t *local_peer = NULL;
-    if (libp2p_host_get_peer_id(client->network.host, &local_peer) != 0) {
-        local_peer = NULL;
-    }
-
-    for (size_t idx = 0; idx < enrs->count; ++idx) {
-        const struct lantern_enr_record *record = &enrs->records[idx];
-        if (!record) {
-            continue;
-        }
-        char multiaddr[256];
-        peer_id_t peer_id = {0};
-        if (lantern_libp2p_enr_to_multiaddr(record, multiaddr, sizeof(multiaddr), &peer_id) != 0) {
-            continue;
-        }
-        bool is_self = false;
-        if (local_peer) {
-            int eq = peer_id_equals(local_peer, &peer_id);
-            if (eq == 1) {
-                is_self = true;
-            }
-        }
-        if (!is_self) {
-            char peer_text[128];
-            peer_text[0] = '\0';
-            if (peer_id_to_string(&peer_id, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text)) < 0) {
-                peer_text[0] = '\0';
-            }
-            const char *label = peer_text[0] ? peer_text : NULL;
-            if (label && !lantern_client_is_peer_connected(client, label)) {
-                lantern_client_enqueue_status_peer(client, label);
-            } else {
-                request_status_now(client, &peer_id, label);
-            }
-        }
-        peer_id_destroy(&peer_id);
-    }
-    if (local_peer) {
-        peer_id_destroy(local_peer);
-        free(local_peer);
-    }
-}
-
 static void lantern_client_seed_reqresp_peer_modes(struct lantern_client *client) {
     if (!client) {
         return;
     }
+#if defined(LANTERN_REQRESP_STATUS_PROTOCOL_LEGACY) || defined(LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_LEGACY)
     const struct lantern_validator_config *config = &client->genesis.validator_config;
     if (!config || !config->entries) {
         return;
@@ -738,6 +769,9 @@ static void lantern_client_seed_reqresp_peer_modes(struct lantern_client *client
         int legacy = (entry->client_kind == LANTERN_VALIDATOR_CLIENT_QLEAN);
         lantern_reqresp_service_hint_peer_legacy(&client->reqresp, entry->peer_id_text, legacy);
     }
+#else
+    (void)client;
+#endif
 }
 
 static void peer_dialer_sleep(struct lantern_client *client, unsigned seconds) {
@@ -817,16 +851,53 @@ static bool lantern_client_is_peer_connected(struct lantern_client *client, cons
     return connected;
 }
 
-static void lantern_client_enqueue_status_peer(struct lantern_client *client, const char *peer_id) {
-    if (!client || !peer_id || !peer_id[0] || !client->connection_lock_initialized) {
+static void lantern_client_status_request_update_locked(
+    struct lantern_client *client,
+    struct lantern_peer_status_entry *entry,
+    const char *peer_id,
+    int delta,
+    const char *phase) {
+    if (!client || !entry || delta == 0) {
         return;
     }
-    if (pthread_mutex_lock(&client->connection_lock) == 0) {
-        if (!string_list_contains(&client->pending_status_peer_ids, peer_id)) {
-            (void)lantern_string_list_append(&client->pending_status_peer_ids, peer_id);
+    if (delta > 0) {
+        uint32_t increase = (uint32_t)delta;
+        if (UINT32_MAX - entry->outstanding_status_requests < increase) {
+            entry->outstanding_status_requests = UINT32_MAX;
+        } else {
+            entry->outstanding_status_requests += increase;
         }
-        pthread_mutex_unlock(&client->connection_lock);
+        client->status_requests_inflight_total += (size_t)increase;
+        if (client->status_requests_inflight_total > client->status_requests_peak) {
+            client->status_requests_peak = client->status_requests_inflight_total;
+        }
+    } else {
+        uint32_t decrease = (uint32_t)(-delta);
+        if (entry->outstanding_status_requests > decrease) {
+            entry->outstanding_status_requests -= decrease;
+        } else {
+            entry->outstanding_status_requests = 0;
+        }
+        if (client->status_requests_inflight_total > (size_t)decrease) {
+            client->status_requests_inflight_total -= (size_t)decrease;
+        } else {
+            client->status_requests_inflight_total = 0;
+        }
     }
+
+    lantern_log_debug(
+        "reqresp",
+        &(const struct lantern_log_metadata){
+            .validator = client->node_id,
+            .peer = (peer_id && peer_id[0]) ? peer_id : NULL,
+        },
+        "status guard %s delta=%d peer_outstanding=%u total_outstanding=%zu peak=%zu guard_disabled=%s",
+        phase ? phase : "update",
+        delta,
+        entry->outstanding_status_requests,
+        client->status_requests_inflight_total,
+        client->status_requests_peak,
+        client->status_guard_disabled ? "true" : "false");
 }
 
 static void identify_dial_multiaddr(struct lantern_client *client, const char *multiaddr, const char *peer_label) {
@@ -872,39 +943,6 @@ static void peer_dialer_attempt(struct lantern_client *client) {
     if (!client || !client->network.host) {
         return;
     }
-
-    drain_pending_status_requests(client);
-
-    struct lantern_string_list stale_status_peers;
-    lantern_string_list_init(&stale_status_peers);
-    if (client->status_lock_initialized) {
-        if (pthread_mutex_lock(&client->status_lock) == 0) {
-            uint64_t now_ms = monotonic_millis();
-            for (size_t i = 0; i < client->peer_status_count; ++i) {
-                struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
-                if (!entry || entry->peer_id[0] == '\0') {
-                    continue;
-                }
-                uint64_t last_ms = entry->last_status_request_ms;
-                if (last_ms == 0 || now_ms >= last_ms + LANTERN_STATUS_POLL_INTERVAL_MS) {
-                    (void)lantern_string_list_append(&stale_status_peers, entry->peer_id);
-                }
-            }
-            pthread_mutex_unlock(&client->status_lock);
-        }
-    }
-    for (size_t i = 0; stale_status_peers.len > 0 && i < stale_status_peers.len; ++i) {
-        const char *status_peer = stale_status_peers.items[i];
-        if (!status_peer) {
-            continue;
-        }
-        peer_id_t parsed = {0};
-        if (peer_id_create_from_string(status_peer, &parsed) == PEER_ID_SUCCESS) {
-            request_status_now(client, &parsed, status_peer);
-            peer_id_destroy(&parsed);
-        }
-    }
-    lantern_string_list_reset(&stale_status_peers);
 
     const struct lantern_enr_record_list *enrs = &client->genesis.enrs;
     if (!enrs || enrs->count == 0) {
@@ -2037,6 +2075,8 @@ static int load_hash_sig_public_keys(struct lantern_client *client, const struct
     }
 
     struct lantern_log_metadata meta = {.validator = client->node_id};
+    size_t resolved = 0;
+    size_t loaded = 0;
     for (uint64_t i = 0; i < validator_count; ++i) {
         char *path = NULL;
         if (resolve_public_key_path(client, manifest, i, &path) != 0) {
@@ -2047,6 +2087,13 @@ static int load_hash_sig_public_keys(struct lantern_client *client, const struct
                 i);
             continue;
         }
+        ++resolved;
+        lantern_log_debug(
+            "crypto",
+            &meta,
+            "hash-sig public key resolved index=%" PRIu64 " path=%s",
+            i,
+            path);
         struct PQSignatureSchemePublicKey *pubkey = NULL;
         if (lantern_hash_sig_load_public_file(path, &pubkey) != 0) {
             lantern_log_warn(
@@ -2060,8 +2107,18 @@ static int load_hash_sig_public_keys(struct lantern_client *client, const struct
         }
         free(path);
         client->validator_pubkeys[i] = pubkey;
+        ++loaded;
     }
     client->validator_pubkey_count = (size_t)validator_count;
+    lantern_log_info(
+        "crypto",
+        &meta,
+        "hash-sig public keys loaded=%zu/%" PRIu64 " resolved=%zu dir=%s template=%s",
+        loaded,
+        validator_count,
+        resolved,
+        client->hash_sig_key_dir ? client->hash_sig_key_dir : "-",
+        client->hash_sig_public_template ? client->hash_sig_public_template : "-");
     return 0;
 }
 
@@ -2086,6 +2143,8 @@ static int load_hash_sig_secret_keys(struct lantern_client *client, const struct
 
     clear_local_secret_handles(client);
     struct lantern_log_metadata meta = {.validator = client->node_id};
+    size_t resolved = 0;
+    size_t loaded = 0;
     for (size_t i = 0; i < client->local_validator_count; ++i) {
         struct lantern_local_validator *validator = &client->local_validators[i];
         char *path = NULL;
@@ -2097,6 +2156,13 @@ static int load_hash_sig_secret_keys(struct lantern_client *client, const struct
                 validator->global_index);
             continue;
         }
+        ++resolved;
+        lantern_log_debug(
+            "crypto",
+            &meta,
+            "hash-sig secret key resolved validator=%" PRIu64 " path=%s",
+            validator->global_index,
+            path);
         struct PQSignatureSchemeSecretKey *secret = NULL;
         if (lantern_hash_sig_load_secret_file(path, &secret) != 0) {
             lantern_log_warn(
@@ -2111,7 +2177,17 @@ static int load_hash_sig_secret_keys(struct lantern_client *client, const struct
         free(path);
         validator->secret_key = secret;
         validator->has_secret_handle = true;
+        ++loaded;
     }
+    lantern_log_info(
+        "crypto",
+        &meta,
+        "hash-sig secret keys loaded=%zu/%zu resolved=%zu dir=%s template=%s",
+        loaded,
+        client->local_validator_count,
+        resolved,
+        client->hash_sig_key_dir ? client->hash_sig_key_dir : "-",
+        client->hash_sig_secret_template ? client->hash_sig_secret_template : "-");
     return 0;
 }
 
@@ -2119,10 +2195,11 @@ static int load_hash_sig_keys(struct lantern_client *client) {
     if (!client) {
         return -1;
     }
+    struct lantern_log_metadata meta = {.validator = client->node_id};
     if (!lantern_hash_sig_is_available()) {
         lantern_log_error(
             "crypto",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
+            &meta,
             "hash-sig bindings unavailable");
         return -1;
     }
@@ -2135,6 +2212,14 @@ static int load_hash_sig_keys(struct lantern_client *client) {
     }
 
     const struct hash_sig_manifest *manifest_ptr = manifest_loaded ? &manifest : NULL;
+    lantern_log_info(
+        "crypto",
+        &meta,
+        "hash-sig load start key_dir=%s manifest=%s validators=%" PRIu64 " local=%zu",
+        client->hash_sig_key_dir ? client->hash_sig_key_dir : "-",
+        manifest_loaded ? "loaded" : "missing",
+        client->genesis.chain_config.validator_count,
+        client->local_validator_count);
     if (load_hash_sig_public_keys(client, manifest_ptr) != 0) {
         hash_sig_manifest_reset(&manifest);
         return -1;
@@ -2180,6 +2265,7 @@ static int configure_hash_sig_sources(struct lantern_client *client, const struc
     if (!client || !options) {
         return -1;
     }
+    struct lantern_log_metadata meta = {.validator = client->node_id};
     const char *env_dir = hash_sig_non_empty(getenv("HASH_SIG_KEY_DIR"));
     const char *env_public_path = hash_sig_non_empty(getenv("HASH_SIG_PK_PATH"));
     const char *env_secret_path = hash_sig_non_empty(getenv("HASH_SIG_SK_PATH"));
@@ -2247,6 +2333,15 @@ static int configure_hash_sig_sources(struct lantern_client *client, const struc
             return -1;
         }
     }
+    lantern_log_info(
+        "crypto",
+        &meta,
+        "hash-sig sources resolved dir=%s pk_path=%s sk_path=%s pk_template=%s sk_template=%s",
+        client->hash_sig_key_dir ? client->hash_sig_key_dir : "-",
+        client->hash_sig_public_path ? client->hash_sig_public_path : "-",
+        client->hash_sig_secret_path ? client->hash_sig_secret_path : "-",
+        client->hash_sig_public_template ? client->hash_sig_public_template : "-",
+        client->hash_sig_secret_template ? client->hash_sig_secret_template : "-");
     return 0;
 }
 
@@ -2299,7 +2394,6 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     lantern_string_list_init(&client->bootnodes);
     lantern_string_list_init(&client->dialer_peers);
     lantern_string_list_init(&client->connected_peer_ids);
-    lantern_string_list_init(&client->pending_status_peer_ids);
     lantern_string_list_init(&client->status_failure_peer_ids);
     lantern_genesis_artifacts_init(&client->genesis);
     lantern_enr_record_init(&client->local_enr);
@@ -2348,6 +2442,15 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
     if (set_owned_string(&client->devnet, options->devnet) != 0) {
         goto error;
     }
+    const char *disable_guard_env = getenv("LANTERN_DEBUG_DISABLE_STATUS_GUARD");
+    if (disable_guard_env && disable_guard_env[0] != '\0' && !(disable_guard_env[0] == '0' && disable_guard_env[1] == '\0')) {
+        client->status_guard_disabled = true;
+        lantern_log_warn(
+            "reqresp",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "status guard disabled via LANTERN_DEBUG_DISABLE_STATUS_GUARD=\"%s\"",
+            disable_guard_env);
+    }
     if (!client->status_lock_initialized) {
         if (pthread_mutex_init(&client->status_lock, NULL) != 0) {
             lantern_log_error(
@@ -2367,6 +2470,16 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
             goto error;
         }
         client->state_lock_initialized = true;
+    }
+    if (!client->peer_vote_lock_initialized) {
+        if (pthread_mutex_init(&client->peer_vote_lock, NULL) != 0) {
+            lantern_log_error(
+                "client",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "failed to initialize vote metrics lock");
+            goto error;
+        }
+        client->peer_vote_lock_initialized = true;
     }
     client->http_port = options->http_port;
     client->metrics_port = options->metrics_port;
@@ -2824,7 +2937,6 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
         memset(node_key, 0, sizeof(node_key));
         goto error;
     }
-    request_status_from_bootnodes(client);
 
     if (lantern_enr_record_build_v4(
             &client->local_enr,
@@ -2981,6 +3093,28 @@ void lantern_shutdown(struct lantern_client *client) {
         client->peer_status_capacity = 0;
     }
 
+    if (client->peer_vote_lock_initialized) {
+        if (pthread_mutex_lock(&client->peer_vote_lock) == 0) {
+            free(client->peer_vote_stats);
+            client->peer_vote_stats = NULL;
+            client->peer_vote_stats_len = 0;
+            client->peer_vote_stats_cap = 0;
+            pthread_mutex_unlock(&client->peer_vote_lock);
+        } else {
+            free(client->peer_vote_stats);
+            client->peer_vote_stats = NULL;
+            client->peer_vote_stats_len = 0;
+            client->peer_vote_stats_cap = 0;
+        }
+        pthread_mutex_destroy(&client->peer_vote_lock);
+        client->peer_vote_lock_initialized = false;
+    } else {
+        free(client->peer_vote_stats);
+        client->peer_vote_stats = NULL;
+        client->peer_vote_stats_len = 0;
+        client->peer_vote_stats_cap = 0;
+    }
+
     if (client->validator_lock_initialized) {
         if (pthread_mutex_lock(&client->validator_lock) == 0) {
             free(client->validator_enabled);
@@ -3010,7 +3144,6 @@ void lantern_shutdown(struct lantern_client *client) {
         pending_block_list_reset(&client->pending_blocks);
     }
     lantern_string_list_reset(&client->dialer_peers);
-    lantern_string_list_reset(&client->pending_status_peer_ids);
     lantern_string_list_reset(&client->status_failure_peer_ids);
     lantern_string_list_reset(&client->bootnodes);
     free(client->data_dir);
@@ -3185,6 +3318,7 @@ static int populate_local_validators(struct lantern_client *client) {
         return -1;
     }
 
+    struct lantern_log_metadata meta = {.validator = client->node_id};
     uint64_t local_count = client->validator_assignment.count;
     if (local_count == 0 || client->validator_assignment.length != local_count) {
         return -1;
@@ -3201,6 +3335,31 @@ static int populate_local_validators(struct lantern_client *client) {
         || client->genesis.validator_registry.count < total_validators) {
         return -1;
     }
+
+    char indices_buf[512];
+    indices_buf[0] = '\0';
+    size_t written = 0;
+    for (size_t i = 0; i < client->validator_assignment.length; ++i) {
+        int n = snprintf(
+            indices_buf + written,
+            sizeof(indices_buf) - written,
+            "%s%" PRIu64,
+            written > 0 ? "," : "",
+            client->validator_assignment.indices[i]);
+        if (n < 0 || (size_t)n >= sizeof(indices_buf) - written) {
+            strncpy(indices_buf + (sizeof(indices_buf) > 4 ? sizeof(indices_buf) - 4 : 0), "...", 3);
+            indices_buf[sizeof(indices_buf) - 1] = '\0';
+            break;
+        }
+        written += (size_t)n;
+    }
+    lantern_log_info(
+        "client",
+        &meta,
+        "local validator assignment start=%" PRIu64 " count=%" PRIu64 " indices=%s",
+        client->validator_assignment.start_index,
+        local_count,
+        indices_buf[0] ? indices_buf : "-");
 
     const char *priv_hex = client->assigned_validators->privkey_hex;
     if (!priv_hex || *priv_hex == '\0') {
@@ -3226,6 +3385,12 @@ static int populate_local_validators(struct lantern_client *client) {
         }
         return -1;
     }
+
+    lantern_log_debug(
+        "client",
+        &meta,
+        "decoded validator secret bytes len=%zu",
+        decoded_len);
 
     size_t stored_len = strlen(client->assigned_validators->privkey_hex);
     if (stored_len > 0) {
@@ -3328,6 +3493,12 @@ static int populate_local_validators(struct lantern_client *client) {
 
     lantern_secure_zero(decoded_secret, decoded_len);
     free(decoded_secret);
+    lantern_log_info(
+        "client",
+        &meta,
+        "local validators ready count=%zu secrets_loaded=%zu",
+        client->local_validator_count,
+        client->local_validator_count);
     return 0;
 }
 
@@ -3664,7 +3835,7 @@ static int validator_propose_block(struct lantern_client *client, uint64_t slot,
         slot,
         block.message.block.proposer_index);
 
-    lantern_client_record_block(client, &block, NULL, NULL);
+    lantern_client_record_block(client, &block, NULL, NULL, "local");
     if (lantern_client_publish_block(client, &block) != 0) {
         lantern_signed_block_with_attestation_reset(&block);
         return -1;
@@ -3943,14 +4114,30 @@ static int http_set_validator_status_cb(void *context, uint64_t global_index, bo
         return -1;
     }
     client->validator_enabled[local_index] = enabled;
+    size_t enabled_count = 0;
+    size_t disabled_count = 0;
+    if (client->validator_enabled) {
+        for (size_t i = 0; i < client->local_validator_count; ++i) {
+            if (client->validator_enabled[i]) {
+                ++enabled_count;
+            }
+        }
+        if (client->local_validator_count > enabled_count) {
+            disabled_count = client->local_validator_count - enabled_count;
+        }
+    } else {
+        enabled_count = client->local_validator_count;
+    }
     pthread_mutex_unlock(&client->validator_lock);
 
     lantern_log_info(
         "validator",
         &(const struct lantern_log_metadata){.validator = client->node_id},
-        "validator %" PRIu64 " %s",
+        "validator %" PRIu64 " %s (enabled=%zu disabled=%zu)",
         global_index,
-        enabled ? "activated" : "deactivated");
+        enabled ? "activated" : "deactivated",
+        enabled_count,
+        disabled_count);
     return 0;
 }
 
@@ -3992,6 +4179,19 @@ static int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *o
     out_snapshot->lean_latest_justified_slot = state_justified.slot;
     out_snapshot->lean_latest_finalized_slot = state_finalized.slot;
     out_snapshot->lean_validators_count = client->local_validator_count;
+    out_snapshot->peer_vote_metrics_count = 0;
+    if (client->peer_vote_lock_initialized) {
+        if (pthread_mutex_lock(&client->peer_vote_lock) == 0) {
+            size_t limit = LANTERN_METRICS_MAX_PEER_VOTE_STATS;
+            for (size_t i = 0; i < client->peer_vote_stats_len && out_snapshot->peer_vote_metrics_count < limit; ++i) {
+                const struct lantern_peer_vote_metric *entry = &client->peer_vote_stats[i];
+                struct lantern_peer_vote_metric *metric =
+                    &out_snapshot->peer_vote_metrics[out_snapshot->peer_vote_metrics_count++];
+                *metric = *entry;
+            }
+            pthread_mutex_unlock(&client->peer_vote_lock);
+        }
+    }
     lean_metrics_snapshot(&out_snapshot->lean_metrics);
     return 0;
 }
@@ -4051,6 +4251,18 @@ static void lantern_client_unlock_pending(struct lantern_client *client, bool lo
     pthread_mutex_unlock(&client->pending_lock);
 }
 
+static void lantern_vote_rejection_set(struct lantern_vote_rejection_info *info, const char *fmt, ...) {
+    if (!info || !fmt) {
+        return;
+    }
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(info->message, sizeof(info->message), fmt, args);
+    va_end(args);
+    info->message[sizeof(info->message) - 1u] = '\0';
+    info->has_reason = true;
+}
+
 static bool lantern_validator_pubkey_is_zero(const uint8_t *pubkey) {
     if (!pubkey) {
         return true;
@@ -4079,45 +4291,127 @@ static int lantern_client_refresh_state_validators(struct lantern_client *client
     if (!client || !client->has_state) {
         return -1;
     }
-    const struct lantern_validator_registry *registry = &client->genesis.validator_registry;
-    if (!registry->records || registry->count == 0) {
-        return lantern_state_set_validator_pubkeys(&client->state, NULL, 0);
+    struct lantern_log_metadata meta = {.validator = client->node_id};
+    struct lantern_validator_registry *registry = &client->genesis.validator_registry;
+    size_t registry_count = registry->count;
+    size_t state_count = lantern_state_validator_count(&client->state);
+
+    bool have_registry = registry->records && registry_count > 0;
+    if (!have_registry) {
+        if (state_count == 0) {
+            return lantern_state_set_validator_pubkeys(&client->state, NULL, 0);
+        }
+        lantern_log_info(
+            "client",
+            &meta,
+            "validator registry missing; retaining existing state pubkeys count=%zu",
+            state_count);
+        return 0;
     }
-    size_t count = registry->count;
+
+    if (state_count > 0 && state_count != registry_count) {
+        lantern_log_warn(
+            "client",
+            &meta,
+            "validator count mismatch registry=%zu state=%zu",
+            registry_count,
+            state_count);
+    }
+
+    size_t count = registry_count;
     size_t total_bytes = count * LANTERN_VALIDATOR_PUBKEY_SIZE;
     uint8_t *packed = malloc(total_bytes);
     if (!packed) {
         return -1;
     }
-    bool missing_pubkeys = false;
+    size_t registry_used = 0;
+    size_t state_used = 0;
+    size_t missing_pubkeys = 0;
     for (size_t i = 0; i < count; ++i) {
-        const struct lantern_validator_record *record = &registry->records[i];
-        if (!record || !record->has_pubkey_bytes) {
-            memset(packed + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), 0, LANTERN_VALIDATOR_PUBKEY_SIZE);
-            missing_pubkeys = true;
-            continue;
+        struct lantern_validator_record *record = &registry->records[i];
+        const uint8_t *registry_pub =
+            (record && record->has_pubkey_bytes && !lantern_validator_pubkey_is_zero(record->pubkey_bytes))
+                ? record->pubkey_bytes
+                : NULL;
+        const uint8_t *state_pub = (state_count > i) ? lantern_state_validator_pubkey(&client->state, i) : NULL;
+        if (state_pub && lantern_validator_pubkey_is_zero(state_pub)) {
+            state_pub = NULL;
         }
-        memcpy(
-            packed + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
-            record->pubkey_bytes,
-            LANTERN_VALIDATOR_PUBKEY_SIZE);
+
+        const uint8_t *chosen = registry_pub ? registry_pub : state_pub;
+        if (chosen) {
+            memcpy(packed + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), chosen, LANTERN_VALIDATOR_PUBKEY_SIZE);
+            if (!registry_pub && state_pub && record) {
+                memcpy(record->pubkey_bytes, state_pub, LANTERN_VALIDATOR_PUBKEY_SIZE);
+                record->has_pubkey_bytes = true;
+                char hex[(LANTERN_VALIDATOR_PUBKEY_SIZE * 2u) + 3u];
+                if (lantern_bytes_to_hex(
+                        state_pub,
+                        LANTERN_VALIDATOR_PUBKEY_SIZE,
+                        hex,
+                        sizeof(hex),
+                        1)
+                    == 0) {
+                    free(record->pubkey_hex);
+                    record->pubkey_hex = lantern_string_duplicate(hex);
+                }
+                ++state_used;
+            } else if (registry_pub) {
+                ++registry_used;
+            }
+        } else {
+            memset(packed + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), 0, LANTERN_VALIDATOR_PUBKEY_SIZE);
+            ++missing_pubkeys;
+        }
     }
     int rc = lantern_state_set_validator_pubkeys(&client->state, packed, count);
     free(packed);
     if (rc != 0) {
         lantern_log_warn(
             "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
+            &meta,
             "failed to copy validator pubkeys into parent state");
         return -1;
     }
-    if (missing_pubkeys) {
-        lantern_log_debug(
-            "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "one or more validator pubkeys missing in parent state snapshot; falling back to registry when needed");
-    }
+    size_t enabled = lantern_client_enabled_validator_count(client);
+    lantern_log_info(
+        "client",
+        &meta,
+        "refreshed validator pubkeys count=%zu registry=%zu state_fallback=%zu missing=%zu local_validators=%zu enabled=%zu",
+        count,
+        registry_used,
+        state_used,
+        missing_pubkeys,
+        client->local_validator_count,
+        enabled);
     return 0;
+}
+
+static size_t lantern_client_enabled_validator_count(struct lantern_client *client) {
+    if (!client) {
+        return 0;
+    }
+    size_t enabled = 0;
+    bool locked = false;
+    if (client->validator_lock_initialized) {
+        if (pthread_mutex_lock(&client->validator_lock) == 0) {
+            locked = true;
+        }
+    }
+    size_t limit = client->local_validator_count;
+    if (!client->validator_enabled) {
+        enabled = limit;
+    } else {
+        for (size_t i = 0; i < limit; ++i) {
+            if (client->validator_enabled[i]) {
+                ++enabled;
+            }
+        }
+    }
+    if (locked) {
+        pthread_mutex_unlock(&client->validator_lock);
+    }
+    return enabled;
 }
 
 static bool lantern_client_verify_vote_signature(
@@ -4292,7 +4586,8 @@ static bool lantern_client_validate_vote_constraints(
     const LanternVote *vote,
     const char *facility,
     const struct lantern_log_metadata *meta,
-    const char *context) {
+    const char *context,
+    struct lantern_vote_rejection_info *out_rejection) {
     if (!client || !vote || !client->has_fork_choice) {
         return false;
     }
@@ -4322,6 +4617,14 @@ static bool lantern_client_validate_vote_constraints(
                 vote->slot,
                 rule->name,
                 root_hex[0] ? root_hex : "0x0");
+            if (out_rejection) {
+                lantern_vote_rejection_set(
+                    out_rejection,
+                    "%s checkpoint root zero slot=%" PRIu64 " root=%s",
+                    rule->name,
+                    rule->checkpoint->slot,
+                    root_hex[0] ? root_hex : "0x0");
+            }
             return false;
         }
         uint64_t block_slot = 0;
@@ -4335,6 +4638,14 @@ static bool lantern_client_validate_vote_constraints(
                 vote->slot,
                 rule->name,
                 root_hex[0] ? root_hex : "0x0");
+            if (out_rejection) {
+                lantern_vote_rejection_set(
+                    out_rejection,
+                    "unknown %s root=%s slot=%" PRIu64,
+                    rule->name,
+                    root_hex[0] ? root_hex : "0x0",
+                    rule->checkpoint->slot);
+            }
             return false;
         }
         if (block_slot != rule->checkpoint->slot) {
@@ -4350,6 +4661,14 @@ static bool lantern_client_validate_vote_constraints(
                 rule->checkpoint->slot,
                 block_slot,
                 root_hex[0] ? root_hex : "0x0");
+            if (out_rejection) {
+                lantern_vote_rejection_set(
+                    out_rejection,
+                    "%s checkpoint slot mismatch vote=%" PRIu64 " block=%" PRIu64,
+                    rule->name,
+                    rule->checkpoint->slot,
+                    block_slot);
+            }
             return false;
         }
     }
@@ -4363,6 +4682,9 @@ static bool lantern_client_validate_vote_constraints(
             label,
             vote->validator_id,
             vote->slot);
+        if (out_rejection) {
+            lantern_vote_rejection_set(out_rejection, "unable to compute current slot");
+        }
         return false;
     }
     uint64_t allowed_slot = current_slot == UINT64_MAX ? UINT64_MAX : current_slot + 1u;
@@ -4375,6 +4697,14 @@ static bool lantern_client_validate_vote_constraints(
             vote->validator_id,
             vote->slot,
             current_slot);
+        if (out_rejection) {
+            lantern_vote_rejection_set(
+                out_rejection,
+                "vote slot=%" PRIu64 " exceeds allowed=%" PRIu64 " current=%" PRIu64,
+                vote->slot,
+                allowed_slot,
+                current_slot);
+        }
         return false;
     }
 
@@ -4506,7 +4836,8 @@ static bool lantern_client_import_block(
                     &attestations->data[i],
                     "state",
                     meta,
-                    "block attestation")) {
+                    "block attestation",
+                    NULL)) {
                 lantern_client_unlock_state(client, state_locked);
                 return false;
             }
@@ -4521,7 +4852,8 @@ static bool lantern_client_import_block(
                     proposer_vote,
                     "state",
                     meta,
-                    "proposer attestation")) {
+                    "proposer attestation",
+                    NULL)) {
                 lantern_client_unlock_state(client, state_locked);
                 return false;
             }
@@ -4621,9 +4953,24 @@ static int reqresp_build_status(void *context, LanternStatusMessage *out_status)
     }
 
     out_status->finalized = client->state.latest_finalized;
-    out_status->head.slot = client->state.latest_block_header.slot;
-    if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &out_status->head.root) != 0) {
-        memset(&out_status->head.root, 0, sizeof(out_status->head.root));
+
+    bool head_set = false;
+    if (client->has_fork_choice) {
+        LanternRoot fork_head = {{0}};
+        uint64_t fork_slot = 0;
+        if (lantern_fork_choice_current_head(&client->fork_choice, &fork_head) == 0
+            && lantern_fork_choice_block_info(&client->fork_choice, &fork_head, &fork_slot, NULL, NULL) == 0) {
+            out_status->head.root = fork_head;
+            out_status->head.slot = fork_slot;
+            head_set = true;
+        }
+    }
+
+    if (!head_set) {
+        out_status->head.slot = client->state.latest_block_header.slot;
+        if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &out_status->head.root) != 0) {
+            memset(&out_status->head.root, 0, sizeof(out_status->head.root));
+        }
     }
     return 0;
 }
@@ -4810,6 +5157,7 @@ static void lantern_client_on_peer_status(
         return;
     }
     entry->status_request_inflight = false;
+    lantern_client_status_request_update_locked(client, entry, peer_copy, -1, "complete");
 
     string_list_remove(&client->status_failure_peer_ids, peer_copy);
 
@@ -4822,8 +5170,27 @@ static void lantern_client_on_peer_status(
     entry->status = *peer_status;
     entry->has_status = true;
     bool needs_block = !head_known;
+    const char *needs_block_reason = NULL;
+    if (!head_known) {
+        needs_block_reason = "head unknown locally";
+    }
     if (!needs_block && head_changed && peer_status->head.slot > local_slot) {
         needs_block = true;
+        needs_block_reason = "remote head ahead of local slot";
+    }
+    struct lantern_log_metadata status_meta = {
+        .validator = client->node_id,
+        .peer = peer_copy[0] ? peer_copy : NULL,
+    };
+    if (needs_block) {
+        lantern_log_info(
+            "reqresp",
+            &status_meta,
+            "status needs block head_slot=%" PRIu64 " local_slot=%" PRIu64 " head_root=%s reason=%s",
+            peer_status->head.slot,
+            local_slot,
+            head_hex[0] ? head_hex : "0x0",
+            needs_block_reason ? needs_block_reason : "unspecified");
     }
     if (needs_block && !entry->requested_head) {
         uint64_t now_ms = monotonic_millis();
@@ -4883,9 +5250,8 @@ static void lantern_client_on_blocks_request_complete(
         return;
     }
     const size_t peer_cap = sizeof(((struct lantern_peer_status_entry *)0)->peer_id);
-    char pending_peer[sizeof(((struct lantern_peer_status_entry *)0)->peer_id)];
-    pending_peer[0] = '\0';
-    bool enqueue_status = false;
+    uint32_t failure_count = 0;
+    bool entry_found = false;
     if (pthread_mutex_lock(&client->status_lock) != 0) {
         return;
     }
@@ -4911,15 +5277,42 @@ static void lantern_client_on_blocks_request_complete(
             if (outcome != LANTERN_BLOCKS_REQUEST_ABORTED && entry->last_blocks_request_ms == 0) {
                 entry->last_blocks_request_ms = monotonic_millis();
             }
-            if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS && entry->peer_id[0] != '\0') {
-                strncpy(pending_peer, entry->peer_id, peer_cap - 1);
-                pending_peer[peer_cap - 1] = '\0';
-                enqueue_status = true;
-            }
+            failure_count = entry->consecutive_blocks_failures;
+            entry_found = true;
             break;
         }
     }
     pthread_mutex_unlock(&client->status_lock);
+
+    char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    root_hex[0] = '\0';
+    if (request_root) {
+        format_root_hex(request_root, root_hex, sizeof(root_hex));
+    }
+    const char *outcome_text = "unknown";
+    switch (outcome) {
+    case LANTERN_BLOCKS_REQUEST_SUCCESS:
+        outcome_text = "success";
+        break;
+    case LANTERN_BLOCKS_REQUEST_FAILED:
+        outcome_text = "failed";
+        break;
+    case LANTERN_BLOCKS_REQUEST_ABORTED:
+        outcome_text = "aborted";
+        break;
+    default:
+        break;
+    }
+    lantern_log_info(
+        "reqresp",
+        &(const struct lantern_log_metadata){
+            .validator = client->node_id,
+            .peer = peer_id},
+        "blocks_by_root complete outcome=%s root=%s entry_found=%s consecutive_failures=%" PRIu32,
+        outcome_text,
+        root_hex[0] ? root_hex : "0x0",
+        entry_found ? "true" : "false",
+        failure_count);
 
     if (request_root && !lantern_root_is_zero(request_root)) {
         bool locked = lantern_client_lock_pending(client);
@@ -4936,23 +5329,23 @@ static void lantern_client_on_blocks_request_complete(
                 struct lantern_pending_block *entry = &client->pending_blocks.items[i];
                 if (memcmp(entry->parent_root.bytes, request_root->bytes, LANTERN_ROOT_SIZE) == 0) {
                     entry->parent_requested = false;
-                }
-            }
         }
     }
 
-    if (enqueue_status && pending_peer[0] != '\0' && client->connection_lock_initialized) {
-        bool appended = false;
-        if (pthread_mutex_lock(&client->connection_lock) == 0) {
-            if (!string_list_contains(&client->pending_status_peer_ids, pending_peer)) {
-                appended = (lantern_string_list_append(&client->pending_status_peer_ids, pending_peer) == 0);
-            }
-            pthread_mutex_unlock(&client->connection_lock);
+    if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS && peer_id && peer_id[0] != '\0') {
+        peer_id_t parsed_peer = {0};
+        bool parsed = false;
+        if (peer_id_create_from_string(peer_id, &parsed_peer) == PEER_ID_SUCCESS) {
+            parsed = true;
         }
-        if (appended) {
-            drain_pending_status_requests(client);
+        request_status_now(client, parsed ? &parsed_peer : NULL, peer_id);
+        if (parsed) {
+            peer_id_destroy(&parsed_peer);
         }
     }
+}
+    }
+
 }
 
 static int stream_write_all(libp2p_stream_t *stream, const uint8_t *data, size_t length) {
@@ -5093,11 +5486,12 @@ static int discard_stream_bytes(
 int lantern_reqresp_read_response_chunk(
     struct lantern_reqresp_service *service,
     libp2p_stream_t *stream,
-    int expect_response_code,
+    enum lantern_reqresp_protocol_kind protocol,
     uint8_t **out_data,
     size_t *out_len,
     ssize_t *out_err,
-    uint8_t *out_response_code) {
+    uint8_t *out_response_code,
+    bool *response_code_pending) {
     if (!stream || !out_data || !out_len) {
         if (out_err) {
             *out_err = LIBP2P_ERR_NULL_PTR;
@@ -5119,7 +5513,9 @@ int lantern_reqresp_read_response_chunk(
     (void)libp2p_stream_set_read_interest(stream, true);
 
     uint8_t response_code = 0;
-    bool expect_code = expect_response_code != 0;
+    bool expect_code = response_code_pending
+        ? *response_code_pending
+        : ((protocol == LANTERN_REQRESP_PROTOCOL_STATUS) || (protocol == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT));
     bool legacy_no_code = !expect_code;
     ssize_t last_err = 0;
     if (expect_code) {
@@ -5161,7 +5557,9 @@ int lantern_reqresp_read_response_chunk(
                 "response legacy framing first_byte=0x%02x",
                 (unsigned)response_code);
             if (service && peer_text[0] != '\0') {
+#if defined(LANTERN_REQRESP_STATUS_PROTOCOL_LEGACY) || defined(LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_LEGACY)
                 lantern_reqresp_service_hint_peer_legacy(service, peer_text, 1);
+#endif
             }
         } else {
             if (out_response_code) {
@@ -5173,13 +5571,18 @@ int lantern_reqresp_read_response_chunk(
                 "response code=%u",
                 (unsigned)response_code);
             if (service && peer_text[0] != '\0') {
+#if defined(LANTERN_REQRESP_STATUS_PROTOCOL_LEGACY) || defined(LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_LEGACY)
                 lantern_reqresp_service_hint_peer_legacy(service, peer_text, 0);
+#endif
             }
         }
     } else {
         if (out_response_code) {
             *out_response_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
         }
+    }
+    if (response_code_pending) {
+        *response_code_pending = false;
     }
 
     uint8_t header_first_byte = 0;
@@ -5408,6 +5811,106 @@ static void block_request_ctx_free(struct block_request_ctx *ctx) {
     free(ctx);
 }
 
+static bool lantern_client_process_stream_block_chunk(
+    struct block_request_ctx *ctx,
+    uint8_t *chunk,
+    size_t chunk_len,
+    const struct lantern_log_metadata *meta,
+    bool *saw_block) {
+    if (!chunk || chunk_len == 0) {
+        free(chunk);
+        return true;
+    }
+    if (!ctx) {
+        free(chunk);
+        return false;
+    }
+    size_t raw_len = 0;
+    if (lantern_snappy_uncompressed_length(chunk, chunk_len, &raw_len) != LANTERN_SNAPPY_OK || raw_len == 0) {
+        lantern_log_error(
+            "reqresp",
+            meta,
+            "blocks_by_root chunk snappy length failed bytes=%zu",
+            chunk_len);
+        free(chunk);
+        return false;
+    }
+    uint8_t *raw_block = (uint8_t *)malloc(raw_len);
+    if (!raw_block) {
+        lantern_log_error(
+            "reqresp",
+            meta,
+            "blocks_by_root chunk allocation failed bytes=%zu",
+            raw_len);
+        free(chunk);
+        return false;
+    }
+    size_t written = raw_len;
+    if (lantern_snappy_decompress(chunk, chunk_len, raw_block, raw_len, &written) != LANTERN_SNAPPY_OK) {
+        lantern_log_error(
+            "reqresp",
+            meta,
+            "blocks_by_root chunk decompress failed bytes=%zu",
+            chunk_len);
+        free(raw_block);
+        free(chunk);
+        return false;
+    }
+
+    LanternSignedBlock streamed_block;
+    lantern_signed_block_with_attestation_init(&streamed_block);
+    if (lantern_ssz_decode_signed_block(&streamed_block, raw_block, written) != 0) {
+        lantern_log_error(
+            "reqresp",
+            meta,
+            "blocks_by_root chunk decode failed bytes=%zu",
+            written);
+        lantern_signed_block_with_attestation_reset(&streamed_block);
+        free(raw_block);
+        free(chunk);
+        return false;
+    }
+    free(raw_block);
+
+    LanternRoot computed = {{0}};
+    if (lantern_hash_tree_root_block(&streamed_block.message.block, &computed) != 0) {
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "failed to hash streamed block slot=%" PRIu64,
+            streamed_block.message.block.slot);
+        lantern_signed_block_with_attestation_reset(&streamed_block);
+        free(chunk);
+        return true;
+    }
+
+    char computed_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    format_root_hex(&computed, computed_hex, sizeof(computed_hex));
+    bool matches = memcmp(computed.bytes, ctx->root.bytes, LANTERN_ROOT_SIZE) == 0;
+    lantern_log_info(
+        "reqresp",
+        meta,
+        "streamed block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s attestations=%zu",
+        streamed_block.message.block.slot,
+        streamed_block.message.block.proposer_index,
+        computed_hex[0] ? computed_hex : "0x0",
+        matches ? "true" : "false",
+        streamed_block.message.block.body.attestations.length);
+
+    lantern_client_record_block(
+        ctx->client,
+        &streamed_block,
+        &computed,
+        ctx->peer_text[0] ? ctx->peer_text : NULL,
+        "reqresp");
+    lantern_signed_block_with_attestation_reset(&streamed_block);
+    if (saw_block) {
+        *saw_block = true;
+    }
+    free(chunk);
+    return true;
+}
+
 static void *block_request_worker(void *arg) {
     struct block_request_worker_args *worker = (struct block_request_worker_args *)arg;
     if (!worker) {
@@ -5567,145 +6070,234 @@ static void *block_request_worker(void *arg) {
         goto cleanup;
     }
 
-    size_t response_len = 0;
-    ssize_t read_err = 0;
-    uint8_t response_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
     struct lantern_reqresp_service *service = ctx->client ? &ctx->client->reqresp : NULL;
-    int expect_response_code = ctx->using_legacy ? 0 : 1;
-    if (lantern_reqresp_read_response_chunk(
-            service,
-            stream,
-            expect_response_code,
-            &response,
-            &response_len,
-            &read_err,
-            &response_code)
-        != 0) {
-        lantern_log_error(
-            "reqresp",
-            &meta,
-            "failed to read blocks_by_root response err=%zd",
-            read_err);
-        schedule_legacy = !ctx->using_legacy;
-        goto cleanup;
-    }
+    bool streaming_mode = !ctx->using_legacy;
+    uint8_t *initial_chunk = NULL;
+    size_t initial_chunk_len = 0;
+    bool initial_chunk_pending = false;
+    bool response_code_pending = true;
+    bool saw_block = false;
 
-    if (response_len > 0 && response) {
-        size_t preview_len = response_len < LANTERN_STATUS_PREVIEW_BYTES ? response_len : LANTERN_STATUS_PREVIEW_BYTES;
-        char response_hex[(LANTERN_STATUS_PREVIEW_BYTES * 2u) + 1u];
-        if (lantern_bytes_to_hex(response, preview_len, response_hex, sizeof(response_hex), 0) != 0) {
-            response_hex[0] = '\0';
-        }
-        lantern_log_trace(
-            "reqresp",
-            &meta,
-            "blocks_by_root raw payload_len=%zu%s%s",
-            response_len,
-            preview_len > 0 ? " hex=" : "",
-            preview_len > 0 ? response_hex : "");
-    } else {
-        lantern_log_trace(
-            "reqresp",
-            &meta,
-            "blocks_by_root raw payload_len=%zu (empty)",
-            response_len);
-    }
-
-    if (response_code != LANTERN_REQRESP_RESPONSE_SUCCESS) {
-        lantern_log_error(
-            "reqresp",
-            &meta,
-            "blocks_by_root response returned code=%u payload_len=%zu",
-            (unsigned)response_code,
-            response_len);
-        schedule_legacy = !ctx->using_legacy;
-        goto cleanup;
-    }
-
-    if (response_len == 0 || !response) {
-        lantern_log_info(
-            "reqresp",
-            &meta,
-            "received 0 block(s) via %s (empty payload)",
-            ctx->protocol_id);
-        request_success = true;
-        goto cleanup;
-    }
-
-    if (lantern_network_blocks_by_root_response_decode_snappy(&response_msg, response, response_len) != 0) {
-        size_t preview_len = response_len < LANTERN_STATUS_PREVIEW_BYTES ? response_len : LANTERN_STATUS_PREVIEW_BYTES;
-        char response_hex[(LANTERN_STATUS_PREVIEW_BYTES * 2u) + 1u];
-        if (preview_len > 0
-            && lantern_bytes_to_hex(response, preview_len, response_hex, sizeof(response_hex), 0) != 0) {
-            response_hex[0] = '\0';
-        }
-        lantern_log_error(
-            "reqresp",
-            &meta,
-            "failed to decode blocks_by_root response bytes=%zu%s%s",
-            response_len,
-            preview_len > 0 ? " hex=" : "",
-            preview_len > 0 ? response_hex : "");
-        if (response && response_len > 0) {
-            char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-            format_root_hex(&ctx->root, root_hex, sizeof(root_hex));
-            const char *suffix = root_hex;
-            if (suffix[0] == '0' && (suffix[1] == 'x' || suffix[1] == 'X')) {
-                suffix += 2;
-            }
-            char dump_path[256];
-            if (snprintf(dump_path, sizeof(dump_path), "/data/lantern_blocks_by_root_failed_%s.bin", suffix) > 0) {
-                FILE *dump = fopen(dump_path, "wb");
-                if (dump) {
-                    (void)fwrite(response, 1, response_len, dump);
-                    fclose(dump);
-                }
-            }
-        }
-        schedule_legacy = !ctx->using_legacy;
-        goto cleanup;
-    }
-
-    lantern_log_info(
-        "reqresp",
-        &meta,
-        "received %zu block(s) via %s",
-        response_msg.length,
-        ctx->protocol_id);
-
-    for (size_t i = 0; i < response_msg.length; ++i) {
-        LanternRoot computed = {{0}};
-        if (lantern_hash_tree_root_block(&response_msg.blocks[i].message.block, &computed) != 0) {
-            lantern_log_warn(
+    if (ctx->using_legacy) {
+        size_t response_len = 0;
+        ssize_t read_err = 0;
+        uint8_t response_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
+        if (lantern_reqresp_read_response_chunk(
+                service,
+                stream,
+                LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT,
+                &response,
+                &response_len,
+                &read_err,
+                &response_code,
+                NULL)
+            != 0) {
+            lantern_log_error(
                 "reqresp",
                 &meta,
-                "failed to hash block index=%zu slot=%" PRIu64,
-                i,
-                response_msg.blocks[i].message.slot);
-            continue;
+                "failed to read blocks_by_root response err=%zd",
+                read_err);
+            schedule_legacy = !ctx->using_legacy;
+            goto cleanup;
         }
-        char computed_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        format_root_hex(&computed, computed_hex, sizeof(computed_hex));
-        bool matches = memcmp(computed.bytes, ctx->root.bytes, LANTERN_ROOT_SIZE) == 0;
-        lantern_log_info(
-            "reqresp",
-            &meta,
-            "block index=%zu slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s attestations=%zu",
-            i,
-            response_msg.blocks[i].message.slot,
-            response_msg.blocks[i].message.proposer_index,
-            computed_hex[0] ? computed_hex : "0x0",
-            matches ? "true" : "false",
-            response_msg.blocks[i].message.body.attestations.length);
 
-        lantern_client_record_block(
-            ctx->client,
-            &response_msg.blocks[i],
-            &computed,
-            ctx->peer_text[0] ? ctx->peer_text : NULL);
+        if (response_len > 0 && response) {
+            size_t preview_len = response_len < LANTERN_STATUS_PREVIEW_BYTES ? response_len : LANTERN_STATUS_PREVIEW_BYTES;
+            char response_hex[(LANTERN_STATUS_PREVIEW_BYTES * 2u) + 1u];
+            if (lantern_bytes_to_hex(response, preview_len, response_hex, sizeof(response_hex), 0) != 0) {
+                response_hex[0] = '\0';
+            }
+            lantern_log_trace(
+                "reqresp",
+                &meta,
+                "blocks_by_root raw payload_len=%zu%s%s",
+                response_len,
+                preview_len > 0 ? " hex=" : "",
+                preview_len > 0 ? response_hex : "");
+        } else {
+            lantern_log_trace(
+                "reqresp",
+                &meta,
+                "blocks_by_root raw payload_len=%zu (empty)",
+                response_len);
+        }
+
+        if (response_code != LANTERN_REQRESP_RESPONSE_SUCCESS) {
+            lantern_log_error(
+                "reqresp",
+                &meta,
+                "blocks_by_root response returned code=%u payload_len=%zu",
+                (unsigned)response_code,
+                response_len);
+            schedule_legacy = !ctx->using_legacy;
+            goto cleanup;
+        }
+
+        if (response_len == 0 || !response) {
+            lantern_log_info(
+                "reqresp",
+                &meta,
+                "received 0 block(s) via %s (empty payload)",
+                ctx->protocol_id);
+            request_success = true;
+            goto cleanup;
+        }
+
+        if (lantern_network_blocks_by_root_response_decode_snappy(&response_msg, response, response_len) != 0) {
+            size_t preview_len = response_len < LANTERN_STATUS_PREVIEW_BYTES ? response_len : LANTERN_STATUS_PREVIEW_BYTES;
+            char response_hex[(LANTERN_STATUS_PREVIEW_BYTES * 2u) + 1u];
+            if (preview_len > 0
+                && lantern_bytes_to_hex(response, preview_len, response_hex, sizeof(response_hex), 0) != 0) {
+                response_hex[0] = '\0';
+            }
+            lantern_log_error(
+                "reqresp",
+                &meta,
+                "failed to decode blocks_by_root response bytes=%zu%s%s",
+                response_len,
+                preview_len > 0 ? " hex=" : "",
+                preview_len > 0 ? response_hex : "");
+            if (response && response_len > 0) {
+                char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+                format_root_hex(&ctx->root, root_hex, sizeof(root_hex));
+                const char *suffix = root_hex;
+                if (suffix[0] == '0' && (suffix[1] == 'x' || suffix[1] == 'X')) {
+                    suffix += 2;
+                }
+                char dump_path[256];
+                if (snprintf(dump_path, sizeof(dump_path), "/data/lantern_blocks_by_root_failed_%s.bin", suffix) > 0) {
+                    FILE *dump = fopen(dump_path, "wb");
+                    if (dump) {
+                        (void)fwrite(response, 1, response_len, dump);
+                        fclose(dump);
+                    }
+                }
+            }
+            if (!streaming_mode && response && response_len > 0) {
+                lantern_log_info(
+                    "reqresp",
+                    &meta,
+                    "legacy decode failed; interpreting payload as streaming chunk");
+                streaming_mode = true;
+                response_code_pending = false;
+                initial_chunk = response;
+                initial_chunk_len = response_len;
+                response = NULL;
+                initial_chunk_pending = true;
+            } else {
+                schedule_legacy = !ctx->using_legacy;
+                goto cleanup;
+            }
+        } else {
+            lantern_log_info(
+                "reqresp",
+                &meta,
+                "received %zu block(s) via %s",
+                response_msg.length,
+                ctx->protocol_id);
+
+            for (size_t i = 0; i < response_msg.length; ++i) {
+                LanternRoot computed = {{0}};
+                if (lantern_hash_tree_root_block(&response_msg.blocks[i].message.block, &computed) != 0) {
+                    lantern_log_warn(
+                        "reqresp",
+                        &meta,
+                        "failed to hash block index=%zu slot=%" PRIu64,
+                        i,
+                        response_msg.blocks[i].message.slot);
+                    continue;
+                }
+                char computed_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+                format_root_hex(&computed, computed_hex, sizeof(computed_hex));
+                bool matches = memcmp(computed.bytes, ctx->root.bytes, LANTERN_ROOT_SIZE) == 0;
+                lantern_log_info(
+                    "reqresp",
+                    &meta,
+                    "block index=%zu slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s attestations=%zu",
+                    i,
+                    response_msg.blocks[i].message.slot,
+                    response_msg.blocks[i].message.proposer_index,
+                    computed_hex[0] ? computed_hex : "0x0",
+                    matches ? "true" : "false",
+                    response_msg.blocks[i].message.body.attestations.length);
+
+                lantern_client_record_block(
+                    ctx->client,
+                    &response_msg.blocks[i],
+                    &computed,
+                    ctx->peer_text[0] ? ctx->peer_text : NULL,
+                    "reqresp");
+            }
+
+            request_success = (response_msg.length > 0);
+            if (!streaming_mode) {
+                goto cleanup;
+            }
+        }
     }
 
-    request_success = (response_msg.length > 0);
+    if (streaming_mode) {
+        if (initial_chunk_pending) {
+            if (!lantern_client_process_stream_block_chunk(ctx, initial_chunk, initial_chunk_len, &meta, &saw_block)) {
+                initial_chunk = NULL;
+                schedule_legacy = !ctx->using_legacy;
+                goto cleanup;
+            }
+            initial_chunk = NULL;
+            initial_chunk_pending = false;
+        }
+
+        while (true) {
+            uint8_t *chunk = NULL;
+            size_t chunk_len = 0;
+            ssize_t read_err = 0;
+            uint8_t chunk_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
+            int chunk_rc = lantern_reqresp_read_response_chunk(
+                service,
+                stream,
+                LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT,
+                &chunk,
+                &chunk_len,
+                &read_err,
+                &chunk_code,
+                &response_code_pending);
+            if (chunk_rc != 0) {
+                if (read_err == (ssize_t)LIBP2P_ERR_EOF) {
+                    read_err = 0;
+                    break;
+                }
+                lantern_log_error(
+                    "reqresp",
+                    &meta,
+                    "failed to read blocks_by_root chunk err=%zd",
+                    read_err);
+                free(chunk);
+                schedule_legacy = !ctx->using_legacy;
+                goto cleanup;
+            }
+            if (chunk_code != LANTERN_REQRESP_RESPONSE_SUCCESS) {
+                lantern_log_error(
+                    "reqresp",
+                    &meta,
+                    "blocks_by_root chunk returned code=%u payload_len=%zu",
+                    (unsigned)chunk_code,
+                    chunk_len);
+                free(chunk);
+                schedule_legacy = !ctx->using_legacy;
+                goto cleanup;
+            }
+            if (chunk_len == 0 || !chunk) {
+                free(chunk);
+                break;
+            }
+
+            if (!lantern_client_process_stream_block_chunk(ctx, chunk, chunk_len, &meta, &saw_block)) {
+                schedule_legacy = !ctx->using_legacy;
+                goto cleanup;
+            }
+        }
+        request_success = saw_block;
+    }
 
 cleanup:
     if (!request_success && schedule_legacy && ctx->client && !ctx->using_legacy && ctx->peer_text[0] && !attempt_legacy) {
@@ -5723,25 +6315,19 @@ cleanup:
             root_hex[0] ? root_hex : "0x0");
     }
     lantern_blocks_by_root_response_reset(&response_msg);
+    if (initial_chunk) {
+        free(initial_chunk);
+    }
     free(response);
     free(payload);
     lantern_blocks_by_root_request_reset(&request);
     libp2p_stream_free(stream);
-    if (!request_success) {
-        /* Devnet-0: do not retry blocks_by_root fallbacks; rely on gossip. */
-        if (ctx->client && ctx->using_legacy) {
-            lantern_client_on_blocks_request_complete(
-                ctx->client,
-            ctx->peer_text,
-            &ctx->root,
-            LANTERN_BLOCKS_REQUEST_FAILED);
-        }
-    } else if (ctx->client) {
+    if (ctx->client) {
         lantern_client_on_blocks_request_complete(
             ctx->client,
             ctx->peer_text,
             &ctx->root,
-            LANTERN_BLOCKS_REQUEST_SUCCESS);
+            request_success ? LANTERN_BLOCKS_REQUEST_SUCCESS : LANTERN_BLOCKS_REQUEST_FAILED);
     }
 
     block_request_ctx_free(ctx);
@@ -5907,6 +6493,7 @@ static int lantern_client_schedule_blocks_request(
     ctx->root = *root;
     strncpy(ctx->peer_text, peer_id_text, sizeof(ctx->peer_text) - 1);
     ctx->peer_text[sizeof(ctx->peer_text) - 1] = '\0';
+#if defined(LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY)
     bool prefer_legacy = false;
     if (!use_legacy && ctx->peer_text[0] != '\0') {
         prefer_legacy = lantern_reqresp_service_peer_prefers_legacy(&client->reqresp, ctx->peer_text) != 0;
@@ -5915,6 +6502,11 @@ static int lantern_client_schedule_blocks_request(
     ctx->protocol_id =
         effective_legacy ? LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY : LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
     ctx->using_legacy = effective_legacy;
+#else
+    (void)use_legacy;
+    ctx->protocol_id = LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
+    ctx->using_legacy = false;
+#endif
 
     if (peer_id_create_from_string(peer_id_text, &ctx->peer_id) != PEER_ID_SUCCESS) {
         lantern_log_warn(
@@ -5962,7 +6554,8 @@ static void lantern_client_record_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const LanternRoot *root,
-    const char *peer_text) {
+    const char *peer_text,
+    const char *context) {
     if (!client || !block) {
         return;
     }
@@ -5983,6 +6576,14 @@ static void lantern_client_record_block(
         .validator = client->node_id,
         .peer = peer_text && *peer_text ? peer_text : NULL,
     };
+    const char *source = NULL;
+    if (context && *context) {
+        source = context;
+    } else if (peer_text && *peer_text) {
+        source = "peer";
+    } else {
+        source = "local";
+    }
 
     lantern_log_info(
         "gossip",
@@ -6003,7 +6604,15 @@ static void lantern_client_record_block(
         }
     }
 
-    (void)lantern_client_import_block(client, block, selected_root, &meta);
+    bool imported = lantern_client_import_block(client, block, selected_root, &meta);
+    lantern_log_info(
+        "state",
+        &meta,
+        "block import outcome context=%s slot=%" PRIu64 " root=%s result=%s",
+        source ? source : "unknown",
+        block->message.block.slot,
+        root_hex[0] ? root_hex : "0x0",
+        imported ? "imported" : "not_imported");
 }
 
 static void lantern_client_record_vote(
@@ -6023,6 +6632,10 @@ static void lantern_client_record_vote(
     if (!state_locked) {
         return;
     }
+
+    struct lantern_vote_rejection_info rejection;
+    memset(&rejection, 0, sizeof(rejection));
+    bool vote_processed = false;
 
     char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
@@ -6048,10 +6661,17 @@ static void lantern_client_record_vote(
             "deferring vote validator=%" PRIu64 " slot=%" PRIu64 " (fork choice unavailable)",
             vote_copy.data.validator_id,
             vote_copy.data.slot);
+        lantern_vote_rejection_set(&rejection, "fork choice unavailable");
         goto cleanup;
     }
 
-    if (!lantern_client_validate_vote_constraints(client, &vote_copy.data, "gossip", &meta, "gossip")) {
+    if (!lantern_client_validate_vote_constraints(
+            client,
+            &vote_copy.data,
+            "gossip",
+            &meta,
+            "gossip",
+            &rejection)) {
         goto cleanup;
     }
 
@@ -6067,6 +6687,7 @@ static void lantern_client_record_vote(
             "rejected vote validator=%" PRIu64 " slot=%" PRIu64 " (invalid XMSS signature)",
             vote_copy.data.validator_id,
             vote_copy.data.slot);
+        lantern_vote_rejection_set(&rejection, "invalid XMSS signature");
         goto cleanup;
     }
 
@@ -6079,6 +6700,7 @@ static void lantern_client_record_vote(
             "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (state vote cache unavailable)",
             vote_data->validator_id,
             vote_data->slot);
+        lantern_vote_rejection_set(&rejection, "state vote cache unavailable");
         goto cleanup;
     }
     if ((vote_data->validator_id >= validator_count)
@@ -6089,6 +6711,7 @@ static void lantern_client_record_vote(
             "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (validator out of range)",
             vote_data->validator_id,
             vote_data->slot);
+        lantern_vote_rejection_set(&rejection, "validator out of range id=%" PRIu64, vote_data->validator_id);
         goto cleanup;
     }
     if (vote_data->target.slot <= vote_data->source.slot) {
@@ -6098,6 +6721,11 @@ static void lantern_client_record_vote(
             "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (target slot <= source)",
             vote_data->validator_id,
             vote_data->slot);
+        lantern_vote_rejection_set(
+            &rejection,
+            "target slot %" PRIu64 " <= source slot %" PRIu64,
+            vote_data->target.slot,
+            vote_data->source.slot);
         goto cleanup;
     }
     if (!lantern_state_slot_in_justified_window(&client->state, vote_data->source.slot)) {
@@ -6107,6 +6735,10 @@ static void lantern_client_record_vote(
             "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (source outside justified window)",
             vote_data->validator_id,
             vote_data->slot);
+        lantern_vote_rejection_set(
+            &rejection,
+            "source slot=%" PRIu64 " outside justified window",
+            vote_data->source.slot);
         goto cleanup;
     }
     bool source_is_justified = false;
@@ -6117,6 +6749,7 @@ static void lantern_client_record_vote(
             "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (unable to check source justification)",
             vote_data->validator_id,
             vote_data->slot);
+        lantern_vote_rejection_set(&rejection, "unable to check source justification slot=%" PRIu64, vote_data->source.slot);
         goto cleanup;
     }
     if (!source_is_justified) {
@@ -6126,6 +6759,7 @@ static void lantern_client_record_vote(
             "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (source not justified)",
             vote_data->validator_id,
             vote_data->slot);
+        lantern_vote_rejection_set(&rejection, "source slot=%" PRIu64 " not justified", vote_data->source.slot);
         goto cleanup;
     }
 
@@ -6134,6 +6768,11 @@ static void lantern_client_record_vote(
             "state",
             &meta,
             "failed to cache gossip vote validator=%" PRIu64 " slot=%" PRIu64,
+            vote_data->validator_id,
+            vote_data->slot);
+        lantern_vote_rejection_set(
+            &rejection,
+            "failed to cache vote validator=%" PRIu64 " slot=%" PRIu64,
             vote_data->validator_id,
             vote_data->slot);
         goto cleanup;
@@ -6176,6 +6815,7 @@ static void lantern_client_record_vote(
         }
     }
 
+    vote_processed = true;
     lantern_log_info(
         "gossip",
         &meta,
@@ -6190,6 +6830,23 @@ static void lantern_client_record_vote(
         vote_copy.data.source.slot);
 cleanup:
     lantern_client_unlock_state(client, state_locked);
+    lantern_client_note_vote_outcome(client, peer_text, &vote_copy, vote_processed);
+    if (!vote_processed) {
+        const char *reason_text = rejection.has_reason ? rejection.message : "unknown";
+        lantern_log_info(
+            "gossip",
+            &meta,
+            "rejected vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64
+            " source=%s@%" PRIu64 " reason=%s",
+            vote_copy.data.validator_id,
+            vote_copy.data.slot,
+            head_hex[0] ? head_hex : "0x0",
+            target_hex[0] ? target_hex : "0x0",
+            vote_copy.data.target.slot,
+            source_hex[0] ? source_hex : "0x0",
+            vote_copy.data.source.slot,
+            reason_text);
+    }
 }
 
 static int gossip_block_handler(
@@ -6207,7 +6864,7 @@ static int gossip_block_handler(
         peer_text[0] = '\0';
     }
 
-    lantern_client_record_block(client, block, NULL, peer_text[0] ? peer_text : NULL);
+    lantern_client_record_block(client, block, NULL, peer_text[0] ? peer_text : NULL, "gossip");
     return 0;
 }
 
@@ -6226,7 +6883,9 @@ static int gossip_vote_handler(
             peer_text[0] = '\0';
         }
     }
-    lantern_client_record_vote(client, vote, peer_text[0] ? peer_text : NULL);
+    const char *peer_id_text = peer_text[0] ? peer_text : NULL;
+    lantern_client_note_vote_delivery(client, peer_id_text, vote);
+    lantern_client_record_vote(client, vote, peer_id_text);
     return 0;
 }
 

@@ -76,3 +76,6 @@ tests/fixtures/**/*.json
 
 # CI Build
 ci-build*
+
+# Internal docs
+# internal-docs*

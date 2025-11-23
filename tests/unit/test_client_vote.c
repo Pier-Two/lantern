@@ -251,6 +251,103 @@ cleanup:
     return rc;
 }
 
+static int test_validator_refresh_cached_vote_updates_source(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    int rc = 1;
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "vote_refresh",
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+
+    struct lantern_local_validator validator;
+    memset(&validator, 0, sizeof(validator));
+    validator.global_index = 0;
+    validator.secret_key = secret;
+    validator.has_secret_handle = true;
+
+    LanternSignedVote stale;
+    memset(&stale, 0, sizeof(stale));
+    stale.data.validator_id = validator.global_index;
+    stale.data.slot = 4;
+    client_test_fill_root_with_index(&stale.data.head.root, 0x10u);
+    stale.data.head.slot = 4;
+    stale.data.target.slot = 8;
+    client_test_fill_root_with_index(&stale.data.target.root, 0x20u);
+    stale.data.source.slot = 0;
+    stale.data.source.root = anchor_root;
+
+    if (client_test_sign_vote_with_secret(&stale, secret) != 0) {
+        fprintf(stderr, "failed to sign stale vote for refresh test\n");
+        goto cleanup;
+    }
+
+    LanternSignedVote refreshed = stale;
+    LanternCheckpoint new_head = stale.data.head;
+    new_head.slot += 2u;
+    client_test_fill_root_with_index(&new_head.root, 0x30u);
+    LanternCheckpoint new_target = stale.data.target;
+    new_target.slot += 2u;
+    client_test_fill_root_with_index(&new_target.root, 0x40u);
+    LanternCheckpoint new_source = stale.data.source;
+    new_source.slot = 1u;
+    client_test_fill_root_with_index(&new_source.root, 0x50u);
+
+    int refresh_rc = lantern_validator_refresh_cached_vote(
+        &validator,
+        stale.data.slot,
+        &new_head,
+        &new_target,
+        &new_source,
+        &refreshed);
+    if (refresh_rc != 1) {
+        fprintf(stderr, "expected cached vote refresh to occur\n");
+        goto cleanup;
+    }
+    if (refreshed.data.source.slot != new_source.slot
+        || memcmp(refreshed.data.source.root.bytes, new_source.root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "cached vote source was not updated\n");
+        goto cleanup;
+    }
+    if (memcmp(refreshed.signature.bytes, stale.signature.bytes, LANTERN_SIGNATURE_SIZE) == 0) {
+        fprintf(stderr, "cached vote signature did not change after refresh\n");
+        goto cleanup;
+    }
+
+    LanternSignedVote second = refreshed;
+    if (lantern_validator_refresh_cached_vote(
+            &validator,
+            stale.data.slot,
+            &new_head,
+            &new_target,
+            &new_source,
+            &second)
+        != 0) {
+        fprintf(stderr, "expected cached vote refresh to be a no-op\n");
+        goto cleanup;
+    }
+    if (memcmp(second.signature.bytes, refreshed.signature.bytes, LANTERN_SIGNATURE_SIZE) != 0) {
+        fprintf(stderr, "cached vote signature changed during no-op refresh\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
 static int test_record_vote_preserves_state_root(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
@@ -463,6 +560,9 @@ int main(void) {
         return 1;
     }
     if (test_record_vote_rejects_future_slot() != 0) {
+        return 1;
+    }
+    if (test_validator_refresh_cached_vote_updates_source() != 0) {
         return 1;
     }
     if (test_record_vote_preserves_state_root() != 0) {

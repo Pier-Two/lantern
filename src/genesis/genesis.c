@@ -788,12 +788,15 @@ static int parse_validator_config(const char *path, struct lantern_validator_con
         }
         entries[i].enr.quic_port = (uint16_t)quic_port;
 
-        entries[i].enr.sequence = parse_u64(seq_val, &ok);
-        if (!ok) {
-            lantern_yaml_free_objects(objects, count);
-            free_validator_config_entry(&entries[i]);
-            free(entries);
-            return -1;
+        entries[i].enr.sequence = 1; // default ENR sequence if unspecified
+        if (seq_val && *seq_val) {
+            entries[i].enr.sequence = parse_u64(seq_val, &ok);
+            if (!ok) {
+                lantern_yaml_free_objects(objects, count);
+                free_validator_config_entry(&entries[i]);
+                free(entries);
+                return -1;
+            }
         }
         entries[i].hash_sig_dir = dup_trimmed(hash_dir_val);
         entries[i].has_range = false;

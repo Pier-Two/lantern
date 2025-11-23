@@ -45,7 +45,12 @@ libp2p_err_t libp2p_gossipsub_rpc_decode_frame(
 #define LANTERN_LEANSPEC_JUSTIFICATION_LOOKBACK 3u
 #define LANTERN_LEANSPEC_SEEN_TTL_FACTOR 2u
 
-static const char *const k_leanspec_gossipsub_protocols[] = {LANTERN_GOSSIPSUB_PROTOCOL};
+/* Accept both raw 1.0.0 and libp2p's stacked identifiers (prefix/1.1.0) */
+static const char *const k_leanspec_gossipsub_protocols[] = {
+    "/meshsub/1.0.0",
+    "/meshsub/1.0.0/1.1.0",
+    "/meshsub/1.0.0/1.0.0",
+};
 
 static uint32_t lantern_leanspec_seen_ttl_ms(void) {
     const uint64_t ttl_seconds = (uint64_t)LANTERN_LEANSPEC_SECONDS_PER_SLOT
@@ -234,12 +239,10 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
     const struct lantern_log_metadata meta = {.peer = peer_text[0] ? peer_text : NULL};
 
     if (gossipsub_message_has_forbidden_metadata(msg)) {
-        lantern_log_warn(
+        lantern_log_debug(
             "gossip",
             &meta,
-            "rejected block gossip with author/seqno/signature fields present");
-        result = LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
-        goto cleanup;
+            "block gossip contains author/seqno/signature metadata (allowing for compatibility)");
     }
 
     lantern_log_debug(
@@ -303,12 +306,10 @@ static libp2p_gossipsub_validation_result_t gossipsub_vote_validator(
     const struct lantern_log_metadata meta = {.peer = peer_text[0] ? peer_text : NULL};
 
     if (gossipsub_message_has_forbidden_metadata(msg)) {
-        lantern_log_warn(
+        lantern_log_debug(
             "gossip",
             &meta,
-            "rejected vote gossip with author/seqno/signature fields present");
-        result = LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
-        goto cleanup;
+            "vote gossip contains author/seqno/signature metadata (allowing for compatibility)");
     }
 
     lantern_log_debug(
@@ -467,15 +468,30 @@ int lantern_gossipsub_service_start(
         lantern_gossipsub_service_reset(service);
         return -1;
     }
+    lantern_log_info(
+        "gossip",
+        &(const struct lantern_log_metadata){.peer = config->devnet},
+        "subscribed gossipsub topic=%s",
+        service->block_topic);
     if (subscribe_topic(service, service->vote_topic) != 0) {
         lantern_gossipsub_service_reset(service);
         return -1;
     }
+    lantern_log_info(
+        "gossip",
+        &(const struct lantern_log_metadata){.peer = config->devnet},
+        "subscribed gossipsub topic=%s",
+        service->vote_topic);
     if (strcmp(service->legacy_vote_topic, service->vote_topic) != 0) {
         if (subscribe_topic(service, service->legacy_vote_topic) != 0) {
             lantern_gossipsub_service_reset(service);
             return -1;
         }
+        lantern_log_info(
+            "gossip",
+            &(const struct lantern_log_metadata){.peer = config->devnet},
+            "subscribed gossipsub topic=%s",
+            service->legacy_vote_topic);
     }
 
     if (service->block_handler) {
@@ -567,7 +583,16 @@ static int publish_payload(
     message.data = payload;
     message.data_len = payload_len;
     libp2p_err_t err = libp2p_gossipsub_publish(service->gossipsub, &message);
-    return err == LIBP2P_ERR_OK ? 0 : -1;
+    if (err != LIBP2P_ERR_OK) {
+        lantern_log_warn(
+            "gossip",
+            NULL,
+            "gossipsub publish failed for topic %s (err=%d)",
+            topic,
+            (int)err);
+        return -1;
+    }
+    return 0;
 }
 
 int lantern_gossipsub_service_publish_block(
