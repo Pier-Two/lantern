@@ -712,6 +712,55 @@ static void test_blocks_by_range_closed_read_completes_success(void) {
     lantern_signed_block_reset(&block);
 }
 
+static void test_blocks_by_range_reset_then_closed_completes_once(void) {
+    struct test_blocks_context test_context;
+    memset(&test_context, 0, sizeof(test_context));
+
+    struct lantern_reqresp_service service;
+    memset(&service, 0, sizeof(service));
+    service.callbacks.context = &test_context;
+    service.callbacks.blocks_request_complete = test_blocks_request_complete;
+
+    struct lantern_reqresp_exchange *exchange = calloc(1u, sizeof(*exchange));
+    CHECK(exchange != NULL);
+    exchange->service = &service;
+    exchange->kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE;
+    exchange->outbound = 1;
+    exchange->request_id = 44u;
+    service.exchanges = exchange;
+
+    struct test_transport transport = {0};
+    libp2p_host_t host;
+    libp2p_host_stream_t stream;
+    init_test_host_stream(&host, &stream, &transport);
+    exchange->host = &host;
+    exchange->stream = &stream;
+    stream.user_data = exchange;
+
+    CHECK(
+        reqresp_on_event(
+            &host,
+            &stream,
+            LIBP2P_HOST_PROTOCOL_EVENT_RESET,
+            NULL)
+        == LIBP2P_HOST_OK);
+    CHECK(test_context.complete_called == 1);
+    CHECK(test_context.complete_result == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED);
+    CHECK(service.exchanges == NULL);
+    CHECK(stream.user_data == NULL);
+    CHECK(transport.reset_called == 1u);
+
+    CHECK(
+        reqresp_on_event(
+            &host,
+            &stream,
+            LIBP2P_HOST_PROTOCOL_EVENT_CLOSED,
+            NULL)
+        == LIBP2P_HOST_OK);
+    CHECK(test_context.complete_called == 1);
+    CHECK(transport.reset_called == 1u);
+}
+
 static void test_cancelled_range_does_not_timeout_or_complete(void) {
     struct test_blocks_context test_context;
     memset(&test_context, 0, sizeof(test_context));
@@ -1008,6 +1057,7 @@ int main(void) {
     test_blocks_deadline_refresh_preserves_full_response_window();
     test_blocks_by_range_timeout_distinguishes_received_data();
     test_blocks_by_range_closed_read_completes_success();
+    test_blocks_by_range_reset_then_closed_completes_once();
     test_cancelled_range_does_not_timeout_or_complete();
     test_blocks_by_range_accepts_sparse_and_reports_clean_empty();
     test_blocks_by_range_rejects_slot_below_start();

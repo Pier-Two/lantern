@@ -1291,6 +1291,10 @@ static libp2p_host_err_t reqresp_on_event(
     }
     struct lantern_reqresp_exchange *exchange = (struct lantern_reqresp_exchange *)user_data;
     if (kind == LIBP2P_HOST_PROTOCOL_EVENT_RESET || kind == LIBP2P_HOST_PROTOCOL_EVENT_CLOSED) {
+        (void)libp2p_host_stream_set_user_data(stream, NULL);
+        if (kind == LIBP2P_HOST_PROTOCOL_EVENT_RESET) {
+            (void)libp2p_host_stream_reset(host, stream, 0u);
+        }
         if (exchange->outbound) {
             exchange_handle_outbound_closed(
                 exchange,
