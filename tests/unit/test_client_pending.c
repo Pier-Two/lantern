@@ -280,6 +280,7 @@ static void disable_sync_test_peer(struct lantern_client *client)
     client->block_fetch_count = 0u;
     client->block_fetch_capacity = 0u;
     lantern_string_list_reset(&client->range_sync.failed_peers);
+    lantern_string_list_reset(&client->range_sync.empty_peers);
     client->range_sync = (struct lantern_range_sync_state){0};
     client->next_blocks_request_id = 0u;
     lantern_client_debug_pending_reset(client);
@@ -3026,6 +3027,22 @@ static int test_range_batch_size_adapts_and_locks_after_data_timeout(void)
     }
 
     uint64_t retry_slot = client.range_sync.next_slot;
+    if (pthread_mutex_lock(&client.status_lock) != 0)
+    {
+        goto cleanup;
+    }
+    struct lantern_peer_status_entry *status =
+        lantern_client_ensure_status_entry_locked(&client, peer_id);
+    if (status)
+    {
+        status->status.head.slot = 4096u;
+        status->last_status_ms = 1u;
+    }
+    pthread_mutex_unlock(&client.status_lock);
+    if (!status)
+    {
+        goto cleanup;
+    }
     set_range_request_for_test(&client, request_id++, 64u, peer_id);
     if (!lantern_client_complete_range_request(
             &client,
@@ -3113,6 +3130,7 @@ static int test_range_batch_size_adapts_and_locks_after_data_timeout(void)
     }
 
     lantern_string_list_reset(&client.range_sync.failed_peers);
+    lantern_string_list_reset(&client.range_sync.empty_peers);
     client.range_sync = (struct lantern_range_sync_state){0};
     lantern_client_update_range_sync_target(&client, 0u, 4096u);
     while (client.range_sync.batch_size < LANTERN_MAX_REQUEST_BLOCKS)
@@ -3150,15 +3168,38 @@ cleanup:
     return rc;
 }
 
-static int test_empty_range_advances_authoritative_coverage(void)
+static int test_empty_range_advances_after_all_eligible_peers_agree(void)
 {
     struct lantern_client client;
-    const char *peer_id = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
+    const char *peer_a = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
+    const char *peer_b = "16Uiu2HAkutTMoTzDw1tCvSRtu6YoixJwS46S1ZFxW8hSx9fWHiPs";
     int rc = 1;
 
     memset(&client, 0, sizeof(client));
-    client.node_id = "empty_range_coverage";
-    if (enable_sync_test_peer(&client, peer_id) != 0)
+    client.node_id = "empty_range_peer_round";
+    if (enable_sync_test_peer(&client, peer_a) != 0
+        || set_sync_test_connected_peers(&client, peer_a, peer_b) != 0)
+    {
+        goto cleanup;
+    }
+
+    if (pthread_mutex_lock(&client.status_lock) != 0)
+    {
+        goto cleanup;
+    }
+    struct lantern_peer_status_entry *status_a =
+        lantern_client_ensure_status_entry_locked(&client, peer_a);
+    struct lantern_peer_status_entry *status_b =
+        lantern_client_ensure_status_entry_locked(&client, peer_b);
+    if (status_a && status_b)
+    {
+        status_a->status.head.slot = 24u;
+        status_b->status.head.slot = 24u;
+        status_a->last_status_ms = 1u;
+        status_b->last_status_ms = 1u;
+    }
+    pthread_mutex_unlock(&client.status_lock);
+    if (!status_a || !status_b)
     {
         goto cleanup;
     }
@@ -3173,20 +3214,56 @@ static int test_empty_range_advances_authoritative_coverage(void)
         client.range_sync.request_peer,
         sizeof(client.range_sync.request_peer),
         "%s",
-        peer_id);
+        peer_a);
 
     if (!lantern_client_complete_range_request(
             &client,
             90u,
+            LANTERN_BLOCKS_REQUEST_EMPTY)
+        || client.range_sync.next_slot != 20u
+        || client.range_sync.request_id != 0u
+        || !client.range_sync.peers_exhausted
+        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_a)
+        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_b)
+        || !lantern_string_list_contains(&client.range_sync.empty_peers, peer_a)
+        || lantern_string_list_contains(&client.range_sync.empty_peers, peer_b))
+    {
+        fprintf(stderr, "first empty response advanced before trying another peer\n");
+        goto cleanup;
+    }
+
+    LanternStatusMessage refreshed = status_a->status;
+    if (reqresp_handle_status(&client, &refreshed, peer_a) != LANTERN_CLIENT_OK
+        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_a)
+        || !lantern_string_list_contains(&client.range_sync.empty_peers, peer_a))
+    {
+        fprintf(stderr, "status refresh re-enabled an empty peer during rotation\n");
+        goto cleanup;
+    }
+
+    (void)lantern_string_list_remove(&client.range_sync.failed_peers, peer_b);
+    client.range_sync.peers_exhausted = false;
+    client.range_sync.request_id = 91u;
+    client.range_sync.request_start_slot = 20u;
+    client.range_sync.request_count = 5u;
+    (void)snprintf(
+        client.range_sync.request_peer,
+        sizeof(client.range_sync.request_peer),
+        "%s",
+        peer_b);
+    if (!lantern_client_complete_range_request(
+            &client,
+            91u,
             LANTERN_BLOCKS_REQUEST_EMPTY)
         || client.range_sync.next_slot != 25u
         || client.range_sync.request_id != 0u
         || client.range_sync.batch_size != 8u
         || client.range_sync.batch_size_locked
         || client.range_sync.peers_exhausted
-        || client.range_sync.failed_peers.len != 0u)
+        || client.range_sync.failed_peers.len != 0u
+        || client.range_sync.empty_peers.len != 0u)
     {
-        fprintf(stderr, "empty range did not advance authoritative coverage\n");
+        fprintf(stderr, "all-empty peer round did not advance range coverage\n");
         goto cleanup;
     }
 
@@ -3894,7 +3971,7 @@ int main(void) {
     if (test_range_batch_size_adapts_and_locks_after_data_timeout() != 0) {
         return 1;
     }
-    if (test_empty_range_advances_authoritative_coverage() != 0) {
+    if (test_empty_range_advances_after_all_eligible_peers_agree() != 0) {
         return 1;
     }
     if (test_terminal_range_recovery_requests_unresolved_parent() != 0) {
