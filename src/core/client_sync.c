@@ -1774,9 +1774,13 @@ bool lantern_client_complete_range_request(
 
     bool should_continue = false;
     bool range_completed = false;
-    if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS)
+    if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS
+        || outcome == LANTERN_BLOCKS_REQUEST_EMPTY)
     {
-        range_batch_policy_succeeded(range);
+        if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS)
+        {
+            range_batch_policy_succeeded(range);
+        }
         range->peers_exhausted = false;
         range->next_slot = start_slot + count;
         if (range->next_slot <= range->target_slot)
