@@ -2460,6 +2460,7 @@ void lantern_shutdown(struct lantern_client *client)
     free(client->active_blocks_requests);
     free(client->block_fetches);
     lantern_string_list_reset(&client->range_sync.failed_peers);
+    lantern_string_list_reset(&client->range_sync.empty_peers);
     if (status_locked)
     {
         pthread_mutex_unlock(&client->status_lock);

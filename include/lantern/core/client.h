@@ -133,6 +133,7 @@ struct lantern_range_sync_state {
     uint64_t request_next_slot;
     char request_peer[128];
     struct lantern_string_list failed_peers;
+    struct lantern_string_list empty_peers;
     bool peers_exhausted;
     bool batch_size_locked;
 };

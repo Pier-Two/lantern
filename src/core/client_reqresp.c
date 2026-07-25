@@ -530,6 +530,7 @@ void lantern_client_update_sync_progress(
         range_completed = true;
         retired_request_id = range->request_id;
         lantern_string_list_reset(&range->failed_peers);
+        lantern_string_list_reset(&range->empty_peers);
         *range = (struct lantern_range_sync_state){0};
     }
     LanternStatusMessage network_view = client->network_view;
@@ -653,7 +654,8 @@ static void lantern_client_peer_status_update(
         && range->next_slot != 0u
         && range->next_slot <= range->target_slot)
     {
-        if (lantern_string_list_remove(&range->failed_peers, peer_id_text))
+        if (!lantern_string_list_contains(&range->empty_peers, peer_id_text)
+            && lantern_string_list_remove(&range->failed_peers, peer_id_text))
         {
             range->peers_exhausted = false;
         }

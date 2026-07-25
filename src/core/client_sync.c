@@ -1575,6 +1575,46 @@ static void range_batch_policy_timed_out_with_data(
     range->batch_size_locked = true;
 }
 
+static void range_clear_empty_peer_failures(struct lantern_range_sync_state *range)
+{
+    if (!range)
+    {
+        return;
+    }
+    for (size_t i = 0; i < range->empty_peers.len; ++i)
+    {
+        (void)lantern_string_list_remove(
+            &range->failed_peers,
+            range->empty_peers.items[i]);
+    }
+    lantern_string_list_reset(&range->empty_peers);
+}
+
+static bool range_all_eligible_peers_empty_locked(
+    struct lantern_client *client,
+    uint64_t min_slot)
+{
+    bool found = false;
+    for (size_t i = 0; i < client->peer_status_count; ++i)
+    {
+        struct lantern_peer_status_entry *peer = &client->peer_status_entries[i];
+        if (!peer->peer_id[0]
+            || peer->status.head.slot < min_slot
+            || !lantern_client_is_peer_connected(client, peer->peer_id))
+        {
+            continue;
+        }
+        found = true;
+        if (!lantern_string_list_contains(
+                &client->range_sync.empty_peers,
+                peer->peer_id))
+        {
+            return false;
+        }
+    }
+    return found;
+}
+
 bool lantern_client_schedule_next_range_request(struct lantern_client *client)
 {
     if (!client || !client->status_lock_initialized
@@ -1704,6 +1744,7 @@ void lantern_client_update_range_sync_target(
         {
             range->next_slot = local_next_slot;
             lantern_string_list_reset(&range->failed_peers);
+            lantern_string_list_reset(&range->empty_peers);
             range->peers_exhausted = false;
         }
         if (bounded_target_slot > range->target_slot)
@@ -1774,13 +1815,10 @@ bool lantern_client_complete_range_request(
 
     bool should_continue = false;
     bool range_completed = false;
-    if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS
-        || outcome == LANTERN_BLOCKS_REQUEST_EMPTY)
+    if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS)
     {
-        if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS)
-        {
-            range_batch_policy_succeeded(range);
-        }
+        range_clear_empty_peer_failures(range);
+        range_batch_policy_succeeded(range);
         range->peers_exhausted = false;
         range->next_slot = start_slot + count;
         if (range->next_slot <= range->target_slot)
@@ -1799,15 +1837,35 @@ bool lantern_client_complete_range_request(
             range_batch_policy_timed_out_with_data(range);
         }
         range->peers_exhausted = false;
-        bool peer_recorded =
-            lantern_string_list_append_unique(&range->failed_peers, peer_text) == 0;
+        bool peer_recorded = peer_text[0]
+            && lantern_string_list_append_unique(
+                   &range->failed_peers,
+                   peer_text)
+                == 0;
+        bool empty_recorded = outcome != LANTERN_BLOCKS_REQUEST_EMPTY
+            || (peer_text[0]
+                && lantern_string_list_append_unique(
+                       &range->empty_peers,
+                       peer_text)
+                    == 0);
+        bool empty_range_confirmed = outcome == LANTERN_BLOCKS_REQUEST_EMPTY
+            && empty_recorded
+            && range_all_eligible_peers_empty_locked(
+                client,
+                start_slot + count - 1u);
+        if (empty_range_confirmed)
+        {
+            range_clear_empty_peer_failures(range);
+            range->next_slot = start_slot + count;
+        }
         if (request_next_slot > range->next_slot)
         {
+            range_clear_empty_peer_failures(range);
             range->next_slot = request_next_slot;
         }
         if (range->next_slot <= range->target_slot)
         {
-            should_continue = peer_recorded;
+            should_continue = peer_recorded && empty_recorded;
         }
         else
         {
