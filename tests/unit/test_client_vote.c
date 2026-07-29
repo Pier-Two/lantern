@@ -318,7 +318,7 @@ static int test_fixture_secret_key_path(
     int written = snprintf(
         out_path,
         out_path_len,
-        "%s/genesis/xmss-keys/validator_%zu_sk.json",
+        "%s/genesis/xmss-keys/validator_%zu_sk.ssz",
         LANTERN_TEST_FIXTURE_DIR,
         validator_index);
     if (written <= 0 || (size_t)written >= out_path_len) {
@@ -1425,7 +1425,7 @@ cleanup:
     return rc;
 }
 
-static int test_validator_sign_with_key_advances_only_selected_secret(void) {
+static int test_validator_sign_with_key_uses_only_selected_secret(void) {
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemePublicKey *unused_pub = NULL;
     struct PQSignatureSchemeSecretKey *attestation_secret = NULL;
@@ -1440,11 +1440,11 @@ static int test_validator_sign_with_key_advances_only_selected_secret(void) {
     memset(&signature, 0, sizeof(signature));
 
     if (client_test_load_precomputed_keypair(0u, &pub, &attestation_secret) != 0) {
-        fprintf(stderr, "failed to load attestation keypair for key-advance test\n");
+        fprintf(stderr, "failed to load attestation keypair for key-isolation test\n");
         goto cleanup;
     }
     if (client_test_load_precomputed_keypair(0u, &unused_pub, &proposal_secret) != 0) {
-        fprintf(stderr, "failed to load proposal keypair for key-advance test\n");
+        fprintf(stderr, "failed to load proposal keypair for key-isolation test\n");
         goto cleanup;
     }
 
@@ -1456,19 +1456,15 @@ static int test_validator_sign_with_key_advances_only_selected_secret(void) {
     struct PQRange initial_proposal = pq_get_prepared_interval(validator.proposal_secret_key);
     if (initial_attestation.end <= initial_attestation.start
         || initial_proposal.end <= initial_proposal.start) {
-        fprintf(stderr, "prepared interval unavailable for key-advance test\n");
+        fprintf(stderr, "prepared interval unavailable for key-isolation test\n");
         goto cleanup;
     }
 
-    uint64_t slot = initial_proposal.end;
-    if (slot == 0u) {
-        fprintf(stderr, "invalid proposal slot selection in key-advance test\n");
-        goto cleanup;
-    }
+    uint64_t slot = initial_proposal.start;
 
     client_test_fill_root_with_index(&message, 0xAA55u);
     if (validator_sign_with_key(&validator, slot, &message, true, &signature) != LANTERN_CLIENT_OK) {
-        fprintf(stderr, "validator_sign_with_key failed for proposal key advance test\n");
+        fprintf(stderr, "validator_sign_with_key failed for proposal key-isolation test\n");
         goto cleanup;
     }
 
@@ -1479,17 +1475,13 @@ static int test_validator_sign_with_key_advances_only_selected_secret(void) {
         fprintf(stderr, "attestation key should not advance during proposal signing\n");
         goto cleanup;
     }
-    if (!pq_range_contains_slot(updated_proposal, slot)) {
-        fprintf(stderr, "proposal key was not advanced to cover slot %" PRIu64 "\n", slot);
-        goto cleanup;
-    }
-    if (updated_proposal.start == initial_proposal.start
-        && updated_proposal.end == initial_proposal.end) {
-        fprintf(stderr, "proposal key interval did not change after signing future slot\n");
+    if (updated_proposal.start != initial_proposal.start
+        || updated_proposal.end != initial_proposal.end) {
+        fprintf(stderr, "proposal key activation interval changed during signing\n");
         goto cleanup;
     }
     if (!lantern_signature_verify_pk(pub, slot, &signature, &message)) {
-        fprintf(stderr, "proposal signature failed verification after key advance\n");
+        fprintf(stderr, "proposal signature failed verification in key-isolation test\n");
         goto cleanup;
     }
 
@@ -1707,13 +1699,13 @@ static int test_client_load_xmss_keys_reads_annotated_validators(void) {
         || snprintf(
                attester_dst,
                sizeof(attester_dst),
-               "%s/validator_0_attester_key_sk.json",
+               "%s/validator_0_attester_key_sk.ssz",
                temp_dir)
                <= 0
         || snprintf(
                proposer_dst,
                sizeof(proposer_dst),
-               "%s/validator_0_proposer_key_sk.json",
+               "%s/validator_0_proposer_key_sk.ssz",
                temp_dir)
                <= 0) {
         fprintf(stderr, "failed to build annotated fixture paths\n");
@@ -1734,17 +1726,17 @@ static int test_client_load_xmss_keys_reads_annotated_validators(void) {
         "manifest_loader:\n"
         "  - index: 0\n"
         "    pubkey_hex: 00\n"
-        "    privkey_file: validator_0_attester_key_sk.json\n"
+        "    privkey_file: validator_0_attester_key_sk.ssz\n"
         "  - index: 0\n"
         "    pubkey_hex: 11\n"
-        "    privkey_file: validator_0_proposer_key_sk.json\n"
+        "    privkey_file: validator_0_proposer_key_sk.ssz\n"
         "other_node:\n"
         "  - index: 1\n"
         "    pubkey_hex: 22\n"
-        "    privkey_file: validator_1_attester_key_sk.json\n"
+        "    privkey_file: validator_1_attester_key_sk.ssz\n"
         "  - index: 1\n"
         "    pubkey_hex: 33\n"
-        "    privkey_file: validator_1_proposer_key_sk.json\n",
+        "    privkey_file: validator_1_proposer_key_sk.ssz\n",
         annotated);
     fclose(annotated);
 
@@ -1846,7 +1838,7 @@ static int test_client_load_xmss_keys_rejects_incomplete_annotated_validator(voi
         || snprintf(
                attester_dst,
                sizeof(attester_dst),
-               "%s/validator_0_attester_key_sk.json",
+               "%s/validator_0_attester_key_sk.ssz",
                temp_dir)
                <= 0) {
         fprintf(stderr, "failed to build incomplete annotated fixture paths\n");
@@ -1866,7 +1858,7 @@ static int test_client_load_xmss_keys_rejects_incomplete_annotated_validator(voi
         "manifest_loader:\n"
         "  - index: 0\n"
         "    pubkey_hex: 00\n"
-        "    privkey_file: validator_0_attester_key_sk.json\n",
+        "    privkey_file: validator_0_attester_key_sk.ssz\n",
         annotated);
     fclose(annotated);
 
@@ -4059,7 +4051,7 @@ int main(void) {
     if (test_record_vote_rejects_future_slot() != 0) {
         return 1;
     }
-    if (test_validator_sign_with_key_advances_only_selected_secret() != 0) {
+    if (test_validator_sign_with_key_uses_only_selected_secret() != 0) {
         return 1;
     }
     if (test_validator_sign_with_key_rejects_different_message_same_slot() != 0) {

@@ -6,7 +6,6 @@
 #include <string.h>
 
 #include "ssz.h"
-#include "pq-bindings-c-rust.h"
 #include "lantern/consensus/ssz.h"
 
 #define LANTERN_RETURN_IF_SSZ_ERROR(expr) \
@@ -16,35 +15,6 @@
             return lantern_err__; \
         } \
     } while (0)
-
-/* XMSS signature layout constants (LeanSpec prod config). */
-static const size_t LANTERN_XMSS_FP_BYTES = 4u;
-static const size_t LANTERN_XMSS_HASH_LEN_FE = 8u;
-static const size_t LANTERN_XMSS_RAND_LEN_FE = 7u;
-static const size_t LANTERN_XMSS_HASH_DIGEST_BYTES =
-    (LANTERN_XMSS_HASH_LEN_FE * LANTERN_XMSS_FP_BYTES);
-static const size_t LANTERN_XMSS_RHO_BYTES =
-    (LANTERN_XMSS_RAND_LEN_FE * LANTERN_XMSS_FP_BYTES);
-static const size_t LANTERN_XMSS_SIGNATURE_FIXED_SECTION =
-    (SSZ_BYTES_PER_LENGTH_OFFSET + LANTERN_XMSS_RHO_BYTES + SSZ_BYTES_PER_LENGTH_OFFSET);
-static size_t xmss_node_list_limit(void) {
-    uint64_t lifetime = pq_get_lifetime();
-    if (lifetime == 0u || (lifetime & (lifetime - 1u)) != 0u) {
-        return (size_t)1u << 17;
-    }
-
-    unsigned int log_lifetime = 0u;
-    while (log_lifetime < 63u && (UINT64_C(1) << log_lifetime) < lifetime) {
-        ++log_lifetime;
-    }
-
-    unsigned int exponent = (log_lifetime / 2u) + 1u;
-    if (exponent >= (sizeof(size_t) * 8u)) {
-        return 0u;
-    }
-
-    return (size_t)1u << exponent;
-}
 
 static ssz_error_t chunk_from_uint64(uint64_t value, ssz_chunk_t *out) {
     return ssz_hash_tree_root_uint64(value, out);
@@ -56,16 +26,6 @@ static void chunk_from_root(const LanternRoot *root, ssz_chunk_t *out) {
 
 static void root_from_chunk(const ssz_chunk_t *chunk, LanternRoot *out_root) {
     memcpy(out_root->bytes, chunk->bytes, SSZ_BYTES_PER_CHUNK);
-}
-
-static uint32_t read_u32_le(const uint8_t *data) {
-    if (!data) {
-        return 0;
-    }
-    return (uint32_t)data[0]
-        | ((uint32_t)data[1] << 8)
-        | ((uint32_t)data[2] << 16)
-        | ((uint32_t)data[3] << 24);
 }
 
 static ssz_error_t merkleize_chunks(
@@ -125,113 +85,11 @@ static ssz_error_t hash_byte_list(const uint8_t *bytes, size_t length, size_t ma
     return SSZ_SUCCESS;
 }
 
-static ssz_error_t hash_digest_list_root(
-    const uint8_t *chunks,
-    size_t count,
-    LanternRoot *out_root) {
-    if (!out_root) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-    if (count > 0 && !chunks) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-    size_t limit = xmss_node_list_limit();
-    if (limit == 0u) {
-        return SSZ_ERR_OVERFLOW;
-    }
-    ssz_chunk_t *roots = NULL;
-    if (count > 0) {
-        roots = calloc(count, sizeof(*roots));
-        if (!roots) {
-            return SSZ_ERR_HASH_FAILURE;
-        }
-        for (size_t i = 0; i < count; ++i) {
-            memcpy(roots[i].bytes, chunks + (i * SSZ_BYTES_PER_CHUNK), SSZ_BYTES_PER_CHUNK);
-        }
-    }
-    ssz_chunk_t root;
-    ssz_error_t err = ssz_hash_tree_root_list_roots(
-        roots,
-        count,
-        limit,
-        NULL,
-        NULL,
-        &root);
-    free(roots);
-    if (err != SSZ_SUCCESS) {
-        return err;
-    }
-    root_from_chunk(&root, out_root);
-    return SSZ_SUCCESS;
-}
-
 static ssz_error_t hash_xmss_signature(const LanternSignature *signature, LanternRoot *out_root) {
     if (!signature || !out_root) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    const uint8_t *data = signature->bytes;
-    const size_t data_len = LANTERN_SIGNATURE_SIZE;
-
-    if (data_len < LANTERN_XMSS_SIGNATURE_FIXED_SECTION) {
-        return SSZ_ERR_ENCODING_INVALID;
-    }
-
-    uint32_t path_offset = read_u32_le(data);
-    uint32_t hashes_offset = read_u32_le(data + SSZ_BYTES_PER_LENGTH_OFFSET + LANTERN_XMSS_RHO_BYTES);
-
-    if (path_offset != LANTERN_XMSS_SIGNATURE_FIXED_SECTION) {
-        return SSZ_ERR_ENCODING_INVALID;
-    }
-    if (hashes_offset < path_offset || hashes_offset > data_len) {
-        return SSZ_ERR_OFFSET_INVALID;
-    }
-
-    size_t path_len = hashes_offset - path_offset;
-    if (path_len < SSZ_BYTES_PER_LENGTH_OFFSET) {
-        return SSZ_ERR_ENCODING_INVALID;
-    }
-    uint32_t siblings_offset = read_u32_le(data + path_offset);
-    if (siblings_offset != SSZ_BYTES_PER_LENGTH_OFFSET) {
-        return SSZ_ERR_OFFSET_INVALID;
-    }
-    size_t siblings_start = path_offset + siblings_offset;
-    if (siblings_start > hashes_offset) {
-        return SSZ_ERR_OFFSET_INVALID;
-    }
-    size_t siblings_len = hashes_offset - siblings_start;
-    if (siblings_len % LANTERN_XMSS_HASH_DIGEST_BYTES != 0) {
-        return SSZ_ERR_ENCODING_INVALID;
-    }
-    size_t siblings_count = siblings_len / LANTERN_XMSS_HASH_DIGEST_BYTES;
-    size_t node_limit = xmss_node_list_limit();
-    if (node_limit == 0u) {
-        return SSZ_ERR_OVERFLOW;
-    }
-    if (siblings_count > node_limit) {
-        return SSZ_ERR_LIMIT_EXCEEDED;
-    }
-
-    size_t hashes_len = data_len - hashes_offset;
-    if (hashes_len % LANTERN_XMSS_HASH_DIGEST_BYTES != 0) {
-        return SSZ_ERR_ENCODING_INVALID;
-    }
-    size_t hashes_count = hashes_len / LANTERN_XMSS_HASH_DIGEST_BYTES;
-    if (hashes_count > node_limit) {
-        return SSZ_ERR_LIMIT_EXCEEDED;
-    }
-
-    LanternRoot siblings_root;
-    LANTERN_RETURN_IF_SSZ_ERROR(hash_digest_list_root(data + siblings_start, siblings_count, &siblings_root));
-
-    LanternRoot hashes_root;
-    LANTERN_RETURN_IF_SSZ_ERROR(hash_digest_list_root(data + hashes_offset, hashes_count, &hashes_root));
-
-    ssz_chunk_t chunks[3];
-    chunk_from_root(&siblings_root, &chunks[0]);
-    memset(chunks[1].bytes, 0, sizeof(chunks[1].bytes));
-    memcpy(chunks[1].bytes, data + SSZ_BYTES_PER_LENGTH_OFFSET, LANTERN_XMSS_RHO_BYTES);
-    chunk_from_root(&hashes_root, &chunks[2]);
-    return merkleize_chunks(chunks, 3, 0, out_root);
+    return hash_byte_vector(signature->bytes, LANTERN_SIGNATURE_SIZE, out_root);
 }
 
 static ssz_error_t hash_validator(

@@ -556,9 +556,7 @@ bool lantern_signature_verify(
     if (!signature || !message) {
         return false;
     }
-    // Use pq_verify_ssz which handles the 52-byte pubkey as SSZ format.
-    // This matches Ream's leanSig serialization using the Serializable trait.
-    // The 52-byte pubkey is serialized using leanSig's to_bytes()/from_bytes().
+    // Public keys and signatures use leanVM main's canonical SSZ encodings.
     double start = get_time_seconds();
     int verify_rc = pq_verify_ssz(
         pubkey_bytes,
@@ -584,7 +582,7 @@ bool lantern_signature_verify_pk(
         return false;
     }
     struct PQSignature *pq_signature = NULL;
-    // Use SSZ format (compatible with Ream's leanSig)
+    // Use leanVM main's canonical SSZ signature format.
     enum PQSigningError sig_err =
         pq_signature_deserialize(signature->bytes, sizeof(signature->bytes), &pq_signature);
     if (sig_err != Success || !pq_signature) {
@@ -624,7 +622,7 @@ bool lantern_signature_sign(
     }
 
     uintptr_t written = 0;
-    // Use SSZ format (compatible with Ream's leanSig)
+    // Use leanVM main's canonical SSZ signature format.
     enum PQSigningError serialize_err = pq_signature_serialize(
         pq_signature,
         out_signature->bytes,

@@ -38,16 +38,17 @@ jobs:
         run: |
           manifest="${RUNNER_TEMP}/consensus-fixtures-cache-key.txt"
           {
-            echo "cache-version=v1"
+            echo "cache-version=v2"
             echo "runner-os=${RUNNER_OS}"
             echo "runner-arch=${RUNNER_ARCH}"
             echo "python=3.12"
-            echo "layer=consensus"
+            echo "layer=networking"
             echo "fork=Lstar"
             echo "scheme=test"
             echo "output=tools/leanSpec/fixtures/consensus"
-            echo "fill-command=uv run fill --fork=Lstar --clean -n auto"
+            echo "fill-command=uv run fill --fork=Lstar --clean -n auto tests/consensus/lstar/networking"
             echo "leanspec-commit=$(git -C tools/leanSpec rev-parse HEAD)"
+            echo "leanvm-xmss-commit=$(git -C external/c-leanvm-xmss rev-parse HEAD)"
             git -C tools/leanSpec ls-files -z \
               pyproject.toml \
               uv.lock \
@@ -58,12 +59,12 @@ jobs:
               | while IFS= read -r -d '' path; do
                   echo "leanspec-file $(git -C tools/leanSpec hash-object "$path") $path"
                 done
-            for path in CMakeLists.txt scripts/bootstrap.sh .github/workflows/ci.yml; do
+            for path in CMakeLists.txt include/lantern/consensus/containers.h scripts/bootstrap.sh .github/workflows/ci.yml; do
               echo "lantern-file $(git hash-object "$path") $path"
             done
           } > "$manifest"
           key_hash="$(sha256sum "$manifest" | awk '{print $1}')"
-          echo "key=lantern-consensus-fixtures-v1-${key_hash}" >> "$GITHUB_OUTPUT"
+          echo "key=lantern-consensus-fixtures-v2-${key_hash}" >> "$GITHUB_OUTPUT"
 
       - name: Restore consensus fixtures cache
         id: consensus-fixtures-cache

@@ -105,18 +105,6 @@ for path in libdir.glob("*.so.*"):
             pass
 PY
 
-# Preserve the leanVM checkout containing XMSS aggregation sources.
-# Runtime paths are compiled from Cargo's checkout location, so mirror it into the final image.
-RUN --mount=type=cache,target=/root/.cargo/git,sharing=locked,id=cargo-git-${TARGETPLATFORM} \
-    set -eux; \
-    mkdir -p /opt/lantern/share/cargo-git-checkouts; \
-    mapfile -t xmss_sources < <(find /root/.cargo/git/checkouts -path '*/crates/rec_aggregation/zkdsl_implem/xmss_aggregate.py' -print); \
-    test "${#xmss_sources[@]}" -gt 0; \
-    for xmss_source in "${xmss_sources[@]}"; do \
-        checkout_dir="${xmss_source%/*/crates/rec_aggregation/zkdsl_implem/xmss_aggregate.py}"; \
-        cp -a "${checkout_dir}" /opt/lantern/share/cargo-git-checkouts/; \
-    done
-
 FROM ubuntu:22.04
 
 ARG GIT_COMMIT=unknown
@@ -164,8 +152,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=apt-cache-${TARGE
     fi
 
 COPY --from=builder /opt/lantern /opt/lantern
-RUN mkdir -p /root/.cargo/git/checkouts
-COPY --from=builder /opt/lantern/share/cargo-git-checkouts/ /root/.cargo/git/checkouts/
 COPY docker/entrypoint.sh /usr/local/bin/lantern-entrypoint.sh
 RUN chmod +x /usr/local/bin/lantern-entrypoint.sh
 
