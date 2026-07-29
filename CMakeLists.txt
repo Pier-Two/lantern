@@ -120,7 +120,10 @@ endif()
 add_custom_target(fixtures
     COMMAND "${CMAKE_COMMAND}" -E chdir "${LANTERN_FIXTURE_GENERATOR_DIR}" "${LANTERN_UV_EXECUTABLE}" python install 3.12
     COMMAND "${CMAKE_COMMAND}" -E chdir "${LANTERN_FIXTURE_GENERATOR_DIR}" "${LANTERN_UV_EXECUTABLE}" sync
-    COMMAND "${CMAKE_COMMAND}" -E chdir "${LANTERN_FIXTURE_GENERATOR_DIR}" "${LANTERN_UV_EXECUTABLE}" run fill --fork=Lstar --clean -n auto
+    # The pinned leanSpec revision still models the pre-leanVM-main XMSS
+    # containers. Generate only scheme-independent networking vectors until
+    # leanSpec publishes matching 32-byte public-key and 1208-byte signature types.
+    COMMAND "${CMAKE_COMMAND}" -E chdir "${LANTERN_FIXTURE_GENERATOR_DIR}" "${LANTERN_UV_EXECUTABLE}" run fill --fork=Lstar --clean -n auto tests/consensus/lstar/networking
     USES_TERMINAL
     COMMENT "Generating leanSpec consensus fixtures"
     VERBATIM

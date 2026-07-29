@@ -83,7 +83,7 @@ static int generate_test_keypair(
     }
     *out_pub = NULL;
     *out_secret = NULL;
-    enum PQSigningError err = pq_key_gen(0, 4u, out_pub, out_secret);
+    enum PQSigningError err = pq_key_gen(0, 64u, out_pub, out_secret);
     if (err != Success || !*out_pub || !*out_secret) {
         if (*out_pub) {
             pq_public_key_free(*out_pub);

@@ -119,28 +119,28 @@ int main(void) {
     }
     if (expect_pubkey_hex(
             artifacts.chain_config.validators[0].attestation_pubkey,
-            "0x11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111")
+            "0x1111111111111111111111111111111111111111111111111111111111111111")
         != 0) {
         fprintf(stderr, "unexpected first attestation pubkey\n");
         goto cleanup;
     }
     if (expect_pubkey_hex(
             artifacts.chain_config.validators[0].proposal_pubkey,
-            "0x81818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181")
+            "0x8181818181818181818181818181818181818181818181818181818181818181")
         != 0) {
         fprintf(stderr, "unexpected first proposal pubkey\n");
         goto cleanup;
     }
     if (expect_pubkey_hex(
             artifacts.chain_config.validators[6].attestation_pubkey,
-            "0x17171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717")
+            "0x1717171717171717171717171717171717171717171717171717171717171717")
         != 0) {
         fprintf(stderr, "unexpected last attestation pubkey\n");
         goto cleanup;
     }
     if (expect_pubkey_hex(
             artifacts.chain_config.validators[6].proposal_pubkey,
-            "0x87878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787")
+            "0x8787878787878787878787878787878787878787878787878787878787878787")
         != 0) {
         fprintf(stderr, "unexpected last proposal pubkey\n");
         goto cleanup;
@@ -186,14 +186,14 @@ int main(void) {
         generated_state.validator_count * sizeof(*generated_state.validators));
     if (expect_pubkey_hex(
             generated_state.validators[0].attestation_pubkey,
-            "0x11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111")
+            "0x1111111111111111111111111111111111111111111111111111111111111111")
         != 0) {
         fprintf(stderr, "generated state attestation pubkey mismatch\n");
         goto cleanup;
     }
     if (expect_pubkey_hex(
             generated_state.validators[0].proposal_pubkey,
-            "0x81818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181")
+            "0x8181818181818181818181818181818181818181818181818181818181818181")
         != 0) {
         fprintf(stderr, "generated state proposal pubkey mismatch\n");
         goto cleanup;

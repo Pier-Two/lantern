@@ -244,7 +244,7 @@ int client_test_load_precomputed_keypair(
     int pk_written = snprintf(
         pk_path,
         sizeof(pk_path),
-        "%s/genesis/xmss-keys/validator_%zu_pk.json",
+        "%s/genesis/xmss-keys/validator_%zu_pk.ssz",
         LANTERN_TEST_FIXTURE_DIR,
         validator_index);
     if (pk_written <= 0 || (size_t)pk_written >= sizeof(pk_path)) {
@@ -253,7 +253,7 @@ int client_test_load_precomputed_keypair(
     int sk_written = snprintf(
         sk_path,
         sizeof(sk_path),
-        "%s/genesis/xmss-keys/validator_%zu_sk.json",
+        "%s/genesis/xmss-keys/validator_%zu_sk.ssz",
         LANTERN_TEST_FIXTURE_DIR,
         validator_index);
     if (sk_written <= 0 || (size_t)sk_written >= sizeof(sk_path)) {
