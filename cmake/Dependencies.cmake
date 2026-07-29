@@ -197,7 +197,7 @@ function(_lantern_define_c_leanvm_xmss_variant target_name source_dir cargo_targ
     if(C_XMSS_TEST_CONFIG)
         set_target_properties(${target_name}
             PROPERTIES
-        INTERFACE_COMPILE_DEFINITIONS "LANTERN_SIGNATURE_SIZE=424;LANTERN_AGGREGATED_SIGNATURE_PROOF_INVERSE_PROOF_SIZE=1"
+        INTERFACE_COMPILE_DEFINITIONS "LANTERN_AGGREGATED_SIGNATURE_PROOF_INVERSE_PROOF_SIZE=1"
         )
     endif()
 

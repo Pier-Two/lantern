@@ -2,7 +2,7 @@
  * @file xmss.c
  * @brief XMSS key loading helpers
  *
- * Provides helpers to load post-quantum XMSS keys from JSON or SSZ
+ * Provides helpers to load post-quantum XMSS keys from JSON or binary
  * data sources.
  */
 
@@ -201,9 +201,9 @@ static bool is_json_file(const char *path)
  * ============================================================================ */
 
 /**
- * Load a secret key from SSZ-encoded bytes.
+ * Load a secret key from postcard-encoded bytes.
  *
- * @param data     Input buffer containing SSZ-encoded secret key bytes
+ * @param data     Input buffer containing postcard-encoded secret key bytes
  * @param length   Length of the input buffer in bytes
  * @param out_key  Output secret key handle (allocated by the PQ library)
  *
@@ -273,7 +273,7 @@ int lantern_xmss_load_public_bytes(
 
 
 /**
- * Load a secret key from a JSON or SSZ file.
+ * Load a secret key from a JSON or postcard file.
  *
  * @param path     File path to read
  * @param out_key  Output secret key handle (allocated by the PQ library)

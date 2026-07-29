@@ -514,11 +514,11 @@ static enum lantern_vote_record_status lantern_client_record_vote_internal(
  *
  * @spec subspecs/xmss/signature.py - XMSS signature verification
  *
- * Retrieves the validator's 52-byte public key from the supplied state's
+ * Retrieves the validator's public key from the supplied state's
  * validator registry, then verifies the XMSS signature over the vote's
  * hash tree root.
  *
- * Per LeanSpec: Always use the 52-byte pubkey directly from state.validators[].pubkey.
+ * Always use the pubkey directly from state.validators[].pubkey.
  * This matches Zeam's verifyBincode which takes pubkey bytes directly from state.
  *
  * @param client     Client instance

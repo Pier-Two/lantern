@@ -15,7 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const size_t kTestActiveEpochs = 4;
+static const size_t kTestActiveEpochs = 16;
 
 static void fill_root(LanternRoot *root, uint8_t seed) {
     assert(root);
