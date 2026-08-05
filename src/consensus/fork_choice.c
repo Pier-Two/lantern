@@ -130,14 +130,26 @@ static const LanternState *state_for_block_index(
     return entry->state.validator_count > 0u ? &entry->state : NULL;
 }
 
-static size_t fork_choice_validator_count(const LanternStore *store) {
-    size_t anchor_index = 0u;
+static int fork_choice_validator_count(const LanternStore *store, size_t *out_count) {
+    size_t head_index = 0u;
     if (!store || store->block_len == 0u
-        || !find_block_index(store, &store->anchor.root, &anchor_index)) {
-        return 0u;
+        || !out_count
+        || !find_block_index(store, &store->head, &head_index)) {
+        return -1;
     }
-    const LanternState *state = state_for_block_index(store, anchor_index);
-    return state ? state->validator_count : 0u;
+    const LanternState *state = state_for_block_index(store, head_index);
+
+    if (!state) {
+        size_t anchor_index = 0u;
+        if (find_block_index(store, &store->anchor.root, &anchor_index)) {
+            state = state_for_block_index(store, anchor_index);
+        }
+    }
+    if (!state) {
+        return -1;
+    }
+    *out_count = state->validator_count;
+    return 0;
 }
 
 static bool block_descends_from(
@@ -499,6 +511,14 @@ int lantern_fork_choice_add_block_with_state(
     }
 
     size_t previous_block_len = store->block_len;
+    LanternState staged_state;
+    LanternState previous_state;
+    lantern_state_init(&staged_state);
+    lantern_state_init(&previous_state);
+    if (post_state && lantern_state_clone(post_state, &staged_state) != 0) {
+        lantern_state_reset(&staged_state);
+        return -1;
+    }
 
     if (register_block(
             store,
@@ -507,9 +527,16 @@ int lantern_fork_choice_add_block_with_state(
             block->slot,
             block->proposer_index)
         != 0) {
+        lantern_state_reset(&staged_state);
         return -1;
     }
-    /* State-backed imports re-derive finalized from the selected head after head recompute. */
+    size_t block_index = existed ? existing_index : previous_block_len;
+    if (post_state) {
+        previous_state = store->blocks[block_index].state;
+        store->blocks[block_index].state = staged_state;
+        lantern_state_init(&staged_state);
+    }
+
     const LanternCheckpoint *effective_post_finalized = post_state ? NULL : post_finalized;
     if (update_latest_checkpoints(store, post_justified, effective_post_finalized, false) != 0) {
         goto rollback;
@@ -518,12 +545,7 @@ int lantern_fork_choice_add_block_with_state(
     if (lantern_fork_choice_recompute_head(store) != 0) {
         goto rollback;
     }
-    if (post_state && lantern_fork_choice_set_block_state(store, &block_root, post_state) != 0) {
-        goto rollback;
-    }
-    if (post_state) {
-        (void)refresh_finalized_from_head_state(store);
-    }
+    lantern_state_reset(&previous_state);
     lean_metrics_record_fork_choice_block_time(lantern_time_now_seconds() - metrics_start);
     fork_choice_publish_current_checkpoints(store);
     return 0;
@@ -533,12 +555,20 @@ rollback:
     store->latest_finalized = previous_latest_finalized;
     store->head = previous_head;
 
+    if (post_state) {
+        lantern_state_reset(&store->blocks[block_index].state);
+        store->blocks[block_index].state = previous_state;
+        lantern_state_init(&previous_state);
+    }
+
     if (existed) {
         store->blocks[existing_index] = previous_entry;
     } else {
         store->block_len = previous_block_len;
     }
 
+    lantern_state_reset(&staged_state);
+    lantern_state_reset(&previous_state);
     return -1;
 }
 
@@ -616,7 +646,6 @@ int lantern_fork_choice_prune_states(LanternStore *store) {
     if (head_index >= store->block_len || finalized_index >= store->block_len) {
         return -1;
     }
-
     uint8_t *canonical = calloc(store->block_len, sizeof(*canonical));
     if (!canonical) {
         return -1;
@@ -651,13 +680,21 @@ int lantern_fork_choice_prune_states(LanternStore *store) {
         free(old_to_new);
         return -1;
     }
+    size_t blocks_kept = 0;
     for (size_t i = 0; i < store->block_len; ++i) {
         old_to_new[i] = SIZE_MAX;
         if (block_descends_from(store, i, finalized_index)) {
             keep_block[i] = 1u;
+            old_to_new[i] = blocks_kept++;
         }
     }
     if (!keep_block[head_index]) {
+        free(canonical);
+        free(keep_block);
+        free(old_to_new);
+        return -1;
+    }
+    if (blocks_kept < store->block_len && !state_for_block_index(store, finalized_index)) {
         free(canonical);
         free(keep_block);
         free(old_to_new);
@@ -676,13 +713,6 @@ int lantern_fork_choice_prune_states(LanternStore *store) {
             continue;
         }
         lantern_state_reset(&entry->state);
-    }
-
-    size_t blocks_kept = 0;
-    for (size_t i = 0; i < store->block_len; ++i) {
-        if (keep_block[i]) {
-            old_to_new[i] = blocks_kept++;
-        }
     }
 
     if (blocks_kept < store->block_len) {
@@ -771,7 +801,7 @@ static int lmd_ghost_compute(
     size_t vote_count,
     uint64_t min_score,
     LanternRoot *out_head) {
-    if (!store || !votes || !out_head) {
+    if (!store || (!votes && vote_count > 0u) || !out_head) {
         return -1;
     }
     if (store->block_len == 0) {
@@ -925,7 +955,10 @@ static int collect_payload_pool_votes(
     }
     *out_votes = NULL;
     *out_vote_count = 0;
-    size_t vote_count = fork_choice_validator_count(store);
+    size_t vote_count = 0u;
+    if (fork_choice_validator_count(store, &vote_count) != 0) {
+        return -1;
+    }
     LanternCheckpoint *votes = NULL;
     uint64_t *latest_slots = NULL;
     if (vote_count > 0) {
@@ -1106,7 +1139,11 @@ int lantern_fork_choice_update_safe_target(LanternStore *store) {
     if (!store || store->block_len == 0u) {
         return -1;
     }
-    uint64_t threshold = lantern_consensus_quorum_threshold(fork_choice_validator_count(store));
+    size_t validator_count = 0u;
+    if (fork_choice_validator_count(store, &validator_count) != 0) {
+        return -1;
+    }
+    uint64_t threshold = lantern_consensus_quorum_threshold(validator_count);
     LanternCheckpoint *safe_votes = NULL;
     size_t safe_vote_count = 0;
     if (collect_payload_pool_votes(
@@ -1316,7 +1353,13 @@ int lantern_fork_choice_snapshot_tree(
     out_snapshot->justified = store->latest_justified;
     out_snapshot->finalized = store->latest_finalized;
     out_snapshot->safe_target = store->safe_target;
-    out_snapshot->validator_count = (uint64_t)fork_choice_validator_count(store);
+    size_t validator_count = 0u;
+    if (fork_choice_validator_count(store, &validator_count) != 0) {
+        lantern_fork_choice_tree_snapshot_reset(out_snapshot);
+        free(weights);
+        return -1;
+    }
+    out_snapshot->validator_count = (uint64_t)validator_count;
 
     free(weights);
     return 0;

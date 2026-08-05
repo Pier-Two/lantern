@@ -1287,6 +1287,16 @@ static void prune_finalized_fork_choice_states_if_advanced_locked(
         return;
     }
 
+    if (!lantern_client_state_for_root_locked(client, &current_finalized->root))
+    {
+        lantern_log_warn(
+            "forkchoice",
+            meta,
+            "failed to restore finalized state before pruning finalized_slot=%" PRIu64,
+            current_finalized->slot);
+        return;
+    }
+
     if (lantern_fork_choice_prune_states(&client->store) != 0)
     {
         lantern_log_warn(
