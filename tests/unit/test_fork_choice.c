@@ -792,6 +792,115 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
     return 0;
 }
 
+static int test_evicted_side_branch_can_become_finalized_anchor(void) {
+    LanternStore store;
+    lantern_store_init(&store);
+
+    LanternBlock genesis;
+    init_block(&genesis, 0, 0, NULL, 0x68);
+    LanternRoot genesis_root;
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
+    LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
+
+    LanternState genesis_state;
+    lantern_state_init(&genesis_state);
+    assert(lantern_state_generate_genesis(&genesis_state, 92u, 3u) == 0);
+    genesis_state.latest_justified = genesis_cp;
+    genesis_state.latest_finalized = genesis_cp;
+    assert(
+        lantern_fork_choice_set_anchor_with_state(
+            &store,
+            &genesis,
+            &genesis_cp,
+            &genesis_cp,
+            &genesis_root,
+            &genesis_state)
+        == 0);
+
+    struct cached_test_block canonical = {0};
+    struct cached_test_block side_finalized = {0};
+    struct cached_test_block side_head = {0};
+    struct cached_test_block next = {0};
+    add_cached_test_block(
+        &store,
+        &canonical,
+        &genesis_state,
+        1u,
+        0u,
+        &genesis_root,
+        0x69,
+        &genesis_cp,
+        &genesis_cp,
+        0x70);
+    add_cached_test_block(
+        &store,
+        &side_finalized,
+        &genesis_state,
+        2u,
+        1u,
+        &genesis_root,
+        0x6A,
+        &genesis_cp,
+        &genesis_cp,
+        0x80);
+    add_cached_test_block(
+        &store,
+        &side_head,
+        &side_finalized.state,
+        3u,
+        2u,
+        &side_finalized.root,
+        0x6B,
+        &genesis_cp,
+        &genesis_cp,
+        0x90);
+
+    store.head = canonical.root;
+    store.latest_justified = genesis_cp;
+    store.latest_finalized = genesis_cp;
+    assert(lantern_fork_choice_prune_states(&store) == 0);
+    assert(lantern_fork_choice_block_state(&store, &side_finalized.root) == NULL);
+    assert(lantern_fork_choice_block_state(&store, &side_head.root) == NULL);
+
+    store.head = side_head.root;
+    store.latest_justified = side_finalized.checkpoint;
+    store.latest_finalized = side_finalized.checkpoint;
+    assert(lantern_fork_choice_set_block_state(&store, &side_head.root, &side_head.state) == 0);
+    assert(lantern_fork_choice_prune_states(&store) != 0);
+    assert(roots_equal(&store.anchor.root, &genesis_root));
+
+    assert(
+        lantern_fork_choice_set_block_state(
+            &store,
+            &side_finalized.root,
+            &side_finalized.state)
+        == 0);
+    assert(lantern_fork_choice_prune_states(&store) == 0);
+    assert(roots_equal(&store.anchor.root, &side_finalized.root));
+
+    add_cached_test_block(
+        &store,
+        &next,
+        &side_head.state,
+        4u,
+        0u,
+        &side_head.root,
+        0x6C,
+        &side_finalized.checkpoint,
+        &side_finalized.checkpoint,
+        0xA0);
+    assert(roots_equal(&store.head, &next.root));
+
+    cached_test_block_reset(&next);
+    cached_test_block_reset(&side_head);
+    cached_test_block_reset(&side_finalized);
+    cached_test_block_reset(&canonical);
+    lantern_state_reset(&genesis_state);
+    lantern_store_reset(&store);
+    reset_block(&genesis);
+    return 0;
+}
+
 static int test_fork_choice_finalized_tracks_selected_head_state(void) {
     LanternStore store;
 
@@ -1816,6 +1925,9 @@ int main(void) {
         return 1;
     }
     if (test_fork_choice_prune_states_keeps_finalized_to_head_chain() != 0) {
+        return 1;
+    }
+    if (test_evicted_side_branch_can_become_finalized_anchor() != 0) {
         return 1;
     }
     if (test_fork_choice_finalized_tracks_selected_head_state() != 0) {
