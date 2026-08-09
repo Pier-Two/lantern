@@ -776,8 +776,8 @@ lantern_client_error lantern_client_options_add_bootnodes_argument(
 static void client_reset_base(struct lantern_client *client)
 {
     memset(client, 0, sizeof(*client));
-    double now_seconds = lantern_time_now_seconds();
-    client->start_time_seconds = now_seconds > 0.0 ? (uint64_t)now_seconds : 0u;
+    time_t now_seconds = time(NULL);
+    client->start_time_seconds = now_seconds > 0 ? (uint64_t)now_seconds : 0u;
     lantern_metrics_server_init(&client->metrics_server);
     lantern_http_server_init(&client->http_server);
     lantern_store_init(&client->store);
