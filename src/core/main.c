@@ -43,6 +43,7 @@ enum {
     OPT_XMSS_SECRET_PATH,
     OPT_XMSS_SECRET_TEMPLATE,
     OPT_IS_AGGREGATOR,
+    OPT_PROVER_ARENA,
     OPT_ATTESTATION_COMMITTEE_COUNT,
     OPT_AGGREGATE_SUBNET_IDS,
     OPT_SHADOW_XMSS_AGGREGATE_SIGNATURES_RATE,
@@ -80,6 +81,7 @@ static const struct option OPTIONS[] = {
     {"xmss-secret", required_argument, NULL, OPT_XMSS_SECRET_PATH},
     {"xmss-secret-template", required_argument, NULL, OPT_XMSS_SECRET_TEMPLATE},
     {"is-aggregator", no_argument, NULL, OPT_IS_AGGREGATOR},
+    {"prover-arena", no_argument, NULL, OPT_PROVER_ARENA},
     {"attestation-committee-count", required_argument, NULL, OPT_ATTESTATION_COMMITTEE_COUNT},
     {"aggregate-subnet-ids", required_argument, NULL, OPT_AGGREGATE_SUBNET_IDS},
     {"shadow-xmss-aggregate-signatures-rate", required_argument, NULL, OPT_SHADOW_XMSS_AGGREGATE_SIGNATURES_RATE},
@@ -328,6 +330,9 @@ static lantern_client_error apply_option(
     case OPT_IS_AGGREGATOR:
         options->is_aggregator = true;
         return LANTERN_CLIENT_OK;
+    case OPT_PROVER_ARENA:
+        options->prover_arena = true;
+        return LANTERN_CLIENT_OK;
     case OPT_ATTESTATION_COMMITTEE_COUNT:
         if (parse_unsigned(argument, SIZE_MAX, false, &number) != 0)
         {
@@ -423,6 +428,7 @@ static void print_usage(const char *program)
         "  --devnet NAME                Gossip topic devnet identifier\n"
         "  --attestation-committee-count N  Override committee count\n"
         "  --is-aggregator              Enable aggregation\n"
+        "  --prover-arena               Use faster, high-memory leanVM proving\n"
         "  --aggregate-subnet-ids IDS   Comma-separated imported subnets");
     lantern_log_info(
         "main",
