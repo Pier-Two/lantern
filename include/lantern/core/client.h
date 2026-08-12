@@ -78,6 +78,7 @@ struct lantern_client_options {
     const char *xmss_secret_template;
     uint64_t attestation_committee_count_override;
     bool is_aggregator;
+    bool prover_arena;
     size_t *aggregate_subnet_ids;
     size_t aggregate_subnet_id_count;
     size_t aggregate_subnet_id_capacity;

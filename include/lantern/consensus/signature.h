@@ -26,6 +26,7 @@ typedef enum {
 bool lantern_signature_is_zero(const LanternSignature *signature);
 void lantern_signature_zero(LanternSignature *signature);
 void lantern_signature_prewarm_prover(void);
+void lantern_signature_configure_prover(bool use_arena);
 void lantern_signature_configure_shadow_costs(
     const double rates[LANTERN_SHADOW_OPERATION_COUNT],
     uint8_t configured_rates);

@@ -101,9 +101,18 @@ struct lantern_recursive_child_input {
 
 static pthread_once_t g_xmss_verifier_setup_once = PTHREAD_ONCE_INIT;
 static pthread_once_t g_xmss_prover_setup_once = PTHREAD_ONCE_INIT;
+static bool g_xmss_prover_arena = false;
+
+void lantern_signature_configure_prover(bool use_arena) {
+    g_xmss_prover_arena = use_arena;
+}
 
 static void xmss_prover_setup_once(void) {
-    pq_xmss_aggregation_setup_prover();
+    if (g_xmss_prover_arena) {
+        pq_xmss_aggregation_setup_prover();
+    } else {
+        pq_xmss_aggregation_setup_prover_without_arena();
+    }
 }
 
 static void xmss_verifier_setup_once(void) {

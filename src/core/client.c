@@ -2337,6 +2337,7 @@ lantern_client_error lantern_init(
     lantern_signature_configure_shadow_costs(
         options->shadow_xmss_rates,
         options->shadow_xmss_rates_set);
+    lantern_signature_configure_prover(options->prover_arena);
 
     client_reset_base(client);
 
