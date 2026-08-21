@@ -125,7 +125,7 @@ struct lantern_active_blocks_request {
 };
 
 struct lantern_range_sync_state {
-    uint64_t next_request_slot;  /**< First slot not authoritatively covered. */
+    uint64_t next_request_slot;  /**< Slot immediately after the imported head. */
     uint64_t imported_head_slot; /**< Latest connected local head. */
     uint64_t target_slot;
     uint64_t request_id;
@@ -133,7 +133,6 @@ struct lantern_range_sync_state {
     uint64_t request_count;
     char request_peer[128];
     struct lantern_string_list failed_peers;
-    bool request_peer_claimed_range;
     bool peers_exhausted;
 };
 
