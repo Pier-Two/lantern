@@ -545,6 +545,7 @@ static void test_pre_open_blocks_timeout_completes_failure_once(void) {
 
     libp2p_host_event_t event = {
         .type = LIBP2P_HOST_EVENT_STREAM_OPEN_FAILED,
+        .stream_open = &open,
         .user_data = exchange,
         .reason = LIBP2P_HOST_ERR_CLOSED,
     };
@@ -658,6 +659,10 @@ static void test_blocks_by_range_closed_read_completes_success(void) {
     service.callbacks.context = &test_context;
     service.callbacks.handle_block_response = test_handle_block_response;
     service.callbacks.blocks_request_complete = test_blocks_request_complete;
+    struct lantern_reqresp_protocol_context protocol_ctx = {
+        .service = &service,
+        .kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE,
+    };
 
     struct lantern_reqresp_exchange *exchange = calloc(1u, sizeof(*exchange));
     CHECK(exchange != NULL);
@@ -701,7 +706,7 @@ static void test_blocks_by_range_closed_read_completes_success(void) {
             &host,
             &stream,
             LIBP2P_HOST_PROTOCOL_EVENT_READABLE,
-            NULL)
+            &protocol_ctx)
         == LIBP2P_HOST_OK);
     CHECK(test_context.handled_count == 1u);
     CHECK(test_context.complete_called == 1);
@@ -720,6 +725,10 @@ static void test_blocks_by_range_reset_then_closed_completes_once(void) {
     memset(&service, 0, sizeof(service));
     service.callbacks.context = &test_context;
     service.callbacks.blocks_request_complete = test_blocks_request_complete;
+    struct lantern_reqresp_protocol_context protocol_ctx = {
+        .service = &service,
+        .kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE,
+    };
 
     struct lantern_reqresp_exchange *exchange = calloc(1u, sizeof(*exchange));
     CHECK(exchange != NULL);
@@ -742,7 +751,7 @@ static void test_blocks_by_range_reset_then_closed_completes_once(void) {
             &host,
             &stream,
             LIBP2P_HOST_PROTOCOL_EVENT_RESET,
-            NULL)
+            &protocol_ctx)
         == LIBP2P_HOST_OK);
     CHECK(test_context.complete_called == 1);
     CHECK(test_context.complete_result == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED);
@@ -755,10 +764,91 @@ static void test_blocks_by_range_reset_then_closed_completes_once(void) {
             &host,
             &stream,
             LIBP2P_HOST_PROTOCOL_EVENT_CLOSED,
-            NULL)
+            &protocol_ctx)
         == LIBP2P_HOST_OK);
     CHECK(test_context.complete_called == 1);
     CHECK(transport.reset_called == 1u);
+}
+
+static void test_stale_stream_exchange_is_ignored(void) {
+    struct lantern_reqresp_service service = {0};
+    struct lantern_reqresp_protocol_context protocol_ctx = {
+        .service = &service,
+        .kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE,
+    };
+    struct lantern_reqresp_exchange stale_exchange = {
+        .service = (struct lantern_reqresp_service *)(uintptr_t)0xd0u,
+    };
+    struct test_transport transport = {0};
+    libp2p_host_t host;
+    libp2p_host_stream_t stream;
+    init_test_host_stream(&host, &stream, &transport);
+    stream.user_data = &stale_exchange;
+
+    CHECK(
+        reqresp_on_event(
+            &host,
+            &stream,
+            LIBP2P_HOST_PROTOCOL_EVENT_CLOSED,
+            &protocol_ctx)
+        == LIBP2P_HOST_OK);
+    CHECK(stream.user_data == NULL);
+}
+
+static void test_stale_open_failure_is_ignored(void) {
+    struct lantern_reqresp_service service = {0};
+    libp2p_host_stream_open_t current_open = {0};
+    libp2p_host_stream_open_t stale_open = {0};
+    struct lantern_reqresp_exchange exchange = {
+        .service = &service,
+        .open = &current_open,
+    };
+    service.exchanges = &exchange;
+    libp2p_host_event_t event = {
+        .type = LIBP2P_HOST_EVENT_STREAM_OPEN_FAILED,
+        .stream_open = &stale_open,
+        .user_data = &exchange,
+    };
+
+    reqresp_host_event(NULL, &event, &service);
+    CHECK(service.exchanges == &exchange);
+}
+
+static void test_outbound_exchange_is_queued_for_drive_thread(void) {
+    libp2p_host_t host = {0};
+    struct lantern_libp2p_host network = {
+        .host = &host,
+    };
+    struct lantern_reqresp_service service = {
+        .network = &network,
+    };
+    struct lantern_peer_id peer_id = {
+        .bytes = {0x01u, 0x02u},
+        .len = 2u,
+    };
+    uint8_t *frame = malloc(1u);
+    CHECK(frame != NULL);
+    frame[0] = 0u;
+
+    CHECK(
+        service_open_exchange(
+            &service,
+            &peer_id,
+            "peer",
+            LANTERN_REQRESP_PROTOCOL_STATUS,
+            frame,
+            1u,
+            NULL,
+            0u,
+            0u,
+            NULL)
+        == 0);
+    CHECK(service.exchanges != NULL);
+    CHECK(service.exchanges->dispatch_pending == 1);
+    CHECK(service.exchanges->conn == NULL);
+    CHECK(service.exchanges->open == NULL);
+    CHECK(lantern_peer_id_equal(&service.exchanges->peer_id, &peer_id));
+    service_clear_exchanges(&service);
 }
 
 static void test_cancelled_range_does_not_timeout_or_complete(void) {
@@ -1060,6 +1150,9 @@ int main(void) {
     test_blocks_by_range_timeout_distinguishes_received_data();
     test_blocks_by_range_closed_read_completes_success();
     test_blocks_by_range_reset_then_closed_completes_once();
+    test_stale_stream_exchange_is_ignored();
+    test_stale_open_failure_is_ignored();
+    test_outbound_exchange_is_queued_for_drive_thread();
     test_cancelled_range_does_not_timeout_or_complete();
     test_blocks_by_range_accepts_sparse_and_reports_clean_empty();
     test_blocks_by_range_rejects_slot_below_start();

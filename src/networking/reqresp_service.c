@@ -28,6 +28,7 @@ struct lantern_reqresp_exchange {
     struct lantern_reqresp_service *service;
     enum lantern_reqresp_protocol_kind kind;
     int outbound;
+    struct lantern_peer_id peer_id;
     libp2p_host_conn_t *conn;
     libp2p_host_t *host;
     libp2p_host_stream_t *stream;
@@ -50,6 +51,7 @@ struct lantern_reqresp_exchange {
     uint64_t total_read_bytes;
     int completed;
     int cancelled;
+    int dispatch_pending;
     int request_complete;
     struct lantern_reqresp_exchange *next;
 };
@@ -175,6 +177,30 @@ static int service_remove_exchange(struct lantern_reqresp_service *service, stru
         pthread_mutex_unlock(&service->lock);
     }
     return removed;
+}
+
+static int service_has_exchange(
+    struct lantern_reqresp_service *service,
+    const struct lantern_reqresp_exchange *exchange) {
+    if (!service || !exchange) {
+        return 0;
+    }
+    int found = 0;
+    if (service->lock_initialized) {
+        pthread_mutex_lock(&service->lock);
+    }
+    for (const struct lantern_reqresp_exchange *cursor = service->exchanges;
+         cursor;
+         cursor = cursor->next) {
+        if (cursor == exchange) {
+            found = 1;
+            break;
+        }
+    }
+    if (service->lock_initialized) {
+        pthread_mutex_unlock(&service->lock);
+    }
+    return found;
 }
 
 static void service_clear_exchanges(struct lantern_reqresp_service *service) {
@@ -468,7 +494,7 @@ static struct lantern_reqresp_exchange *service_take_opening_exchange(
         pthread_mutex_lock(&service->lock);
     }
     for (struct lantern_reqresp_exchange *exchange = service->exchanges; exchange; exchange = exchange->next) {
-        if (exchange->outbound && exchange->kind == kind && !exchange->stream
+        if (exchange->outbound && exchange->kind == kind && exchange->open && !exchange->stream
             && (!conn || exchange->conn == conn)) {
             result = exchange;
             break;
@@ -920,6 +946,77 @@ static void exchange_handle_outbound_closed(struct lantern_reqresp_exchange *exc
     exchange_fail(exchange, LANTERN_REQRESP_ERR_STREAM_READ);
 }
 
+static struct lantern_reqresp_exchange *service_claim_pending_exchange(
+    struct lantern_reqresp_service *service) {
+    if (!service) {
+        return NULL;
+    }
+    if (service->lock_initialized) {
+        pthread_mutex_lock(&service->lock);
+    }
+    struct lantern_reqresp_exchange *pending = NULL;
+    for (struct lantern_reqresp_exchange *exchange = service->exchanges;
+         exchange;
+         exchange = exchange->next) {
+        if (!exchange->dispatch_pending || exchange->completed) {
+            continue;
+        }
+        bool peer_is_opening = false;
+        for (const struct lantern_reqresp_exchange *other = service->exchanges;
+             other;
+             other = other->next) {
+            if (other != exchange && other->open && !other->stream
+                && other->kind == exchange->kind
+                && lantern_peer_id_equal(&other->peer_id, &exchange->peer_id)) {
+                peer_is_opening = true;
+                break;
+            }
+        }
+        if (!peer_is_opening) {
+            pending = exchange;
+        }
+    }
+    if (pending) {
+        pending->dispatch_pending = 0;
+    }
+    if (service->lock_initialized) {
+        pthread_mutex_unlock(&service->lock);
+    }
+    return pending;
+}
+
+static void service_dispatch_exchange(
+    struct lantern_reqresp_service *service,
+    struct lantern_reqresp_exchange *exchange) {
+    if (!service || !exchange) {
+        return;
+    }
+    libp2p_host_conn_t *conn = service_find_conn(service, &exchange->peer_id);
+    if (!conn) {
+        service_remove_exchange(service, exchange);
+        exchange_fail(exchange, LANTERN_REQRESP_ERR_STREAM_WRITE);
+        exchange_free(exchange);
+        return;
+    }
+    exchange->conn = conn;
+    const char *protocol = kReqrespProtocolIds[exchange->kind];
+    libp2p_host_stream_open_t *open = NULL;
+    libp2p_host_err_t err = libp2p_host_open_stream(
+        exchange->host,
+        conn,
+        (const uint8_t *)protocol,
+        strlen(protocol),
+        exchange,
+        &open);
+    if (err != LIBP2P_HOST_OK) {
+        service_remove_exchange(service, exchange);
+        exchange_fail(exchange, (int)err);
+        exchange_free(exchange);
+        return;
+    }
+    exchange->open = open;
+}
+
 static struct lantern_reqresp_exchange *service_claim_timed_out_blocks_exchange(
     struct lantern_reqresp_service *service,
     libp2p_host_time_us_t now_us) {
@@ -963,7 +1060,7 @@ static struct lantern_reqresp_exchange *service_claim_cancelled_range_exchange(
         if (exchange->outbound
             && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE
             && exchange->cancelled
-            && (exchange->stream || exchange->open)) {
+            && (exchange->dispatch_pending || exchange->stream || exchange->open)) {
             exchange->cancelled = 0;
             cancelled = exchange;
             break;
@@ -1004,17 +1101,28 @@ static void reqresp_drive(
     struct lantern_reqresp_service *service = user_data;
     struct lantern_reqresp_exchange *exchange = NULL;
     while ((exchange = service_claim_cancelled_range_exchange(service)) != NULL) {
-        if (exchange_cancel_pending_open(exchange)) {
+        if (exchange->dispatch_pending) {
+            exchange->dispatch_pending = 0;
+            service_remove_exchange(service, exchange);
+            exchange_free(exchange);
+        } else if (exchange_cancel_pending_open(exchange)) {
             service_remove_exchange(service, exchange);
             exchange_free(exchange);
         } else {
             exchange_abort_stream(exchange);
         }
     }
+    exchange = service_claim_pending_exchange(service);
+    if (exchange) {
+        service_dispatch_exchange(service, exchange);
+    }
     while ((exchange = service_claim_timed_out_blocks_exchange(service, now_us)) != NULL) {
-        bool pending_open_cancelled = exchange_cancel_pending_open(exchange);
-        if (pending_open_cancelled) {
-            service_remove_exchange(service, exchange);
+        bool detached = false;
+        if (exchange->dispatch_pending) {
+            exchange->dispatch_pending = 0;
+            detached = service_remove_exchange(service, exchange) != 0;
+        } else if (exchange_cancel_pending_open(exchange)) {
+            detached = service_remove_exchange(service, exchange) != 0;
         }
         lantern_log_warn(
             "reqresp",
@@ -1033,7 +1141,7 @@ static void reqresp_drive(
         } else {
             exchange_fail(exchange, LANTERN_REQRESP_ERR_STREAM_READ);
         }
-        if (pending_open_cancelled) {
+        if (detached) {
             exchange_free(exchange);
         } else {
             exchange_abort_stream(exchange);
@@ -1284,14 +1392,23 @@ static libp2p_host_err_t reqresp_on_event(
     libp2p_host_stream_t *stream,
     libp2p_host_protocol_event_kind_t kind,
     void *protocol_user_data) {
-    (void)protocol_user_data;
+    struct lantern_reqresp_protocol_context *protocol_ctx =
+        (struct lantern_reqresp_protocol_context *)protocol_user_data;
+    struct lantern_reqresp_service *service = protocol_ctx ? protocol_ctx->service : NULL;
     void *user_data = NULL;
     if (!host || !stream || libp2p_host_stream_user_data(stream, &user_data) != LIBP2P_HOST_OK || !user_data) {
         return LIBP2P_HOST_OK;
     }
     struct lantern_reqresp_exchange *exchange = (struct lantern_reqresp_exchange *)user_data;
+    if (!service_has_exchange(service, exchange) || exchange->stream != stream) {
+        (void)libp2p_host_stream_set_user_data(stream, NULL);
+        return LIBP2P_HOST_OK;
+    }
     if (kind == LIBP2P_HOST_PROTOCOL_EVENT_RESET || kind == LIBP2P_HOST_PROTOCOL_EVENT_CLOSED) {
         (void)libp2p_host_stream_set_user_data(stream, NULL);
+        if (!service_remove_exchange(service, exchange)) {
+            return LIBP2P_HOST_OK;
+        }
         if (kind == LIBP2P_HOST_PROTOCOL_EVENT_RESET) {
             (void)libp2p_host_stream_reset(host, stream, 0u);
         }
@@ -1300,7 +1417,6 @@ static libp2p_host_err_t reqresp_on_event(
                 exchange,
                 kind == LIBP2P_HOST_PROTOCOL_EVENT_RESET);
         }
-        service_remove_exchange(exchange->service, exchange);
         exchange_free(exchange);
         return LIBP2P_HOST_OK;
     }
@@ -1331,13 +1447,15 @@ static libp2p_host_err_t reqresp_on_event(
             (void)libp2p_host_stream_finish(host, stream);
         }
         if (exchange->outbound && fin) {
+            (void)libp2p_host_stream_set_user_data(stream, NULL);
+            if (!service_remove_exchange(service, exchange)) {
+                return LIBP2P_HOST_OK;
+            }
             if (!exchange->completed && exchange->read_buf.len != 0u) {
                 exchange_fail(exchange, LANTERN_REQRESP_ERR_INVALID_PAYLOAD);
             } else {
                 exchange_handle_outbound_closed(exchange, false);
             }
-            (void)libp2p_host_stream_set_user_data(stream, NULL);
-            service_remove_exchange(exchange->service, exchange);
             exchange_free(exchange);
         }
     }
@@ -1355,7 +1473,8 @@ static void reqresp_host_event(
     }
     if (event->type == LIBP2P_HOST_EVENT_STREAM_OPEN_FAILED && event->user_data) {
         struct lantern_reqresp_exchange *exchange = (struct lantern_reqresp_exchange *)event->user_data;
-        if (!service_remove_exchange(service, exchange)) {
+        if (!service_has_exchange(service, exchange) || exchange->open != event->stream_open
+            || !service_remove_exchange(service, exchange)) {
             return;
         }
         exchange_fail(exchange, (int)event->reason);
@@ -1459,18 +1578,15 @@ static int service_open_exchange(
     size_t root_count,
     uint64_t request_id,
     const LanternBlocksByRangeRequest *range_request) {
-    if (!service || !service->network || !service->network->host || !peer_id || !frame || frame_len == 0u
+    if (!service || !service->network || !service->network->host || !peer_id
+        || peer_id->len == 0u || peer_id->len > sizeof(peer_id->bytes)
+        || !frame || frame_len == 0u
         || (unsigned)kind >= LANTERN_REQRESP_PROTOCOL_KIND_COUNT
         || (kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE
             && (!range_request
                 || range_request->count == 0u
                 || range_request->start_slot > UINT64_MAX - range_request->count))
         || (kind != LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE && range_request)) {
-        free(frame);
-        return -1;
-    }
-    libp2p_host_conn_t *conn = service_find_conn(service, peer_id);
-    if (!conn) {
         free(frame);
         return -1;
     }
@@ -1482,7 +1598,7 @@ static int service_open_exchange(
     exchange->service = service;
     exchange->kind = kind;
     exchange->outbound = 1;
-    exchange->conn = conn;
+    exchange->peer_id = *peer_id;
     exchange->host = service->network->host;
     exchange->write_buf = frame;
     exchange->write_len = frame_len;
@@ -1516,22 +1632,8 @@ static int service_open_exchange(
         exchange->root_count = root_count;
     }
     exchange_refresh_blocks_deadline(exchange, lantern_libp2p_now_us());
+    exchange->dispatch_pending = 1;
     service_add_exchange(service, exchange);
-    const char *protocol = kReqrespProtocolIds[kind];
-    libp2p_host_stream_open_t *open = NULL;
-    libp2p_host_err_t err = libp2p_host_open_stream(
-        service->network->host,
-        conn,
-        (const uint8_t *)protocol,
-        strlen(protocol),
-        exchange,
-        &open);
-    if (err != LIBP2P_HOST_OK) {
-        service_remove_exchange(service, exchange);
-        exchange_free(exchange);
-        return -1;
-    }
-    exchange->open = open;
     return 0;
 }
 
