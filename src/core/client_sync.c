@@ -1558,12 +1558,11 @@ bool lantern_client_schedule_next_range_request(struct lantern_client *client)
         client,
         desired_end_slot,
         now_ms);
-    bool peer_claimed_range = peer != NULL;
     if (!peer)
     {
         peer = select_range_request_peer_locked(
             client,
-            0u,
+            range->next_request_slot,
             now_ms);
     }
     if (!peer)
@@ -1574,10 +1573,16 @@ bool lantern_client_schedule_next_range_request(struct lantern_client *client)
     }
     range->peers_exhausted = false;
 
+    uint64_t request_count = desired_count;
+    uint64_t peer_remaining = peer->status.head.slot - range->next_request_slot + 1u;
+    if (request_count > peer_remaining)
+    {
+        request_count = peer_remaining;
+    }
+
     range->request_id = next_blocks_request_id_locked(client);
     range->request_start_slot = range->next_request_slot;
-    range->request_count = desired_count;
-    range->request_peer_claimed_range = peer_claimed_range;
+    range->request_count = request_count;
     (void)lantern_string_copy(
         range->request_peer,
         sizeof(range->request_peer),
@@ -1597,12 +1602,11 @@ bool lantern_client_schedule_next_range_request(struct lantern_client *client)
             .peer = peer_text},
         "blocks_by_range scheduling request_id=%" PRIu64
         " start_slot=%" PRIu64 " count=%" PRIu64
-        " target_slot=%" PRIu64 " peer_claimed_range=%s",
+        " target_slot=%" PRIu64,
         request_id,
         start_slot,
-        desired_count,
-        target_slot,
-        peer_claimed_range ? "true" : "false");
+        request_count,
+        target_slot);
 
     struct lantern_peer_id peer_id;
     int schedule_rc = lantern_peer_id_from_text(peer_text, &peer_id) == 0
@@ -1611,7 +1615,7 @@ bool lantern_client_schedule_next_range_request(struct lantern_client *client)
               &peer_id,
               peer_text,
               start_slot,
-              desired_count,
+              request_count,
               request_id)
         : -1;
     if (schedule_rc == 0)
@@ -1694,14 +1698,12 @@ bool lantern_client_complete_range_request(
 
     uint64_t start_slot = range->request_start_slot;
     uint64_t count = range->request_count;
-    bool peer_claimed_range = range->request_peer_claimed_range;
     char peer_text[PEER_TEXT_BUFFER_LEN];
     (void)lantern_string_copy(peer_text, sizeof(peer_text), range->request_peer);
     range->request_id = 0u;
     range->request_start_slot = 0u;
     range->request_count = 0u;
     range->request_peer[0] = '\0';
-    range->request_peer_claimed_range = false;
 
     bool valid_range = count != 0u && start_slot <= UINT64_MAX - count;
     if (!valid_range)
@@ -1709,19 +1711,11 @@ bool lantern_client_complete_range_request(
         outcome = LANTERN_BLOCKS_REQUEST_FAILED;
     }
 
-    bool authoritative = valid_range
-        && (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS
-            || (outcome == LANTERN_BLOCKS_REQUEST_EMPTY
-                && peer_claimed_range));
+    bool made_progress = valid_range && range->next_request_slot > start_slot;
     range->peers_exhausted = false;
     bool can_continue = true;
-    if (authoritative)
+    if (made_progress)
     {
-        uint64_t next_request_slot = start_slot + count;
-        if (next_request_slot > range->next_request_slot)
-        {
-            range->next_request_slot = next_request_slot;
-        }
         lantern_string_list_reset(&range->failed_peers);
     }
     else
@@ -1733,16 +1727,12 @@ bool lantern_client_complete_range_request(
                 == 0;
     }
 
-    bool range_covered = range->next_request_slot > range->target_slot;
     bool imports_complete = range->imported_head_slot >= range->target_slot;
-    bool should_continue = !range_covered && can_continue;
-    if (range_covered)
+    bool should_continue = !imports_complete && can_continue;
+    if (imports_complete)
     {
         lantern_string_list_reset(&range->failed_peers);
-        if (imports_complete)
-        {
-            *range = (struct lantern_range_sync_state){0};
-        }
+        *range = (struct lantern_range_sync_state){0};
     }
     pthread_mutex_unlock(&client->status_lock);
 
@@ -1753,21 +1743,21 @@ bool lantern_client_complete_range_request(
             .peer = peer_text[0] ? peer_text : NULL},
         "blocks_by_range completed request_id=%" PRIu64
         " start_slot=%" PRIu64 " count=%" PRIu64
-        " outcome=%d authoritative=%s",
+        " outcome=%d progress=%s",
         request_id,
         start_slot,
         count,
         (int)outcome,
-        authoritative ? "true" : "false");
+        made_progress ? "true" : "false");
 
     if (should_continue)
     {
         (void)lantern_client_schedule_next_range_request(client);
     }
-    else if (range_covered)
+    else if (imports_complete)
     {
-        /* Covering the requested slots does not prove that every pending
-         * branch connected to the imported ancestry. */
+        /* Imported progress can complete while unrelated pending branches
+         * still need parent recovery. */
         lantern_client_request_pending_parent_after_blocks(
             client,
             peer_text[0] ? peer_text : NULL,

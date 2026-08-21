@@ -1728,20 +1728,27 @@ int reqresp_handle_block_response(
     {
         return LANTERN_CLIENT_OK;
     }
-    /* Range blocks are processed synchronously in response order before
-     * request coverage is evaluated. */
+    /* Range blocks must connect to the imported chain.  Stop the response at
+     * the first disconnected block so a partial or forked response cannot
+     * flood the pending queue or advance the range cursor. */
     if (range_response || !client->block_import_sync_initialized)
     {
         if (client->block_import_stop)
         {
             return LANTERN_CLIENT_ERR_RUNTIME;
         }
-        return import_block_response_now(
+        bool connected = false;
+        int rc = import_block_response_now(
             client,
             block,
             &block_root,
             peer_id,
-            NULL);
+            range_response ? &connected : NULL);
+        if (rc != LANTERN_CLIENT_OK || (range_response && !connected))
+        {
+            return LANTERN_CLIENT_ERR_RUNTIME;
+        }
+        return LANTERN_CLIENT_OK;
     }
 
     struct lantern_async_block_import_job *job = calloc(1u, sizeof(*job));
