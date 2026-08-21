@@ -656,12 +656,6 @@ void lantern_client_update_range_sync_target(
 /** Schedule the next batch for an already-discovered range target. */
 bool lantern_client_schedule_next_range_request(struct lantern_client *client);
 
-/** Advance an active range only after a response block joined known ancestry. */
-void lantern_client_note_range_import(
-    struct lantern_client *client,
-    uint64_t request_id,
-    uint64_t block_slot);
-
 /** Complete a tracked blocks-by-range request. */
 bool lantern_client_complete_range_request(
     struct lantern_client *client,

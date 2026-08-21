@@ -1081,7 +1081,7 @@ static int exchange_handle_outbound_block_frame(
         if (exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE) {
             exchange_complete_blocks_request(
                 exchange,
-                LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_EMPTY);
+                LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_RESOURCE_UNAVAILABLE);
         }
         return 0;
     }

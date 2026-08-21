@@ -948,7 +948,9 @@ static void test_blocks_by_range_resource_unavailable_is_not_clean_empty(void) {
         == 0);
     CHECK(exchange.completed == 1);
     CHECK(test_context.complete_called == 1);
-    CHECK(test_context.complete_result == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_EMPTY);
+    CHECK(
+        test_context.complete_result
+        == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_RESOURCE_UNAVAILABLE);
     exchange_handle_outbound_closed(&exchange, false);
     CHECK(test_context.complete_called == 1);
 }
