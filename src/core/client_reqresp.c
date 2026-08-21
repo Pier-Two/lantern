@@ -522,28 +522,33 @@ void lantern_client_update_sync_progress(
         return;
     }
 
-    bool range_completed = false;
+    bool imports_completed = false;
     bool schedule_next = false;
     struct lantern_range_sync_state *range = &client->range_sync;
     if (range->target_slot != 0u)
     {
+        if (local_slot > range->imported_head_slot)
+        {
+            range->imported_head_slot = local_slot;
+        }
         uint64_t local_next_slot = local_slot == UINT64_MAX
             ? UINT64_MAX
             : local_slot + 1u;
-        if (local_next_slot > range->next_slot)
+        if (local_next_slot > range->next_request_slot)
         {
-            range->next_slot = local_next_slot;
+            range->next_request_slot = local_next_slot;
             lantern_string_list_reset(&range->failed_peers);
             range->peers_exhausted = false;
         }
-        if (local_slot >= range->target_slot && range->request_id == 0u)
+        if (range->imported_head_slot >= range->target_slot
+            && range->request_id == 0u)
         {
-            range_completed = true;
+            imports_completed = true;
             lantern_string_list_reset(&range->failed_peers);
             *range = (struct lantern_range_sync_state){0};
         }
         else if (range->request_id == 0u
-            && range->next_slot <= range->target_slot)
+            && range->next_request_slot <= range->target_slot)
         {
             schedule_next = true;
         }
@@ -552,7 +557,7 @@ void lantern_client_update_sync_progress(
 
     pthread_mutex_unlock(&client->status_lock);
 
-    if (range_completed)
+    if (imports_completed)
     {
         lantern_client_request_pending_parent_after_blocks(client, NULL, NULL);
     }
@@ -664,8 +669,8 @@ static void lantern_client_peer_status_update(
 
     struct lantern_range_sync_state *range = &client->range_sync;
     if (range->peers_exhausted && range->request_id == 0u
-        && range->next_slot != 0u
-        && range->next_slot <= range->target_slot)
+        && range->next_request_slot != 0u
+        && range->next_request_slot <= range->target_slot)
     {
         if (lantern_string_list_remove(&range->failed_peers, peer_id_text))
         {
@@ -706,6 +711,8 @@ static const char *lantern_blocks_request_outcome_text(enum lantern_blocks_reque
         return "aborted";
     case LANTERN_BLOCKS_REQUEST_TIMED_OUT_WITH_DATA:
         return "timed_out_with_data";
+    case LANTERN_BLOCKS_REQUEST_RESOURCE_UNAVAILABLE:
+        return "resource_unavailable";
     default:
         return "unknown";
     }
@@ -1721,30 +1728,20 @@ int reqresp_handle_block_response(
     {
         return LANTERN_CLIENT_OK;
     }
-    /* Range blocks must be imported in response order.  Completing the
-     * request before asynchronous imports finish can advance the range cursor
-     * past blocks that were only queued because their parent was missing. */
+    /* Range blocks are processed synchronously in response order before
+     * request coverage is evaluated. */
     if (range_response || !client->block_import_sync_initialized)
     {
         if (client->block_import_stop)
         {
             return LANTERN_CLIENT_ERR_RUNTIME;
         }
-        bool connected = false;
-        int rc = import_block_response_now(
+        return import_block_response_now(
             client,
             block,
             &block_root,
             peer_id,
-            &connected);
-        if (range_response && connected)
-        {
-            lantern_client_note_range_import(
-                client,
-                request_id,
-                block->block.slot);
-        }
-        return rc;
+            NULL);
     }
 
     struct lantern_async_block_import_job *job = calloc(1u, sizeof(*job));
@@ -1787,6 +1784,9 @@ void reqresp_blocks_request_complete(
         break;
     case LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_TIMED_OUT_WITH_DATA:
         outcome = LANTERN_BLOCKS_REQUEST_TIMED_OUT_WITH_DATA;
+        break;
+    case LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_RESOURCE_UNAVAILABLE:
+        outcome = LANTERN_BLOCKS_REQUEST_RESOURCE_UNAVAILABLE;
         break;
     case LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED:
     default:

@@ -1311,7 +1311,7 @@ static int test_mixed_peer_heads_keep_network_target_stable(void)
     if (reqresp_handle_status(&client, &status, peer_b) != LANTERN_CLIENT_OK
         || client.next_blocks_request_id == request_id_before
         || !lantern_root_equal(&client.network_view.head.root, &higher_head)
-        || client.range_sync.next_slot != client.state.slot + 1u
+        || client.range_sync.next_request_slot != client.state.slot + 1u
         || client.range_sync.target_slot != client.state.slot + 2u
         || client.sync_state != LANTERN_SYNC_STATE_SYNCING) {
         fprintf(stderr, "higher peer status did not start range recovery\n");
@@ -1327,7 +1327,7 @@ static int test_mixed_peer_heads_keep_network_target_stable(void)
         || client.next_blocks_request_id == request_id_before
         || client.network_view.head.slot != client.state.slot + 2u
         || !lantern_root_equal(&client.network_view.head.root, &higher_head)
-        || client.range_sync.next_slot != client.state.slot + 1u
+        || client.range_sync.next_request_slot != client.state.slot + 1u
         || client.range_sync.target_slot != client.state.slot + 2u) {
         fprintf(stderr, "lower peer status did not preserve and continue the higher range target\n");
         goto cleanup;
@@ -1408,7 +1408,7 @@ static int test_idle_status_triggers_syncing_before_gossip_backfill(void)
         goto cleanup;
     }
     if (client.next_blocks_request_id == request_id_before
-        || client.range_sync.next_slot != client.state.slot + 1u
+        || client.range_sync.next_request_slot != client.state.slot + 1u
         || client.range_sync.target_slot != status.head.slot) {
         fprintf(stderr, "ahead peer status did not initiate range work\n");
         goto cleanup;
@@ -1422,7 +1422,7 @@ static int test_idle_status_triggers_syncing_before_gossip_backfill(void)
         fprintf(stderr, "SYNCING unknown-parent gossip block should be pending\n");
         goto cleanup;
     }
-    if (client.range_sync.next_slot != client.state.slot + 1u
+    if (client.range_sync.next_request_slot != client.state.slot + 1u
         || client.range_sync.target_slot != orphan_block.block.slot
         || client.block_fetch_count != 0u
         || client.active_blocks_request_count != 0u) {
@@ -1495,7 +1495,7 @@ static int test_received_direct_parent_gap_keeps_status_range_and_uses_blocks_by
     if (lantern_client_debug_gossip_block(&client, &orphan_block) != LANTERN_CLIENT_OK
         || lantern_client_pending_block_count(&client) != 1u
         || client.next_blocks_request_id == request_id_before
-        || client.range_sync.next_slot != client.state.slot + 1u
+        || client.range_sync.next_request_slot != client.state.slot + 1u
         || client.range_sync.target_slot != orphan_block.block.slot) {
         fprintf(
             stderr,
@@ -1706,7 +1706,7 @@ static int test_peer_status_updates_sync_network_view(void)
         goto cleanup;
     }
     if (client.next_blocks_request_id == 0u
-        || client.range_sync.next_slot != client.state.slot + 1u
+        || client.range_sync.next_request_slot != client.state.slot + 1u
         || client.range_sync.target_slot != status.head.slot
         || client.block_fetch_count != 0u
         || client.active_blocks_request_count != 0u) {
@@ -1777,7 +1777,7 @@ static int test_imported_blocks_update_sync_network_view(void)
         goto cleanup;
     }
     const uint64_t active_request_id = 91u;
-    fixture.client.range_sync.next_slot = second_block.block.slot;
+    fixture.client.range_sync.next_request_slot = second_block.block.slot;
     fixture.client.range_sync.target_slot = second_block.block.slot;
     fixture.client.range_sync.request_id = active_request_id;
     fixture.client.range_sync.request_start_slot = second_block.block.slot;
@@ -1806,7 +1806,7 @@ static int test_imported_blocks_update_sync_network_view(void)
         fprintf(stderr, "newer imported block should still not seed network finalized\n");
         goto cleanup;
     }
-    if (fixture.client.range_sync.next_slot != second_block.block.slot + 1u
+    if (fixture.client.range_sync.next_request_slot != second_block.block.slot + 1u
         || fixture.client.range_sync.target_slot != second_block.block.slot
         || fixture.client.range_sync.request_id != active_request_id
         || fixture.client.range_sync.failed_peers.len != 0u) {
@@ -2051,7 +2051,7 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
     }
 
     lantern_client_debug_pending_reset(&client);
-    client.range_sync.next_slot = block.block.slot;
+    client.range_sync.next_request_slot = block.block.slot;
     client.range_sync.target_slot = block.block.slot;
     client.range_sync.request_id = 77u;
     client.range_sync.request_start_slot = block.block.slot;
@@ -2069,13 +2069,13 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
     size_t range_pending = lantern_client_pending_block_count(&client);
     if (range_response_rc != LANTERN_CLIENT_OK
         || range_pending != 1u
-        || client.range_sync.next_slot != block.block.slot) {
+        || client.range_sync.next_request_slot != block.block.slot) {
         fprintf(
             stderr,
             "queued range block changed sync state rc=%d pending=%zu next=%" PRIu64 "\n",
             range_response_rc,
             range_pending,
-            client.range_sync.next_slot);
+            client.range_sync.next_request_slot);
         rc = 1;
         goto cleanup;
     }
@@ -2083,8 +2083,10 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
             &client,
             77u,
             LANTERN_BLOCKS_REQUEST_SUCCESS)
-        || client.range_sync.next_slot != block.block.slot) {
-        fprintf(stderr, "range completion skipped a queued block\n");
+        || client.range_sync.next_request_slot != block.block.slot + 1u
+        || client.range_sync.target_slot != block.block.slot
+        || lantern_client_pending_block_count(&client) != 1u) {
+        fprintf(stderr, "range coverage discarded a queued block\n");
         rc = 1;
         goto cleanup;
     }
@@ -2867,7 +2869,7 @@ cleanup:
     return rc;
 }
 
-static int test_range_response_bounds_and_completion_progress(void)
+static int test_range_response_bounds_and_separate_progress(void)
 {
     struct lantern_client client;
     LanternSignedBlock block;
@@ -2881,8 +2883,9 @@ static int test_range_response_bounds_and_completion_progress(void)
         goto cleanup;
     }
 
-    client.range_sync.next_slot = 20u;
-    client.range_sync.target_slot = 24u;
+    client.range_sync.next_request_slot = 20u;
+    client.range_sync.imported_head_slot = 19u;
+    client.range_sync.target_slot = 22u;
     client.range_sync.request_id = 90u;
     client.range_sync.request_start_slot = 20u;
     client.range_sync.request_count = 3u;
@@ -2909,53 +2912,47 @@ static int test_range_response_bounds_and_completion_progress(void)
     if (!lantern_client_complete_range_request(
             &client,
             90u,
-            LANTERN_BLOCKS_REQUEST_SUCCESS)
-        || client.range_sync.next_slot != 20u
-        || client.range_sync.target_slot != 24u
+            LANTERN_BLOCKS_REQUEST_FAILED)
+        || client.range_sync.next_request_slot != 20u
+        || client.range_sync.imported_head_slot != 19u
+        || client.range_sync.target_slot != 22u
         || client.range_sync.request_id != 0u
         || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_id)) {
-        fprintf(stderr, "range delivery advanced without imported head progress\n");
+        fprintf(stderr, "failed range response advanced coverage or import progress\n");
         goto cleanup;
     }
 
+    lantern_string_list_reset(&client.range_sync.failed_peers);
+    client.range_sync.peers_exhausted = false;
     client.range_sync.request_id = 91u;
     client.range_sync.request_start_slot = 20u;
     client.range_sync.request_count = 3u;
+    client.range_sync.request_peer_claimed_range = false;
     (void)snprintf(
         client.range_sync.request_peer,
         sizeof(client.range_sync.request_peer),
         "%s",
         peer_id);
-    lantern_client_update_sync_progress(&client, 22u);
+    lantern_client_update_sync_progress(&client, 20u);
     if (!lantern_client_complete_range_request(
             &client,
             91u,
             LANTERN_BLOCKS_REQUEST_SUCCESS)
-        || client.range_sync.next_slot != 23u
-        || client.range_sync.target_slot != 24u
+        || client.range_sync.next_request_slot != 23u
+        || client.range_sync.imported_head_slot != 20u
+        || client.range_sync.target_slot != 22u
         || client.range_sync.request_id != 0u
         || client.range_sync.failed_peers.len != 0u) {
-        fprintf(stderr, "imported head progress did not advance the range cursor\n");
+        fprintf(stderr, "authoritative response did not advance coverage independently\n");
         goto cleanup;
     }
 
-    client.range_sync.request_id = 92u;
-    client.range_sync.request_start_slot = 23u;
-    client.range_sync.request_count = 2u;
-    (void)snprintf(
-        client.range_sync.request_peer,
-        sizeof(client.range_sync.request_peer),
-        "%s",
-        peer_id);
-    lantern_client_update_sync_progress(&client, 24u);
-    if (!lantern_client_complete_range_request(
-            &client,
-            92u,
-            LANTERN_BLOCKS_REQUEST_SUCCESS)
-        || client.range_sync.next_slot != 0u
+    lantern_client_update_sync_progress(&client, 22u);
+    if (client.range_sync.next_request_slot != 0u
+        || client.range_sync.imported_head_slot != 0u
         || client.range_sync.target_slot != 0u
         || client.range_sync.request_id != 0u) {
-        fprintf(stderr, "accepted terminal range did not finish catch-up\n");
+        fprintf(stderr, "imported head did not retire covered range state\n");
         goto cleanup;
     }
     rc = 0;
@@ -2970,11 +2967,13 @@ static void set_range_request_for_test(
     struct lantern_client *client,
     uint64_t request_id,
     uint64_t count,
-    const char *peer_id)
+    const char *peer_id,
+    bool peer_claimed_range)
 {
     client->range_sync.request_id = request_id;
-    client->range_sync.request_start_slot = client->range_sync.next_slot;
+    client->range_sync.request_start_slot = client->range_sync.next_request_slot;
     client->range_sync.request_count = count;
+    client->range_sync.request_peer_claimed_range = peer_claimed_range;
     (void)snprintf(
         client->range_sync.request_peer,
         sizeof(client->range_sync.request_peer),
@@ -2982,7 +2981,7 @@ static void set_range_request_for_test(
         peer_id);
 }
 
-static int test_partial_range_failure_preserves_received_progress(void)
+static int test_partial_range_failure_preserves_imported_progress(void)
 {
     struct lantern_client client;
     const char *peer_id = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
@@ -2995,16 +2994,17 @@ static int test_partial_range_failure_preserves_received_progress(void)
         goto cleanup;
     }
 
-    client.range_sync.next_slot = 20u;
+    client.range_sync.next_request_slot = 20u;
+    client.range_sync.imported_head_slot = 19u;
     client.range_sync.target_slot = 30u;
-    set_range_request_for_test(&client, 100u, 8u, peer_id);
+    set_range_request_for_test(&client, 100u, 8u, peer_id, false);
     lantern_client_update_sync_progress(&client, 22u);
 
     if (!lantern_client_complete_range_request(
             &client,
             100u,
             LANTERN_BLOCKS_REQUEST_FAILED)
-        || client.range_sync.next_slot != 23u
+        || client.range_sync.next_request_slot != 23u
         || client.range_sync.request_id != 0u
         || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_id))
     {
@@ -3019,189 +3019,78 @@ cleanup:
     return rc;
 }
 
-static int test_range_batch_size_adapts_and_locks_after_data_timeout(void)
+static int test_range_authority_controls_coverage(void)
 {
     struct lantern_client client;
     const char *peer_id = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
-    uint64_t request_id = 100u;
     int rc = 1;
 
     memset(&client, 0, sizeof(client));
-    client.node_id = "range_batch_adaptation";
+    client.node_id = "range_authoritative_coverage";
     if (enable_sync_test_peer(&client, peer_id) != 0)
     {
         goto cleanup;
     }
 
-    lantern_client_update_range_sync_target(&client, 0u, 4096u);
-    if (client.range_sync.batch_size != 8u
-        || client.range_sync.batch_size_locked)
-    {
-        fprintf(stderr, "range batch policy did not start at 8 slots\n");
-        goto cleanup;
-    }
-
-    const uint64_t successful_sizes[] = {8u, 16u, 32u};
-    for (size_t i = 0u;
-         i < sizeof(successful_sizes) / sizeof(successful_sizes[0]);
-         ++i)
-    {
-        uint64_t size = successful_sizes[i];
-        set_range_request_for_test(&client, request_id++, size, peer_id);
-        lantern_client_update_sync_progress(
-            &client,
-            client.range_sync.request_start_slot + size - 1u);
-        if (!lantern_client_complete_range_request(
-                &client,
-                request_id - 1u,
-                LANTERN_BLOCKS_REQUEST_SUCCESS)
-            || client.range_sync.batch_size != size * 2u
-            || client.range_sync.batch_size_locked)
-        {
-            fprintf(stderr, "successful range response did not double its batch size\n");
-            goto cleanup;
-        }
-    }
-
-    uint64_t retry_slot = client.range_sync.next_slot;
-    if (pthread_mutex_lock(&client.status_lock) != 0)
-    {
-        goto cleanup;
-    }
-    struct lantern_peer_status_entry *status =
-        lantern_client_ensure_status_entry_locked(&client, peer_id);
-    if (status)
-    {
-        status->status.head.slot = 4096u;
-        status->last_status_ms = 1u;
-    }
-    pthread_mutex_unlock(&client.status_lock);
-    if (!status)
-    {
-        goto cleanup;
-    }
-    set_range_request_for_test(&client, request_id++, 64u, peer_id);
+    client.range_sync.next_request_slot = 2561u;
+    client.range_sync.imported_head_slot = 2560u;
+    client.range_sync.target_slot = 3584u;
+    set_range_request_for_test(
+        &client,
+        100u,
+        LANTERN_MAX_REQUEST_BLOCKS,
+        peer_id,
+        true);
     if (!lantern_client_complete_range_request(
             &client,
-            request_id - 1u,
+            100u,
             LANTERN_BLOCKS_REQUEST_EMPTY)
-        || client.range_sync.next_slot != retry_slot
-        || client.range_sync.batch_size != 64u
-        || client.range_sync.batch_size_locked)
+        || client.range_sync.next_request_slot != 3585u
+        || client.range_sync.imported_head_slot != 2560u)
     {
-        fprintf(stderr, "empty range response advanced the cursor or changed the batch policy\n");
-        goto cleanup;
-    }
-
-    set_range_request_for_test(&client, request_id++, 64u, peer_id);
-    if (!lantern_client_complete_range_request(
-            &client,
-            request_id - 1u,
-            LANTERN_BLOCKS_REQUEST_FAILED)
-        || client.range_sync.next_slot != retry_slot
-        || client.range_sync.batch_size != 64u
-        || client.range_sync.batch_size_locked)
-    {
-        fprintf(stderr, "zero-data range failure changed the batch policy\n");
-        goto cleanup;
-    }
-
-    set_range_request_for_test(&client, request_id++, 64u, peer_id);
-    reqresp_blocks_request_complete(
-        &client,
-        request_id - 1u,
-        LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_TIMED_OUT_WITH_DATA);
-    if (client.range_sync.next_slot != retry_slot
-        || client.range_sync.batch_size != 32u
-        || !client.range_sync.batch_size_locked)
-    {
-        fprintf(stderr, "data timeout did not halve and lock the batch size\n");
-        goto cleanup;
-    }
-
-    set_range_request_for_test(&client, request_id++, 32u, peer_id);
-    lantern_client_update_sync_progress(
-        &client,
-        client.range_sync.request_start_slot + 31u);
-    if (!lantern_client_complete_range_request(
-            &client,
-                request_id - 1u,
-                LANTERN_BLOCKS_REQUEST_SUCCESS)
-        || client.range_sync.batch_size != 32u
-        || !client.range_sync.batch_size_locked)
-    {
-        fprintf(stderr, "locked range batch size grew after a later success\n");
-        goto cleanup;
-    }
-
-    set_range_request_for_test(&client, request_id++, 32u, peer_id);
-    if (!lantern_client_complete_range_request(
-            &client,
-            request_id - 1u,
-            LANTERN_BLOCKS_REQUEST_TIMED_OUT_WITH_DATA)
-        || client.range_sync.batch_size != 16u
-        || !client.range_sync.batch_size_locked)
-    {
-        fprintf(stderr, "repeated data timeout did not halve the locked batch size\n");
-        goto cleanup;
-    }
-
-    set_range_request_for_test(&client, request_id++, 16u, peer_id);
-    if (!lantern_client_complete_range_request(
-            &client,
-            request_id - 1u,
-            LANTERN_BLOCKS_REQUEST_TIMED_OUT_WITH_DATA)
-        || client.range_sync.batch_size != 8u)
-    {
-        fprintf(stderr, "data timeout did not back off to the minimum batch size\n");
-        goto cleanup;
-    }
-
-    set_range_request_for_test(&client, request_id++, 8u, peer_id);
-    if (!lantern_client_complete_range_request(
-            &client,
-            request_id - 1u,
-            LANTERN_BLOCKS_REQUEST_TIMED_OUT_WITH_DATA)
-        || client.range_sync.batch_size != 8u)
-    {
-        fprintf(stderr, "data timeout reduced the batch below its minimum\n");
+        fprintf(stderr, "claimed clean-empty range did not advance coverage only\n");
         goto cleanup;
     }
 
     lantern_string_list_reset(&client.range_sync.failed_peers);
-    client.range_sync = (struct lantern_range_sync_state){0};
-    lantern_client_update_range_sync_target(&client, 0u, 4096u);
-    while (client.range_sync.batch_size < LANTERN_MAX_REQUEST_BLOCKS)
-    {
-        uint64_t size = client.range_sync.batch_size;
-        set_range_request_for_test(&client, request_id++, size, peer_id);
-        lantern_client_update_sync_progress(
-            &client,
-            client.range_sync.request_start_slot + size - 1u);
-        if (!lantern_client_complete_range_request(
-                &client,
-                request_id - 1u,
-                LANTERN_BLOCKS_REQUEST_SUCCESS))
-        {
-            fprintf(stderr, "range batch policy stopped before the protocol ceiling\n");
-            goto cleanup;
-        }
-    }
+    client.range_sync = (struct lantern_range_sync_state){
+        .next_request_slot = 2561u,
+        .imported_head_slot = 2560u,
+        .target_slot = 3584u,
+    };
     set_range_request_for_test(
         &client,
-        request_id++,
+        101u,
         LANTERN_MAX_REQUEST_BLOCKS,
-        peer_id);
-    lantern_client_update_sync_progress(
-        &client,
-        client.range_sync.request_start_slot + LANTERN_MAX_REQUEST_BLOCKS - 1u);
+        peer_id,
+        false);
     if (!lantern_client_complete_range_request(
-        &client,
-        request_id - 1u,
-        LANTERN_BLOCKS_REQUEST_SUCCESS)
-        || client.range_sync.batch_size != LANTERN_MAX_REQUEST_BLOCKS)
+            &client,
+            101u,
+            LANTERN_BLOCKS_REQUEST_EMPTY)
+        || client.range_sync.next_request_slot != 2561u
+        || client.range_sync.imported_head_slot != 2560u)
     {
-        fprintf(stderr, "range batch policy exceeded the protocol ceiling\n");
+        fprintf(stderr, "fallback clean-empty range advanced coverage\n");
+        goto cleanup;
+    }
+
+    lantern_string_list_reset(&client.range_sync.failed_peers);
+    client.range_sync.peers_exhausted = false;
+    set_range_request_for_test(
+        &client,
+        102u,
+        LANTERN_MAX_REQUEST_BLOCKS,
+        peer_id,
+        true);
+    if (!lantern_client_complete_range_request(
+            &client,
+            102u,
+            LANTERN_BLOCKS_REQUEST_RESOURCE_UNAVAILABLE)
+        || client.range_sync.next_request_slot != 2561u
+        || client.range_sync.imported_head_slot != 2560u)
+    {
+        fprintf(stderr, "unavailable range advanced coverage or import progress\n");
         goto cleanup;
     }
 
@@ -3212,7 +3101,7 @@ cleanup:
     return rc;
 }
 
-static int test_empty_ranges_never_advance_sync_cursor(void)
+static int test_claimed_empty_range_covers_skipped_slots(void)
 {
     struct lantern_client client;
     const char *peer_a = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
@@ -3220,7 +3109,7 @@ static int test_empty_ranges_never_advance_sync_cursor(void)
     int rc = 1;
 
     memset(&client, 0, sizeof(client));
-    client.node_id = "empty_range_peer_round";
+    client.node_id = "wide_skipped_slot_range";
     if (enable_sync_test_peer(&client, peer_a) != 0
         || set_sync_test_connected_peers(&client, peer_a, peer_b) != 0)
     {
@@ -3237,8 +3126,8 @@ static int test_empty_ranges_never_advance_sync_cursor(void)
         lantern_client_ensure_status_entry_locked(&client, peer_b);
     if (status_a && status_b)
     {
-        status_a->status.head.slot = 24u;
-        status_b->status.head.slot = 24u;
+        status_a->status.head.slot = 30u;
+        status_b->status.head.slot = 30u;
         status_a->last_status_ms = 1u;
         status_b->last_status_ms = 1u;
     }
@@ -3248,12 +3137,13 @@ static int test_empty_ranges_never_advance_sync_cursor(void)
         goto cleanup;
     }
 
-    client.range_sync.next_slot = 20u;
-    client.range_sync.target_slot = 24u;
-    client.range_sync.batch_size = 8u;
+    client.range_sync.next_request_slot = 20u;
+    client.range_sync.imported_head_slot = 19u;
+    client.range_sync.target_slot = 30u;
     client.range_sync.request_id = 90u;
     client.range_sync.request_start_slot = 20u;
-    client.range_sync.request_count = 5u;
+    client.range_sync.request_count = 11u;
+    client.range_sync.request_peer_claimed_range = true;
     (void)snprintf(
         client.range_sync.request_peer,
         sizeof(client.range_sync.request_peer),
@@ -3264,13 +3154,31 @@ static int test_empty_ranges_never_advance_sync_cursor(void)
             &client,
             90u,
             LANTERN_BLOCKS_REQUEST_EMPTY)
-        || client.range_sync.next_slot != 20u
+        || client.range_sync.next_request_slot != 31u
+        || client.range_sync.imported_head_slot != 19u
         || client.range_sync.request_id != 0u
-        || !client.range_sync.peers_exhausted
-        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_a)
-        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_b))
+        || client.range_sync.peers_exhausted)
     {
-        fprintf(stderr, "empty peer round advanced the sync cursor\n");
+        fprintf(stderr, "claimed empty range did not cover skipped slots\n");
+        goto cleanup;
+    }
+
+    uint64_t request_id_before = client.next_blocks_request_id;
+    lantern_client_update_range_sync_target(&client, 19u, 30u);
+    if (client.next_blocks_request_id != request_id_before
+        || client.range_sync.request_id != 0u
+        || client.range_sync.next_request_slot != 31u)
+    {
+        fprintf(stderr, "covered skipped-slot range was requested again\n");
+        goto cleanup;
+    }
+
+    lantern_client_update_sync_progress(&client, 30u);
+    if (client.range_sync.next_request_slot != 0u
+        || client.range_sync.imported_head_slot != 0u
+        || client.range_sync.target_slot != 0u)
+    {
+        fprintf(stderr, "imported head did not retire skipped-slot coverage\n");
         goto cleanup;
     }
 
@@ -3311,7 +3219,8 @@ static int test_range_completion_does_not_skip_unresolved_parent(void)
         goto cleanup;
     }
 
-    client.range_sync.next_slot = 20u;
+    client.range_sync.next_request_slot = 20u;
+    client.range_sync.imported_head_slot = 19u;
     client.range_sync.target_slot = 24u;
     client.range_sync.request_id = 90u;
     client.range_sync.request_start_slot = 20u;
@@ -3326,12 +3235,13 @@ static int test_range_completion_does_not_skip_unresolved_parent(void)
             &client,
             90u,
             LANTERN_BLOCKS_REQUEST_SUCCESS)
-        || client.range_sync.next_slot != 20u
+        || client.range_sync.next_request_slot != 25u
+        || client.range_sync.imported_head_slot != 19u
         || client.range_sync.request_id != 0u
-        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_id)
+        || client.range_sync.failed_peers.len != 0u
         || client.active_blocks_request_count != 0u
         || lantern_client_pending_block_count(&client) != 1u) {
-        fprintf(stderr, "range completion skipped an unresolved parent\n");
+        fprintf(stderr, "covered range discarded an unresolved parent\n");
         goto cleanup;
     }
 
@@ -3382,7 +3292,7 @@ static int test_import_completed_range_requests_unresolved_parent(void)
         goto cleanup;
     }
 
-    client.range_sync.next_slot = 20u;
+    client.range_sync.next_request_slot = 20u;
     client.range_sync.target_slot = 24u;
     client.range_sync.request_id = 91u;
     client.range_sync.request_start_slot = 20u;
@@ -3395,7 +3305,7 @@ static int test_import_completed_range_requests_unresolved_parent(void)
 
     uint64_t request_id_before = client.next_blocks_request_id;
     lantern_client_update_sync_progress(&client, 24u);
-    if (client.range_sync.next_slot != 25u
+    if (client.range_sync.next_request_slot != 25u
         || client.range_sync.target_slot != 24u
         || client.range_sync.request_id != 91u) {
         fprintf(stderr, "import progress retired an active range request early\n");
@@ -3405,7 +3315,7 @@ static int test_import_completed_range_requests_unresolved_parent(void)
             &client,
             91u,
             LANTERN_BLOCKS_REQUEST_SUCCESS)
-        || client.range_sync.next_slot != 0u
+        || client.range_sync.next_request_slot != 0u
         || client.range_sync.target_slot != 0u
         || client.range_sync.request_id != 0u
         || client.next_blocks_request_id == request_id_before
@@ -3434,7 +3344,7 @@ static int test_range_completion_rejects_exclusive_end_overflow(void)
         return 1;
     }
 
-    client.range_sync.next_slot = UINT64_MAX;
+    client.range_sync.next_request_slot = UINT64_MAX;
     client.range_sync.target_slot = UINT64_MAX;
     client.range_sync.request_id = 92u;
     client.range_sync.request_start_slot = UINT64_MAX;
@@ -3449,7 +3359,7 @@ static int test_range_completion_rejects_exclusive_end_overflow(void)
             &client,
             92u,
             LANTERN_BLOCKS_REQUEST_SUCCESS)
-        || client.range_sync.next_slot != UINT64_MAX
+        || client.range_sync.next_request_slot != UINT64_MAX
         || client.range_sync.request_id != 0u
         || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_id)) {
         fprintf(stderr, "overflowing range completion wrapped the catch-up cursor\n");
@@ -3979,16 +3889,16 @@ int main(void) {
     if (test_block_fetch_exhaustion_preserves_pending_branch() != 0) {
         return 1;
     }
-    if (test_range_response_bounds_and_completion_progress() != 0) {
+    if (test_range_response_bounds_and_separate_progress() != 0) {
         return 1;
     }
-    if (test_partial_range_failure_preserves_received_progress() != 0) {
+    if (test_partial_range_failure_preserves_imported_progress() != 0) {
         return 1;
     }
-    if (test_range_batch_size_adapts_and_locks_after_data_timeout() != 0) {
+    if (test_range_authority_controls_coverage() != 0) {
         return 1;
     }
-    if (test_empty_ranges_never_advance_sync_cursor() != 0) {
+    if (test_claimed_empty_range_covers_skipped_slots() != 0) {
         return 1;
     }
     if (test_range_completion_does_not_skip_unresolved_parent() != 0) {
