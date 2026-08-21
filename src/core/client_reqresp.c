@@ -522,30 +522,43 @@ void lantern_client_update_sync_progress(
         return;
     }
 
-    uint64_t retired_request_id = 0u;
     bool range_completed = false;
+    bool schedule_next = false;
     struct lantern_range_sync_state *range = &client->range_sync;
-    if (range->target_slot != 0u && local_slot >= range->target_slot)
+    if (range->target_slot != 0u)
     {
-        range_completed = true;
-        retired_request_id = range->request_id;
-        lantern_string_list_reset(&range->failed_peers);
-        lantern_string_list_reset(&range->empty_peers);
-        *range = (struct lantern_range_sync_state){0};
+        uint64_t local_next_slot = local_slot == UINT64_MAX
+            ? UINT64_MAX
+            : local_slot + 1u;
+        if (local_next_slot > range->next_slot)
+        {
+            range->next_slot = local_next_slot;
+            lantern_string_list_reset(&range->failed_peers);
+            range->peers_exhausted = false;
+        }
+        if (local_slot >= range->target_slot && range->request_id == 0u)
+        {
+            range_completed = true;
+            lantern_string_list_reset(&range->failed_peers);
+            *range = (struct lantern_range_sync_state){0};
+        }
+        else if (range->request_id == 0u
+            && range->next_slot <= range->target_slot)
+        {
+            schedule_next = true;
+        }
     }
     LanternStatusMessage network_view = client->network_view;
 
     pthread_mutex_unlock(&client->status_lock);
 
-    if (retired_request_id != 0u)
-    {
-        (void)lantern_reqresp_service_cancel_blocks_by_range(
-            &client->reqresp,
-            retired_request_id);
-    }
     if (range_completed)
     {
         lantern_client_request_pending_parent_after_blocks(client, NULL, NULL);
+    }
+    else if (schedule_next)
+    {
+        (void)lantern_client_schedule_next_range_request(client);
     }
     maybe_log_sync_progress(
         client,
@@ -654,8 +667,7 @@ static void lantern_client_peer_status_update(
         && range->next_slot != 0u
         && range->next_slot <= range->target_slot)
     {
-        if (!lantern_string_list_contains(&range->empty_peers, peer_id_text)
-            && lantern_string_list_remove(&range->failed_peers, peer_id_text))
+        if (lantern_string_list_remove(&range->failed_peers, peer_id_text))
         {
             range->peers_exhausted = false;
         }
@@ -1044,13 +1056,15 @@ static bool block_response_request_context(
     const LanternRoot *block_root,
     uint64_t block_slot,
     uint64_t request_id,
-    bool *out_active)
+    bool *out_active,
+    bool *out_range)
 {
-    if (!client || !block_root || !out_active)
+    if (!client || !block_root || !out_active || !out_range)
     {
         return false;
     }
     *out_active = request_id == 0u;
+    *out_range = false;
     if (request_id == 0u)
     {
         return true;
@@ -1087,6 +1101,7 @@ static bool block_response_request_context(
             return false;
         }
         *out_active = true;
+        *out_range = true;
     }
     pthread_mutex_unlock(&client->status_lock);
     return true;
@@ -1132,8 +1147,13 @@ static int import_block_response_now(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
-    const char *peer_id)
+    const char *peer_id,
+    bool *out_connected)
 {
+    if (out_connected)
+    {
+        *out_connected = false;
+    }
     struct lantern_log_metadata meta = {
         .validator = client ? client->node_id : NULL,
         .peer = peer_id && peer_id[0] ? peer_id : NULL,
@@ -1157,9 +1177,14 @@ static int import_block_response_now(
         true);
     bool pending = false;
     bool known = false;
-    bool accepted = imported || block_response_was_accepted(client, block_root, &pending, &known);
+    bool accepted = imported
+        || block_response_was_accepted(client, block_root, &pending, &known);
     if (accepted)
     {
+        if (out_connected)
+        {
+            *out_connected = imported || known;
+        }
         if (known && !imported)
         {
             lantern_log_debug(
@@ -1257,7 +1282,8 @@ static void *block_import_worker_main(void *arg)
                 client,
                 &job->block,
                 &job->block_root,
-                job->peer_id);
+                job->peer_id,
+                NULL);
         }
         if (rc != LANTERN_CLIENT_OK)
         {
@@ -1680,12 +1706,14 @@ int reqresp_handle_block_response(
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
     bool request_active = false;
+    bool range_response = false;
     if (!block_response_request_context(
             client,
             &block_root,
             block->block.slot,
             request_id,
-            &request_active))
+            &request_active,
+            &range_response))
     {
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
@@ -1693,20 +1721,25 @@ int reqresp_handle_block_response(
     {
         return LANTERN_CLIENT_OK;
     }
-    if (!client->block_import_sync_initialized)
+    /* Range blocks must be imported in response order.  Completing the
+     * request before asynchronous imports finish can advance the range cursor
+     * past blocks that were only queued because their parent was missing. */
+    if (range_response || !client->block_import_sync_initialized)
     {
         if (client->block_import_stop)
         {
             return LANTERN_CLIENT_ERR_RUNTIME;
         }
+        bool connected = false;
         int rc = import_block_response_now(
             client,
             block,
             &block_root,
-            peer_id);
-        if (rc == LANTERN_CLIENT_OK)
+            peer_id,
+            &connected);
+        if (range_response && connected)
         {
-            lantern_client_note_range_response(
+            lantern_client_note_range_import(
                 client,
                 request_id,
                 block->block.slot);
@@ -1728,10 +1761,6 @@ int reqresp_handle_block_response(
     }
     if (enqueue_block_import_job(client, job) == 0)
     {
-        lantern_client_note_range_response(
-            client,
-            request_id,
-            block->block.slot);
         return LANTERN_CLIENT_OK;
     }
     block_import_job_free(job);
