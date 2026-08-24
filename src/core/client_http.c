@@ -14,6 +14,7 @@
 
 #include "client_internal.h"
 
+#include <inttypes.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -25,7 +26,6 @@
 #include "lantern/storage/storage.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
-
 
 /* ============================================================================
  * HTTP Snapshot Callbacks
@@ -96,7 +96,6 @@ int http_snapshot_fork_choice(
     return result == 0 ? LANTERN_HTTP_CB_OK : LANTERN_HTTP_CB_ERR_IO;
 }
 
-
 int http_get_is_aggregator_cb(void *context, bool *out_enabled)
 {
     if (!context || !out_enabled)
@@ -111,7 +110,6 @@ int http_get_is_aggregator_cb(void *context, bool *out_enabled)
     *out_enabled = client->assigned_validators->enr.is_aggregator;
     return LANTERN_HTTP_CB_OK;
 }
-
 
 int http_set_is_aggregator_cb(void *context, bool enabled, bool *out_previous)
 {
@@ -150,7 +148,6 @@ int http_set_is_aggregator_cb(void *context, bool enabled, bool *out_previous)
 
     return LANTERN_HTTP_CB_OK;
 }
-
 
 /* ============================================================================
  * Metrics Callbacks
@@ -321,7 +318,6 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
     return LANTERN_HTTP_CB_OK;
 }
 
-
 /* ============================================================================
  * Checkpoint Sync Callbacks
  * ============================================================================ */
@@ -409,3 +405,67 @@ int http_finalized_block_ssz_cb(void *context, uint8_t **out_bytes, size_t *out_
         out_len,
         lantern_storage_load_block_bytes_for_root);
 }
+
+/**
+ * @brief Start HTTP and metrics APIs for the client.
+ *
+ * Configures the HTTP server callbacks and, if configured, the Prometheus
+ * metrics endpoint.
+ *
+ * @param client  Client owning the API services
+ *
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_NETWORK if either server fails to start
+ *
+ * @note Thread safety: Must be called before serving concurrent requests.
+ */
+lantern_client_error client_start_apis(struct lantern_client *client)
+{
+    struct lantern_metrics_callbacks metrics_callbacks;
+    memset(&metrics_callbacks, 0, sizeof(metrics_callbacks));
+    metrics_callbacks.context = client;
+    metrics_callbacks.snapshot = metrics_snapshot_cb;
+    if (client->metrics_port != 0)
+    {
+        if (lantern_metrics_server_start(
+                &client->metrics_server,
+                client->metrics_port,
+                &metrics_callbacks)
+            != 0)
+        {
+            lantern_log_error(
+                "client",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "failed to start metrics server on port %" PRIu16,
+                client->metrics_port);
+            return LANTERN_CLIENT_ERR_NETWORK;
+        }
+    }
+
+    struct lantern_http_server_config http_config;
+    memset(&http_config, 0, sizeof(http_config));
+    http_config.port = client->http_port;
+    http_config.callbacks.context = client;
+    http_config.callbacks.snapshot_justified = http_snapshot_justified;
+    http_config.callbacks.snapshot_fork_choice = http_snapshot_fork_choice;
+    http_config.callbacks.metrics_snapshot = metrics_snapshot_cb;
+    http_config.callbacks.finalized_state_ssz = http_finalized_state_ssz_cb;
+    http_config.callbacks.finalized_block_ssz = http_finalized_block_ssz_cb;
+    http_config.callbacks.get_is_aggregator = http_get_is_aggregator_cb;
+    http_config.callbacks.set_is_aggregator = http_set_is_aggregator_cb;
+    if (client->http_port != 0)
+    {
+        if (lantern_http_server_start(&client->http_server, &http_config) != 0)
+        {
+            lantern_log_error(
+                "client",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "failed to start HTTP server on port %" PRIu16,
+                client->http_port);
+            return LANTERN_CLIENT_ERR_NETWORK;
+        }
+    }
+
+    return LANTERN_CLIENT_OK;
+}
+

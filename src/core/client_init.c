@@ -17,8 +17,11 @@
 
 #include "client_internal.h"
 
+#include "lantern/genesis/genesis.h"
 #include "lantern/networking/libp2p.h"
+#include "lantern/storage/storage.h"
 #include "lantern/support/log.h"
+#include "lantern/support/string_list.h"
 #include "lantern/support/strings.h"
 
 #include <inttypes.h>
@@ -31,14 +34,12 @@
 static const char LANTERN_ANNOTATED_VALIDATORS_FILENAME[] = "annotated_validators.yaml";
 static const char LANTERN_VALIDATOR_CONFIG_FILENAME[] = "validator-config.yaml";
 
-
 /* ============================================================================
  * Forward Declarations
  * ============================================================================ */
 
 void reset_genesis_paths(struct lantern_genesis_paths *paths);
 static int join_path_component(const char *dir, const char *leaf, char **out_path);
-
 
 /* ============================================================================
  * Genesis Path Management
@@ -129,7 +130,6 @@ static int join_path_component(const char *dir, const char *leaf, char **out_pat
     return 0;
 }
 
-
 /**
  * Reset and free all genesis path strings.
  *
@@ -149,7 +149,6 @@ void reset_genesis_paths(struct lantern_genesis_paths *paths)
     free(paths->validator_config_path);
     memset(paths, 0, sizeof(*paths));
 }
-
 
 /**
  * Append bootnodes from genesis ENR records.
@@ -193,7 +192,6 @@ int append_genesis_bootnodes(struct lantern_client *client)
     }
     return 0;
 }
-
 
 /**
  * Populate local validator keys from the assigned validator config.
@@ -296,3 +294,78 @@ int populate_local_validators(struct lantern_client *client)
         client->local_validator_count);
     return 0;
 }
+
+/**
+ * @brief Open persistent storage and load genesis artifacts.
+ *
+ * Opens the data store, copies bootnodes and path configuration,
+ * loads genesis configuration, and validates validator assignment coverage.
+ *
+ * @param client   Client being prepared
+ * @param options  Caller-provided options
+ *
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_STORAGE on storage preparation failure
+ * @return LANTERN_CLIENT_ERR_ALLOC on allocation failure
+ * @return LANTERN_CLIENT_ERR_GENESIS on genesis validation failure
+ *
+ * @note Thread safety: Single-threaded initialization only.
+ */
+lantern_client_error client_prepare_storage_and_genesis(
+    struct lantern_client *client,
+    const struct lantern_client_options *options)
+{
+    if (lantern_storage_open(&client->storage, client->data_dir) != 0)
+    {
+        lantern_log_error(
+            "storage",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to prepare data directory '%s'",
+            client->data_dir);
+        return LANTERN_CLIENT_ERR_STORAGE;
+    }
+
+    if (lantern_string_list_copy(&client->bootnodes, &options->bootnodes) != 0)
+    {
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
+
+    if (copy_genesis_paths(&client->genesis_paths, options) != 0)
+    {
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
+
+    if (lantern_genesis_load(&client->genesis, &client->genesis_paths) != 0)
+    {
+        return LANTERN_CLIENT_ERR_GENESIS;
+    }
+
+    if (lantern_validator_config_assign_ranges(
+            &client->genesis.validator_config,
+            client->genesis.chain_config.validator_count)
+        != 0)
+    {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "validator-config does not cover %" PRIu64 " validators",
+            client->genesis.chain_config.validator_count);
+        return LANTERN_CLIENT_ERR_GENESIS;
+    }
+
+    if (lantern_validator_config_apply_assignments(
+            &client->genesis.validator_config,
+            client->genesis_paths.validator_registry_path,
+            client->genesis.chain_config.validator_count)
+        != 0)
+    {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "annotated_validators.yaml assignment mapping invalid or incomplete");
+        return LANTERN_CLIENT_ERR_GENESIS;
+    }
+
+    return LANTERN_CLIENT_OK;
+}
+

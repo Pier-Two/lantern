@@ -48,6 +48,9 @@ extern "C" {
 /** Peer dial timeout in milliseconds */
 #define LANTERN_PEER_DIAL_TIMEOUT_MS 4000
 
+/** Size of an Ed25519 node private key in bytes. */
+static const size_t NODE_PRIVATE_KEY_SIZE = 32u;
+
 
 /* ============================================================================
  * Internal Types
@@ -347,6 +350,38 @@ void connection_events_cb(
     struct lantern_libp2p_host *network,
     const libp2p_host_event_t *evt,
     void *user_data);
+
+
+/**
+ * Start the libp2p host and connection-level services.
+ *
+ * @param client   Client to start networking for
+ * @param options  User options containing key paths
+ * @param node_key Buffer for the loaded node private key (cleared on return)
+ *
+ * @return LANTERN_CLIENT_OK on success, or a negative lantern_client_error
+ *
+ * @note Thread safety: Must be called before networking threads start.
+ */
+lantern_client_error client_start_network(
+    struct lantern_client *client,
+    const struct lantern_client_options *options,
+    uint8_t node_key[NODE_PRIVATE_KEY_SIZE]);
+
+
+/**
+ * Start gossip, request/response, and peer protocols.
+ *
+ * @param client   Client to start protocols for
+ * @param node_key Node private key buffer (cleared on return)
+ *
+ * @return LANTERN_CLIENT_OK on success, or a negative lantern_client_error
+ *
+ * @note Thread safety: Must be called after the libp2p host is prepared.
+ */
+lantern_client_error client_start_protocols(
+    struct lantern_client *client,
+    uint8_t node_key[NODE_PRIVATE_KEY_SIZE]);
 
 
 #ifdef __cplusplus

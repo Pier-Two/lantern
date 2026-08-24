@@ -38,7 +38,6 @@
 #include "lantern/support/log.h"
 #include "lantern/support/time.h"
 
-
 /* ============================================================================
  * Constants
  * ============================================================================ */
@@ -961,7 +960,6 @@ static void validator_log_signature_reuse_conflict(
         requested_hex[0] ? requested_hex : "0x0");
 }
 
-
 /**
  * Sign a message root with one of a validator's XMSS keys.
  *
@@ -1089,7 +1087,6 @@ cleanup:
     }
     return result;
 }
-
 
 static lantern_client_error validator_build_block_merge_proof_with_state(
     const LanternState *state,
@@ -1693,7 +1690,6 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
     return LANTERN_CLIENT_OK;
 }
 
-
 /**
  * Publish a signed block via gossipsub.
  *
@@ -1745,7 +1741,6 @@ int lantern_client_publish_block(struct lantern_client *client, const LanternSig
         block->block.body.attestations.length);
     return LANTERN_CLIENT_OK;
 }
-
 
 /* ============================================================================
  * Block Building and Proposal
@@ -1812,7 +1807,6 @@ static int validator_start_block_proposal_job(
     block_proposal_job_free(job);
     return rc;
 }
-
 
 /**
  * Propose a block for a validator.
@@ -1935,7 +1929,6 @@ static void validator_maybe_start_next_proposal(
 
     (void)validator_start_block_proposal_job(client, next_slot, local_index);
 }
-
 
 /* ============================================================================
  * Attestation Publishing
@@ -2175,7 +2168,6 @@ cleanup:
     return result;
 }
 
-
 int lantern_client_chain_service_tick_to(
     struct lantern_client *client,
     uint64_t target_interval,
@@ -2323,7 +2315,6 @@ static void validator_run_duties(
     }
 }
 
-
 /* ============================================================================
  * Chain Scheduler Thread
  * ============================================================================ */
@@ -2429,7 +2420,6 @@ void *timing_thread(void *arg)
     return NULL;
 }
 
-
 int start_block_proposal_worker(struct lantern_client *client)
 {
     if (!client)
@@ -2505,7 +2495,6 @@ void stop_block_proposal_worker(struct lantern_client *client)
         "block proposal worker stopped");
 }
 
-
 /**
  * Start the timing service.
  *
@@ -2568,7 +2557,6 @@ int start_timing_service(struct lantern_client *client)
     return LANTERN_CLIENT_OK;
 }
 
-
 /**
  * Stop the timing service.
  *
@@ -2603,3 +2591,111 @@ void stop_timing_service(struct lantern_client *client)
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "chain scheduler stopped");
 }
+
+/**
+ * @brief Configure the client's local validator slice and key material.
+ *
+ * Validates the node's ENR entry, loads its assigned validators, and refreshes
+ * pubkeys.
+ *
+ * @param client   Client being configured
+ * @param options  User-supplied options for key sources
+ *
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_CONFIG or LANTERN_CLIENT_ERR_VALIDATOR on failure
+ *
+ * @note Thread safety: Initialization only; not safe for concurrent use.
+ */
+lantern_client_error client_setup_validators(
+    struct lantern_client *client,
+    const struct lantern_client_options *options)
+{
+    client->assigned_validators = lantern_validator_config_find(
+        &client->genesis.validator_config,
+        client->node_id);
+
+    if (!client->assigned_validators)
+    {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "node-id '%s' not found in validator-config",
+            client->node_id);
+        return LANTERN_CLIENT_ERR_CONFIG;
+    }
+
+    if (options->is_aggregator)
+    {
+        client->assigned_validators->enr.is_aggregator = true;
+    }
+
+    if (!client->assigned_validators->enr.ip || client->assigned_validators->enr.quic_port == 0)
+    {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "validator '%s' missing ENR fields",
+            client->node_id);
+        return LANTERN_CLIENT_ERR_CONFIG;
+    }
+
+    if (lantern_client_configure_xmss_sources(client, options) != 0)
+    {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to configure xmss key sources");
+        return LANTERN_CLIENT_ERR_CONFIG;
+    }
+
+    adopt_validator_listen_address(client);
+
+    if (populate_local_validators(client) != 0)
+    {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to enumerate local validators for '%s'",
+            client->node_id);
+        return LANTERN_CLIENT_ERR_VALIDATOR;
+    }
+
+    if (client->local_validator_count == 0 || client->state.validator_count == 0u)
+    {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "no local validators assigned for '%s'; check validator-config",
+            client->node_id);
+        return LANTERN_CLIENT_ERR_VALIDATOR;
+    }
+
+    if (lantern_client_validate_state_validator_pubkeys(
+            client,
+            &client->state,
+            "client")
+        != 0)
+    {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "validator pubkey validation failed for '%s'",
+            client->node_id);
+        return LANTERN_CLIENT_ERR_VALIDATOR;
+    }
+
+    if (lantern_client_load_xmss_keys(client) != 0)
+    {
+        return LANTERN_CLIENT_ERR_VALIDATOR;
+    }
+
+    lantern_log_info(
+        "client",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "validator slice start=%" PRIu64 " count=%zu",
+        client->local_validators[0].global_index,
+        client->local_validator_count);
+
+    return LANTERN_CLIENT_OK;
+}
+
