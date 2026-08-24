@@ -3313,6 +3313,111 @@ cleanup:
     return rc;
 }
 
+static int test_enqueue_requests_deepest_missing_parent(void)
+{
+    struct lantern_client client;
+    LanternSignedBlock block_b;
+    LanternSignedBlock block_c;
+    LanternRoot root_a;
+    LanternRoot root_b;
+    LanternRoot root_c;
+    const char *peer_id = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
+    int rc = 1;
+
+    memset(&client, 0, sizeof(client));
+    lantern_signed_block_init(&block_b);
+    lantern_signed_block_init(&block_c);
+    block_b.block.slot = 10u;
+    block_c.block.slot = 11u;
+    client_test_fill_root(&root_a, 0xA0);
+    client_test_fill_root(&root_b, 0xB0);
+    client_test_fill_root(&root_c, 0xC0);
+
+    if (enable_sync_test_peer(&client, peer_id) != 0) {
+        goto cleanup;
+    }
+    /* Minimal reqresp host so a scheduled request persists and is inspectable. */
+    client.reqresp.network = calloc(1u, sizeof(*client.reqresp.network));
+    if (!client.reqresp.network) {
+        goto cleanup;
+    }
+    static uint8_t fake_host_sentinel;
+    client.reqresp.network->host = (libp2p_host_t *)&fake_host_sentinel;
+    if (pthread_mutex_lock(&client.status_lock) != 0) {
+        goto cleanup;
+    }
+    struct lantern_peer_status_entry *peer =
+        lantern_client_ensure_status_entry_locked(&client, peer_id);
+    pthread_mutex_unlock(&client.status_lock);
+    if (!peer) {
+        goto cleanup;
+    }
+
+    /* B -> A with A missing: B is cached but A is NOT requested. */
+    uint64_t request_id_b0 = client.next_blocks_request_id;
+    if (!lantern_client_enqueue_pending_block(
+            &client,
+            &block_b,
+            &root_b,
+            &root_a,
+            peer_id,
+            0u,
+            false)
+        || lantern_client_pending_block_count(&client) != 1u) {
+        fprintf(stderr, "failed to enqueue cached block B\n");
+        goto cleanup;
+    }
+    if (client.next_blocks_request_id != request_id_b0) {
+        fprintf(stderr, "B enqueue unexpectedly requested its parent\n");
+        goto cleanup;
+    }
+
+    /* C -> B where B is cached (pending): recovery must walk to A and request
+     * A, not the cached B. */
+    uint64_t request_id_before = client.next_blocks_request_id;
+    if (!lantern_client_enqueue_pending_block(
+            &client,
+            &block_c,
+            &root_c,
+            &root_b,
+            peer_id,
+            0u,
+            true)) {
+        fprintf(stderr, "failed to enqueue block C\n");
+        goto cleanup;
+    }
+
+    if (client.next_blocks_request_id == request_id_before) {
+        fprintf(stderr, "no parent recovery request scheduled for C\n");
+        goto cleanup;
+    }
+    if (client.active_blocks_request_count != 1u
+        || client.active_blocks_requests[0].root_count != 1u
+        || memcmp(
+               client.active_blocks_requests[0].roots[0].bytes,
+               root_a.bytes,
+               LANTERN_ROOT_SIZE)
+            != 0) {
+        fprintf(stderr, "scheduled root is not the missing ancestor A\n");
+        goto cleanup;
+    }
+    if (lantern_client_pending_block_count(&client) != 2u) {
+        fprintf(stderr, "pending count mismatch after enqueueing C\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_signed_block_reset(&block_b);
+    lantern_signed_block_reset(&block_c);
+    struct lantern_libp2p_host *network = client.reqresp.network;
+    lantern_reqresp_service_reset(&client.reqresp);
+    free(network);
+    disable_sync_test_peer(&client);
+    return rc;
+}
+
 static int test_range_completion_rejects_exclusive_end_overflow(void)
 {
     struct lantern_client client;
@@ -3886,6 +3991,9 @@ int main(void) {
         return 1;
     }
     if (test_import_completed_range_requests_unresolved_parent() != 0) {
+        return 1;
+    }
+    if (test_enqueue_requests_deepest_missing_parent() != 0) {
         return 1;
     }
     if (test_range_completion_rejects_exclusive_end_overflow() != 0) {
