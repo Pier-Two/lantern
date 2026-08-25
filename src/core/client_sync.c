@@ -2292,6 +2292,34 @@ void lantern_client_pending_remove_branch_by_root(
     }
 }
 
+
+static LanternRoot pending_deepest_missing_root(
+    struct lantern_pending_block_list *list,
+    const LanternRoot *start_root)
+{
+    if (!list || !start_root || lantern_root_is_zero(start_root))
+    {
+        return (LanternRoot){0};
+    }
+    LanternRoot walk = *start_root;
+    for (uint32_t step = 0u; step < LANTERN_MAX_BACKFILL_DEPTH; ++step)
+    {
+        const struct lantern_pending_block *entry =
+            pending_block_list_find(list, &walk);
+        if (!entry)
+        {
+            return walk;
+        }
+        if (lantern_root_is_zero(&entry->parent_root))
+        {
+            break;
+        }
+        walk = entry->parent_root;
+    }
+    return (LanternRoot){0};
+}
+
+
 void lantern_client_request_pending_parent_after_blocks(
     struct lantern_client *client,
     const char *peer_text,
@@ -2519,6 +2547,14 @@ bool lantern_client_enqueue_pending_block(
         bool should_request = request_parent_now;
         LanternRoot request_root = existing->parent_root;
         bool parent_cached = pending_block_list_find(list, &request_root) != NULL;
+        if (should_request)
+        {
+            LanternRoot resolved = pending_deepest_missing_root(list, &request_root);
+            if (!lantern_root_is_zero(&resolved))
+            {
+                request_root = resolved;
+            }
+        }
         char peer_copy[PEER_TEXT_BUFFER_LEN];
         peer_copy[0] = '\0';
         if (peer_text && *peer_text)
@@ -2559,7 +2595,7 @@ bool lantern_client_enqueue_pending_block(
             pending_len,
             parent_cached ? "true" : "false",
             should_request ? "true" : "false");
-        if (should_request && !parent_cached
+        if (should_request
             && existing_backfill_depth < LANTERN_MAX_BACKFILL_DEPTH)
         {
             if (lantern_client_try_schedule_blocks_request_batch(
@@ -2670,12 +2706,25 @@ bool lantern_client_enqueue_pending_block(
     size_t pending_len = list->length;
     uint32_t entry_backfill_depth = entry->backfill_depth;
 
+    LanternRoot missing_root = parent_root_local;
+    if (request_parent_now && entry_backfill_depth < LANTERN_MAX_BACKFILL_DEPTH)
+    {
+        LanternRoot resolved = pending_deepest_missing_root(list, &parent_root_local);
+        if (!lantern_root_is_zero(&resolved))
+        {
+            missing_root = resolved;
+        }
+    }
+    char missing_root_hex[ROOT_HEX_BUFFER_LEN];
+    format_root_hex(&missing_root, missing_root_hex, sizeof(missing_root_hex));
+
     lantern_client_unlock_pending(client, locked);
 
     bool request_scheduled = false;
+    bool request_backfill =
+        request_parent_now && entry_backfill_depth < LANTERN_MAX_BACKFILL_DEPTH;
 
-    if (request_parent_now && !parent_cached
-        && entry_backfill_depth < LANTERN_MAX_BACKFILL_DEPTH)
+    if (request_backfill)
     {
         char peer_copy[PEER_TEXT_BUFFER_LEN];
         peer_copy[0] = '\0';
@@ -2686,7 +2735,7 @@ bool lantern_client_enqueue_pending_block(
         if (lantern_client_try_schedule_blocks_request_batch(
                 client,
                 peer_copy[0] ? peer_copy : NULL,
-                &parent_root_local,
+                &missing_root,
                 1u))
         {
             request_scheduled = true;
@@ -2695,9 +2744,9 @@ bool lantern_client_enqueue_pending_block(
                 &(const struct lantern_log_metadata){
                     .validator = client->node_id,
                     .peer = peer_copy[0] ? peer_copy : NULL},
-                "slot %" PRIu64 ", request sent, parent %s, peer %s",
+                "slot %" PRIu64 ", request sent, missing parent %s, peer %s",
                 block->block.slot,
-                parent_hex[0] ? parent_hex : "0x0",
+                missing_root_hex[0] ? missing_root_hex : "0x0",
                 peer_copy[0] ? peer_copy : "-");
         }
     }

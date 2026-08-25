@@ -448,6 +448,34 @@ int lantern_client_configure_xmss_sources(
  */
 int lantern_client_load_xmss_keys(struct lantern_client *client);
 
+
+/**
+ * Configure the client's local validator slice and key material.
+ *
+ * @param client   Client being configured
+ * @param options  User-supplied options for key sources
+ *
+ * @return LANTERN_CLIENT_OK on success, or a negative lantern_client_error
+ *
+ * @note Thread safety: Initialization only; not safe for concurrent use.
+ */
+lantern_client_error client_setup_validators(
+    struct lantern_client *client,
+    const struct lantern_client_options *options);
+
+
+/**
+ * Start HTTP and metrics APIs for the client.
+ *
+ * @param client  Client owning the API services
+ *
+ * @return LANTERN_CLIENT_OK on success, or a negative lantern_client_error
+ *
+ * @note Thread safety: Must be called before serving concurrent requests.
+ */
+lantern_client_error client_start_apis(struct lantern_client *client);
+
+
 #ifdef __cplusplus
 }
 #endif

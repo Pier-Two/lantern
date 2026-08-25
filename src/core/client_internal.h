@@ -276,6 +276,76 @@ bool lantern_client_lock_pending(struct lantern_client *client);
  */
 void lantern_client_unlock_pending(struct lantern_client *client, bool locked);
 
+
+/* ============================================================================
+ * Initialization / Lifecycle helpers
+ * ============================================================================ */
+
+/**
+ * Prepare storage and genesis artifacts during client startup.
+ *
+ * @param client   Client being initialized
+ * @param options  User-supplied options
+ *
+ * @return LANTERN_CLIENT_OK on success, or a negative lantern_client_error
+ *
+ * @note Thread safety: Single-threaded initialization only.
+ */
+lantern_client_error client_prepare_storage_and_genesis(
+    struct lantern_client *client,
+    const struct lantern_client_options *options);
+
+
+/**
+ * Load persisted state, checkpoint state, or construct a genesis state.
+ *
+ * @param client               Client whose state is being initialized
+ * @param options              Client options (checkpoint sync URL, etc.)
+ * @param loaded_from_storage  Optional output flag indicating storage load
+ *
+ * @return LANTERN_CLIENT_OK on success, or a negative lantern_client_error
+ *
+ * @note Thread safety: Single-threaded initialization only.
+ */
+lantern_client_error client_load_or_build_state(
+    struct lantern_client *client,
+    const struct lantern_client_options *options,
+    bool *loaded_from_storage);
+
+
+/**
+ * Collect the set of attestation subnets to subscribe to at startup.
+ *
+ * @param client                    Client being initialized
+ * @param attestation_committee_count  Attestation committee count
+ * @param primary_subnet_id         Primary attestation subnet id
+ * @param out_subnet_ids            Output subnet id array (caller frees)
+ * @param out_count                 Output subnet id count
+ *
+ * @return 0 on success, -1 on failure
+ *
+ * @note Thread safety: Single-threaded initialization only.
+ */
+int collect_startup_attestation_subnets(
+    const struct lantern_client *client,
+    size_t attestation_committee_count,
+    size_t primary_subnet_id,
+    size_t **out_subnet_ids,
+    size_t *out_count);
+
+
+/* ============================================================================
+ * Genesis helpers (defined in client_init.c)
+ * ============================================================================ */
+
+int copy_genesis_paths(
+    struct lantern_genesis_paths *paths,
+    const struct lantern_client_options *options);
+void reset_genesis_paths(struct lantern_genesis_paths *paths);
+int append_genesis_bootnodes(struct lantern_client *client);
+int populate_local_validators(struct lantern_client *client);
+
+
 #ifdef __cplusplus
 }
 #endif
