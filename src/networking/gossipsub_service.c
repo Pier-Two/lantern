@@ -21,6 +21,20 @@
 
 static pthread_mutex_t g_lantern_gossipsub_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+static const char *gossipsub_protocol_event_name(libp2p_host_protocol_event_kind_t kind) {
+    switch (kind) {
+        case LIBP2P_HOST_PROTOCOL_EVENT_READABLE:
+            return "readable";
+        case LIBP2P_HOST_PROTOCOL_EVENT_WRITABLE:
+            return "writable";
+        case LIBP2P_HOST_PROTOCOL_EVENT_RESET:
+            return "reset";
+        case LIBP2P_HOST_PROTOCOL_EVENT_CLOSED:
+            return "closed";
+    }
+    return "unknown";
+}
+
 static int lock_gossipsub(void) {
     return pthread_mutex_lock(&g_lantern_gossipsub_mutex) == 0 ? 0 : -1;
 }
@@ -62,6 +76,14 @@ static libp2p_host_err_t gossipsub_protocol_event_locked(
     }
     libp2p_host_err_t rc = adapter->on_event(host, stream, kind, adapter->user_data);
     unlock_gossipsub();
+    if (rc != LIBP2P_HOST_OK) {
+        lantern_log_warn(
+            "gossip",
+            NULL,
+            "gossipsub protocol event failed event=%s error=%d",
+            gossipsub_protocol_event_name(kind),
+            (int)rc);
+    }
     return rc;
 }
 
@@ -677,6 +699,28 @@ static const char *validation_result_name(libp2p_gossipsub_validation_result_t r
     return "unknown";
 }
 
+static const char *gossipsub_drop_reason_name(libp2p_gossipsub_drop_reason_t reason) {
+    switch (reason) {
+        case LIBP2P_GOSSIPSUB_DROP_RPC_LIMIT:
+            return "rpc_limit";
+        case LIBP2P_GOSSIPSUB_DROP_MALFORMED_RPC:
+            return "malformed_rpc";
+        case LIBP2P_GOSSIPSUB_DROP_DUPLICATE_MESSAGE:
+            return "duplicate_message";
+        case LIBP2P_GOSSIPSUB_DROP_UNSUBSCRIBED_TOPIC:
+            return "unsubscribed_topic";
+        case LIBP2P_GOSSIPSUB_DROP_VALIDATION_REJECTED:
+            return "validation_rejected";
+        case LIBP2P_GOSSIPSUB_DROP_TX_QUEUE_FULL:
+            return "tx_queue_full";
+        case LIBP2P_GOSSIPSUB_DROP_IDONTWANT_LIMIT:
+            return "idontwant_limit";
+        case LIBP2P_GOSSIPSUB_DROP_IDONTWANT_TX_QUEUE_FULL:
+            return "idontwant_tx_queue_full";
+    }
+    return "unknown";
+}
+
 static void handle_gossipsub_peer_opened(
     struct lantern_gossipsub_service *service,
     const libp2p_gossipsub_event_t *event,
@@ -820,7 +864,33 @@ static void drain_gossipsub_events(struct lantern_gossipsub_service *service, li
             unlock_gossipsub();
         } else if (event.type == LIBP2P_GOSSIPSUB_EVENT_DROPPED || event.type == LIBP2P_GOSSIPSUB_EVENT_ERROR) {
             unlock_gossipsub();
-            lantern_log_debug("gossip", NULL, "gossipsub event type=%d reason=%d", (int)event.type, (int)event.reason);
+            struct lantern_peer_id peer = {0};
+            char peer_text[128] = {0};
+            if (peer_from_gossipsub_event(&event, &peer) == 0) {
+                peer_id_to_text_safe(&peer, peer_text, sizeof(peer_text));
+            }
+            void (*log_event)(
+                const char *,
+                const struct lantern_log_metadata *,
+                const char *,
+                ...) =
+                event.type == LIBP2P_GOSSIPSUB_EVENT_ERROR ||
+                        event.drop_reason == LIBP2P_GOSSIPSUB_DROP_IDONTWANT_TX_QUEUE_FULL
+                    ? lantern_log_warn
+                    : lantern_log_debug;
+            log_event(
+                "gossip",
+                &(const struct lantern_log_metadata){.peer = peer_text[0] ? peer_text : NULL},
+                "gossipsub event type=%d reason=%d drop_reason=%s tx_queue=%zu/%zu topic=%.*s",
+                (int)event.type,
+                (int)event.reason,
+                event.type == LIBP2P_GOSSIPSUB_EVENT_DROPPED
+                    ? gossipsub_drop_reason_name(event.drop_reason)
+                    : "none",
+                event.tx_queue_depth,
+                event.tx_queue_capacity,
+                (int)event.topic.len,
+                event.topic.data ? (const char *)event.topic.data : "");
         } else {
             unlock_gossipsub();
         }
