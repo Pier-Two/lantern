@@ -2,6 +2,7 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <pthread.h>
@@ -92,6 +93,49 @@ static int sync_file(FILE *file)
 #endif
 }
 
+static int sync_parent_directory(const char *path)
+{
+#if defined(_WIN32)
+    (void)path;
+    return 0;
+#else
+    if (!path)
+    {
+        return -1;
+    }
+
+    char *copy = strdup(path);
+    if (!copy)
+    {
+        return -1;
+    }
+
+    char *separator = strrchr(copy, '/');
+    const char *directory = ".";
+    if (separator)
+    {
+        if (separator == copy)
+        {
+            separator[1] = '\0';
+        }
+        else
+        {
+            *separator = '\0';
+        }
+        directory = copy;
+    }
+
+    int descriptor = open(directory, O_RDONLY);
+    int result = descriptor >= 0 && fsync(descriptor) == 0 ? 0 : -1;
+    if (descriptor >= 0)
+    {
+        (void)close(descriptor);
+    }
+    free(copy);
+    return result;
+#endif
+}
+
 static int write_atomic_file(const char *path, const uint8_t *data, size_t length)
 {
     if (!path || !data || length == 0u)
@@ -125,7 +169,10 @@ static int write_atomic_file(const char *path, const uint8_t *data, size_t lengt
             goto cleanup;
         }
 #endif
-        result = rename(temporary, path) == 0 ? 0 : -1;
+        if (rename(temporary, path) == 0)
+        {
+            result = sync_parent_directory(path);
+        }
     }
 cleanup:
     if (file)
@@ -316,7 +363,7 @@ static int write_storage_file(
     struct stat status;
     if (immutable && stat(path, &status) == 0)
     {
-        result = S_ISREG(status.st_mode) ? 0 : -1;
+        result = S_ISREG(status.st_mode) ? sync_parent_directory(path) : -1;
     }
     else if (!immutable || errno == ENOENT)
     {

@@ -75,7 +75,7 @@ static void prune_finalized_fork_choice_states_if_advanced_locked(
 static void persist_state_locked(
     const struct lantern_client *client,
     const struct lantern_log_metadata *meta);
-static void persist_post_state_locked(
+static bool persist_post_state_locked(
     const struct lantern_client *client,
     const LanternState *post_state,
     const LanternRoot *block_root,
@@ -323,14 +323,18 @@ void lantern_client_cache_block_aggregated_proofs(
     lantern_state_reset(&parent_state);
 }
 
-static void persist_block_after_import(
+static bool persist_imported_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const struct lantern_log_metadata *meta)
 {
-    if (!client || !client->data_dir || !block)
+    if (!client || !block)
     {
-        return;
+        return false;
+    }
+    if (!client->data_dir)
+    {
+        return true;
     }
 
     struct lantern_log_metadata fallback = {.validator = client->node_id};
@@ -342,7 +346,9 @@ static void persist_block_after_import(
             log_meta,
             "failed to persist block slot=%" PRIu64,
             block->block.slot);
+        return false;
     }
+    return true;
 }
 
 static int commit_and_publish_local_block(
@@ -476,18 +482,21 @@ static int commit_and_publish_local_block(
             &pre_transition_finalized,
             &meta);
         get_head_info_locked(client, &head_root, &head_slot);
-        persist_state_locked(client, &meta);
-        persist_post_state_locked(
-            client,
-            &client->state,
-            block_root,
-            &meta);
+        /* Commit dependencies before publishing the canonical state. */
+        if (persist_imported_block(client, block, &meta)
+            && persist_post_state_locked(
+                client,
+                &client->state,
+                block_root,
+                &meta))
+        {
+            persist_state_locked(client, &meta);
+        }
         lantern_client_unlock_state(client, state_locked);
     }
 
     if (committed)
     {
-        persist_block_after_import(client, block, &meta);
         update_network_view_after_import(client, block_root, block->block.slot);
         lantern_client_pending_remove_by_root(client, block_root);
         lantern_client_process_pending_children(client, block_root, false);
@@ -1373,15 +1382,19 @@ static void persist_state_locked(
  *
  * @note Thread safety: Caller must hold state_lock
  */
-static void persist_post_state_locked(
+static bool persist_post_state_locked(
     const struct lantern_client *client,
     const LanternState *post_state,
     const LanternRoot *block_root,
     const struct lantern_log_metadata *meta)
 {
-    if (!client || !client->data_dir || !post_state || !block_root)
+    if (!client || !post_state || !block_root)
     {
-        return;
+        return false;
+    }
+    if (!client->data_dir)
+    {
+        return true;
     }
 
     if (lantern_storage_store_state_for_root(&client->storage, block_root, post_state) != 0)
@@ -1391,7 +1404,9 @@ static void persist_post_state_locked(
             meta,
             "failed to persist post-state slot=%" PRIu64,
             post_state->slot);
+        return false;
     }
+    return true;
 }
 
 
@@ -1588,7 +1603,7 @@ static bool lantern_client_import_block_internal(
     if (root_known && allow_historical && block->block.slot <= known_slot)
     {
         lantern_client_unlock_state(client, state_locked);
-        persist_block_after_import(client, block, meta);
+        (void)persist_imported_block(client, block, meta);
         if (drain_pending_children)
         {
             lantern_client_process_pending_children(
@@ -1764,16 +1779,18 @@ static bool lantern_client_import_block_internal(
                 client,
                 &pre_adopt_finalized,
                 meta);
-            persist_state_locked(client, meta);
         }
 
-        if (processed)
-        {
-            persist_post_state_locked(
+        bool persisted = processed
+            && persist_imported_block(client, block, meta)
+            && persist_post_state_locked(
                 client,
                 &branch_state,
                 &block_root_local,
                 meta);
+        if (adopted_state && persisted)
+        {
+            persist_state_locked(client, meta);
         }
         lantern_state_reset(&branch_state);
 
@@ -1789,7 +1806,6 @@ static bool lantern_client_import_block_internal(
             {
                 lantern_client_cache_block_aggregated_proofs(client, block);
             }
-            persist_block_after_import(client, block, meta);
             update_network_view_after_import(client, &block_root_local, block->block.slot);
             if (drain_pending_children)
             {
@@ -1838,12 +1854,16 @@ static bool lantern_client_import_block_internal(
         &pre_transition_finalized,
         meta);
     get_head_info_locked(client, &head_root, &head_slot);
-    persist_state_locked(client, meta);
-    persist_post_state_locked(
-        client,
-        &client->state,
-        &block_root_local,
-        meta);
+    /* Commit dependencies before publishing the canonical state. */
+    if (persist_imported_block(client, block, meta)
+        && persist_post_state_locked(
+            client,
+            &client->state,
+            &block_root_local,
+            meta))
+    {
+        persist_state_locked(client, meta);
+    }
     imported = true;
 
 cleanup:
@@ -1856,7 +1876,6 @@ cleanup:
             lantern_client_cache_block_aggregated_proofs(client, block);
         }
         import_result = LANTERN_CLIENT_OK;
-        persist_block_after_import(client, block, meta);
         update_network_view_after_import(client, &block_root_local, block->block.slot);
         bool quiet_log = false;
         if (client->status_lock_initialized
