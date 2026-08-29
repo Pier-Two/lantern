@@ -31,6 +31,31 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBYAML REQUIRED IMPORTED_TARGET yaml-0.1)
 pkg_check_modules(LIBEVENT REQUIRED IMPORTED_TARGET libevent_extra libevent_pthreads)
 
+# ---- Link time optimisation ------------------------------------------------
+option(LANTERN_ENABLE_LTO "Build lantern's own targets with link time optimisation" ON)
+
+set(LANTERN_LTO_ENABLED OFF)
+if(LANTERN_ENABLE_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT _lantern_ipo_ok OUTPUT _lantern_ipo_reason LANGUAGES C)
+    if(_lantern_ipo_ok)
+        set(LANTERN_LTO_ENABLED ON)
+    else()
+        message(STATUS "lantern: LTO unavailable, continuing without it: ${_lantern_ipo_reason}")
+    endif()
+endif()
+
+function(lantern_enable_lto target_name)
+    if(NOT LANTERN_LTO_ENABLED)
+        return()
+    endif()
+    set_target_properties(${target_name} PROPERTIES
+        INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
+        INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON
+        INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL ON
+    )
+endfunction()
+
 set(LANTERN_LIBRARY_SOURCES
     src/consensus/containers.c
     src/consensus/fork_choice.c
@@ -102,6 +127,7 @@ function(lantern_define_library target_name wrapper_target)
             _DEFAULT_SOURCE
             _POSIX_C_SOURCE=200809L
     )
+    lantern_enable_lto(${target_name})
     lantern_configure_dependencies(${target_name} ${wrapper_target})
     target_link_libraries(${target_name} PRIVATE Threads::Threads CURL::libcurl PkgConfig::LIBYAML PkgConfig::LIBEVENT)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -135,6 +161,7 @@ add_custom_target(fixtures
 
 add_executable(lantern_cli src/core/main.c)
 target_link_libraries(lantern_cli PRIVATE lantern Threads::Threads)
+lantern_enable_lto(lantern_cli)
 if(NOT DEFINED LANTERN_GIT_COMMIT OR LANTERN_GIT_COMMIT STREQUAL "")
     execute_process(
         COMMAND git rev-parse --short HEAD
