@@ -1,13 +1,13 @@
 /**
- * @file client_internal.h
+ * @file internal.h
  * @brief Internal declarations for the client module
  *
  * This header contains internal types, constants, and function declarations
  * shared across client implementation files. It is NOT part of the public API.
  *
  * This is the main internal header that includes specialized headers:
- * - client_sync_internal.h: Block/vote synchronization
- * - client_services_internal.h: Networking, validator, HTTP, reqresp services
+ * - sync_internal.h: Block/vote synchronization
+ * - services_internal.h: Networking, validator, HTTP, reqresp services
  *
  * @note Lock ordering (acquire in this order to prevent deadlocks):
  *       1. state_lock
@@ -335,7 +335,7 @@ int collect_startup_attestation_subnets(
 
 
 /* ============================================================================
- * Genesis helpers (defined in client_init.c)
+ * Genesis helpers (defined in init.c)
  * ============================================================================ */
 
 int copy_genesis_paths(
@@ -351,7 +351,7 @@ int populate_local_validators(struct lantern_client *client);
 #endif
 
 /* Include specialized internal headers */
-#include "client_sync_internal.h"
-#include "client_services_internal.h"
+#include "sync_internal.h"
+#include "services_internal.h"
 
 #endif /* LANTERN_CLIENT_INTERNAL_H */

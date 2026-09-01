@@ -1,4 +1,4 @@
-#include "../../src/core/client_network_internal.h"
+#include "../../src/core/client/network_internal.h"
 
 #include "lantern/core/client.h"
 #include "lantern/metrics/lean_metrics.h"

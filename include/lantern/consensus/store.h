@@ -41,6 +41,18 @@ struct lantern_aggregated_payload_pool {
     size_t capacity;
 };
 
+struct lantern_latest_vote_entry {
+    bool present;
+    LanternRoot data_root;
+    LanternAttestationData data;
+};
+
+struct lantern_latest_vote_map {
+    /* Fork-choice votes are retained independently of bounded proof caches. */
+    struct lantern_latest_vote_entry *entries;
+    size_t capacity;
+};
+
 void lantern_aggregated_payload_pool_reset(
     struct lantern_aggregated_payload_pool *pool);
 int lantern_aggregated_payload_pool_add(
@@ -57,6 +69,8 @@ struct lantern_fork_choice_block_entry {
     LanternState state;
 };
 
+struct lantern_fork_choice_root_index_entry;
+
 struct lantern_fork_choice_checkpoint_snapshot {
     atomic_uint_fast64_t sequence;
     atomic_uint_fast64_t justified_slot;
@@ -69,6 +83,8 @@ struct lantern_store {
     struct lantern_attestation_signature_map attestation_signatures;
     struct lantern_aggregated_payload_pool new_aggregated_payloads;
     struct lantern_aggregated_payload_pool known_aggregated_payloads;
+    struct lantern_latest_vote_map new_votes;
+    struct lantern_latest_vote_map known_votes;
 
     LanternCheckpoint anchor;
     uint64_t time_intervals;
@@ -81,6 +97,9 @@ struct lantern_store {
     struct lantern_fork_choice_block_entry *blocks;
     size_t block_len;
     size_t block_cap;
+    /* Root-to-block index used by fork-choice ancestry walks. */
+    struct lantern_fork_choice_root_index_entry *root_index;
+    size_t root_index_cap;
 };
 
 void lantern_store_init(LanternStore *store);

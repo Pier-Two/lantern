@@ -3,68 +3,114 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdarg.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-enum LanternLogLevel {
-    LANTERN_LOG_LEVEL_TRACE = 0,
-    LANTERN_LOG_LEVEL_DEBUG,
-    LANTERN_LOG_LEVEL_INFO,
-    LANTERN_LOG_LEVEL_WARN,
-    LANTERN_LOG_LEVEL_ERROR,
-};
+    /** Log message severity. */
+    enum lantern_log_level
+    {
+        LANTERN_LOG_LEVEL_TRACE = 0,
+        LANTERN_LOG_LEVEL_DEBUG,
+        LANTERN_LOG_LEVEL_INFO,
+        LANTERN_LOG_LEVEL_WARN,
+        LANTERN_LOG_LEVEL_ERROR,
+    };
 
-struct lantern_log_metadata {
-    const char *validator;
-    const char *peer;
-    uint64_t slot;
-    bool has_slot;
-};
+    /** Borrowed context that remains valid for one log call. */
+    struct lantern_log_metadata
+    {
+        /** Validator or node identifier, or NULL when unavailable. */
+        const char *validator;
 
-void lantern_log_set_node_id(const char *node_id);
-void lantern_log_reset_node_id(void);
-void lantern_log_set_level(enum LanternLogLevel level);
-int lantern_log_set_level_from_string(const char *text, enum LanternLogLevel *out_level);
+        /** Peer identifier, or NULL when unavailable. */
+        const char *peer;
 
-void lantern_log_log(
-    enum LanternLogLevel level,
-    const char *component,
-    const struct lantern_log_metadata *metadata,
-    const char *fmt,
-    va_list args);
+        /** Consensus slot when has_slot is true. */
+        uint64_t slot;
 
-void lantern_log_trace(
-    const char *component,
-    const struct lantern_log_metadata *metadata,
-    const char *fmt,
-    ...) __attribute__((format(printf, 3, 4)));
+        /** True when slot contains a valid consensus slot. */
+        bool has_slot;
+    };
 
-void lantern_log_debug(
-    const char *component,
-    const struct lantern_log_metadata *metadata,
-    const char *fmt,
-    ...) __attribute__((format(printf, 3, 4)));
+    /**
+     * Set the minimum severity that the logger writes.
+     *
+     * This function is thread-safe.
+     *
+     * @param level Minimum severity.
+     *
+     * Values outside enum lantern_log_level do not change the current severity.
+     */
+    void lantern_log_set_level(enum lantern_log_level level);
 
-void lantern_log_info(
-    const char *component,
-    const struct lantern_log_metadata *metadata,
-    const char *fmt,
-    ...) __attribute__((format(printf, 3, 4)));
+    /**
+     * Parse and set the minimum log severity.
+     *
+     * This function is thread-safe.
+     *
+     * @param text Severity name.
+     * @param out_level Parsed severity, or NULL when it is not required.
+     * @return Zero on success, or -1 when text is invalid.
+     */
+    int lantern_log_set_level_from_string(const char *text,
+                                          enum lantern_log_level *out_level);
 
-void lantern_log_warn(
-    const char *component,
-    const struct lantern_log_metadata *metadata,
-    const char *fmt,
-    ...) __attribute__((format(printf, 3, 4)));
+#if defined(__GNUC__) || defined(__clang__)
+#define LANTERN_LOG_FORMAT(position, arguments)                                \
+    __attribute__((format(printf, position, arguments)))
+#else
+#define LANTERN_LOG_FORMAT(position, arguments)
+#endif
 
-void lantern_log_error(
-    const char *component,
-    const struct lantern_log_metadata *metadata,
-    const char *fmt,
-    ...) __attribute__((format(printf, 3, 4)));
+    /**
+     * Write a best-effort trace message with borrowed context.
+     *
+     * This function is thread-safe and borrows all pointers for the call.
+     */
+    void lantern_log_trace(const char *component,
+                           const struct lantern_log_metadata *metadata,
+                           const char *fmt, ...) LANTERN_LOG_FORMAT(3, 4);
+
+    /**
+     * Write a best-effort debug message with borrowed context.
+     *
+     * This function is thread-safe and borrows all pointers for the call.
+     */
+    void lantern_log_debug(const char *component,
+                           const struct lantern_log_metadata *metadata,
+                           const char *fmt, ...) LANTERN_LOG_FORMAT(3, 4);
+
+    /**
+     * Write a best-effort information message with borrowed context.
+     *
+     * This function is thread-safe and borrows all pointers for the call.
+     */
+    void lantern_log_info(const char *component,
+                          const struct lantern_log_metadata *metadata,
+                          const char *fmt, ...) LANTERN_LOG_FORMAT(3, 4);
+
+    /**
+     * Write a best-effort warning message with borrowed context.
+     *
+     * This function is thread-safe and borrows all pointers for the call.
+     */
+    void lantern_log_warn(const char *component,
+                          const struct lantern_log_metadata *metadata,
+                          const char *fmt, ...) LANTERN_LOG_FORMAT(3, 4);
+
+    /**
+     * Write a best-effort error message with borrowed context.
+     *
+     * This function is thread-safe and borrows all pointers for the call.
+     */
+    void lantern_log_error(const char *component,
+                           const struct lantern_log_metadata *metadata,
+                           const char *fmt, ...) LANTERN_LOG_FORMAT(3, 4);
+
+#undef LANTERN_LOG_FORMAT
 
 #ifdef __cplusplus
 }

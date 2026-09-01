@@ -1,5 +1,5 @@
 /**
- * @file client_init.c
+ * @file init.c
  * @brief Client initialization helpers
  *
  * @spec subspecs/containers/state/genesis.py in tools/leanSpec
@@ -8,14 +8,14 @@
  * validator population.
  *
  * Related files:
- * - client.c: Main client initialization and lifecycle
- * - client_keys.c: Key loading and management
+ * - lifecycle.c: Main client initialization and lifecycle
+ * - keys.c: Key loading and management
  *
  * @note Thread safety: Functions are called during single-threaded
  *       initialization phase. No locking required.
  */
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include "lantern/genesis/genesis.h"
 #include "lantern/networking/libp2p.h"

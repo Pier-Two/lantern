@@ -1,5 +1,5 @@
 /**
- * @file client_services_internal.h
+ * @file services_internal.h
  * @brief Internal declarations for validator, HTTP, and reqresp services
  *
  * @spec subspecs/networking/reqresp.py - request/response protocols
@@ -9,11 +9,11 @@
  * It is NOT part of the public API.
  *
  * Related files:
- * - client_validator.c: Validator duty execution
- * - client_http.c: HTTP API callbacks
- * - client_reqresp.c: Request/response protocol handling
- * - client_sync.c: Block request scheduling
- * - client_keys.c: Key management
+ * - validator.c: Validator duty execution
+ * - http.c: HTTP API callbacks
+ * - reqresp.c: Request/response protocol handling
+ * - sync.c: Block request scheduling
+ * - keys.c: Key management
  *
  * @note Lock ordering (acquire in this order to prevent deadlocks):
  *       1. state_lock
@@ -42,7 +42,7 @@ extern "C" {
 #endif
 
 /* Include network internal header for shared types */
-#include "client_network_internal.h"
+#include "network_internal.h"
 
 
 /* ============================================================================

@@ -1,5 +1,5 @@
 /**
- * @file client_sync_votes.c
+ * @file sync_votes.c
  * @brief Vote (attestation) processing and validation
  *
  * @spec subspecs/containers/attestation/attestation.py in tools/leanSpec
@@ -9,14 +9,14 @@
  * recording received votes to fork choice and state.
  *
  * Related files:
- * - client_sync.c: Main sync logic and gossip handlers
- * - client_sync_blocks.c: Block import logic
+ * - sync.c: Main sync logic and gossip handlers
+ * - sync_blocks.c: Block import logic
  *
  * @note Thread safety: Functions that access shared state acquire appropriate
- *       locks as documented. See client_internal.h for lock ordering.
+ *       locks as documented. See internal.h for lock ordering.
  */
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include <inttypes.h>
 #include <string.h>
@@ -43,7 +43,7 @@ enum lantern_vote_record_status
 
 
 /* ============================================================================
- * External Functions (from client_sync.c)
+ * External Functions (from sync.c)
  * ============================================================================ */
 
 bool lantern_client_verify_vote_signature(

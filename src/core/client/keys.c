@@ -1,5 +1,5 @@
 /**
- * @file client_keys.c
+ * @file keys.c
  * @brief XMSS key management for local validators
  *
  * Implements key loading, path resolution, and manifest parsing for xmss
@@ -13,7 +13,7 @@
  *       5. connection_lock
  */
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include <ctype.h>
 #include <errno.h>

@@ -11,7 +11,7 @@
 #include "tests/support/fixture_loader.h"
 #include "src/test_driver/driver.h"
 #include "../support/state_store_adapter.h"
-#include "../../src/core/client_sync_internal.h"
+#include "../../src/core/client/sync_internal.h"
 
 #include <dirent.h>
 #include <errno.h>

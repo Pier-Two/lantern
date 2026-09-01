@@ -1,11 +1,11 @@
 /**
- * @file client_subnets.c
+ * @file subnets.c
  * @brief Attestation-subnet accessors and startup subnet collection
  *
- * @see client_internal.h for shared internal declarations
+ * @see internal.h for shared internal declarations
  */
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include "lantern/consensus/containers.h"
 

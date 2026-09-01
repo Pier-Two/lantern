@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(lantern VERSION 0.1.0 LANGUAGES C)
+project(lantern LANGUAGES C)
 
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
@@ -31,6 +31,31 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBYAML REQUIRED IMPORTED_TARGET yaml-0.1)
 pkg_check_modules(LIBEVENT REQUIRED IMPORTED_TARGET libevent_extra libevent_pthreads)
 
+# ---- Link time optimisation ------------------------------------------------
+option(LANTERN_ENABLE_LTO "Build lantern's own targets with link time optimisation" ON)
+
+set(LANTERN_LTO_ENABLED OFF)
+if(LANTERN_ENABLE_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT _lantern_ipo_ok OUTPUT _lantern_ipo_reason LANGUAGES C)
+    if(_lantern_ipo_ok)
+        set(LANTERN_LTO_ENABLED ON)
+    else()
+        message(STATUS "lantern: LTO unavailable, continuing without it: ${_lantern_ipo_reason}")
+    endif()
+endif()
+
+function(lantern_enable_lto target_name)
+    if(NOT LANTERN_LTO_ENABLED)
+        return()
+    endif()
+    set_target_properties(${target_name} PROPERTIES
+        INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
+        INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON
+        INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL ON
+    )
+endfunction()
+
 set(LANTERN_LIBRARY_SOURCES
     src/consensus/containers.c
     src/consensus/fork_choice.c
@@ -40,29 +65,29 @@ set(LANTERN_LIBRARY_SOURCES
     src/consensus/state.c
     src/consensus/store.c
     src/consensus/ssz.c
-    src/core/client.c
-    src/core/client_checkpoint.c
-    src/core/client_fork_choice.c
-    src/core/client_http.c
-    src/core/client_init.c
-    src/core/client_keys.c
-    src/core/client_network.c
-    src/core/client_options.c
-    src/core/client_peers.c
-    src/core/client_pending.c
-    src/core/client_reqresp.c
-    src/core/client_subnets.c
-    src/core/client_sync.c
-    src/core/client_sync_blocks.c
-    src/core/client_sync_votes.c
-	    src/core/client_utils.c
-		    src/core/client_validator.c
-		    src/genesis/genesis.c
-		    src/genesis/genesis_parse.c
-		    src/genesis/genesis_parse_helpers.c
-		    src/genesis/genesis_validator_config.c
-		    src/encoding/snappy.c
-	    src/networking/enr.c
+    src/core/client/lifecycle.c
+    src/core/client/checkpoint.c
+    src/core/client/fork_choice.c
+    src/core/client/http.c
+    src/core/client/init.c
+    src/core/client/keys.c
+    src/core/client/network.c
+    src/core/client/options.c
+    src/core/client/peers.c
+    src/core/client/pending.c
+    src/core/client/reqresp.c
+    src/core/client/subnets.c
+    src/core/client/sync.c
+    src/core/client/sync_blocks.c
+    src/core/client/sync_votes.c
+    src/core/client/utils.c
+    src/core/client/validator.c
+    src/genesis/genesis.c
+    src/genesis/genesis_parse.c
+    src/genesis/genesis_parse_helpers.c
+    src/genesis/genesis_validator_config.c
+    src/encoding/snappy.c
+    src/networking/enr.c
     src/networking/gossip.c
     src/networking/gossipsub_service.c
     src/networking/gossip_payloads.c
@@ -102,6 +127,7 @@ function(lantern_define_library target_name wrapper_target)
             _DEFAULT_SOURCE
             _POSIX_C_SOURCE=200809L
     )
+    lantern_enable_lto(${target_name})
     lantern_configure_dependencies(${target_name} ${wrapper_target})
     target_link_libraries(${target_name} PRIVATE Threads::Threads CURL::libcurl PkgConfig::LIBYAML PkgConfig::LIBEVENT)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -135,6 +161,7 @@ add_custom_target(fixtures
 
 add_executable(lantern_cli src/core/main.c)
 target_link_libraries(lantern_cli PRIVATE lantern Threads::Threads)
+lantern_enable_lto(lantern_cli)
 if(NOT DEFINED LANTERN_GIT_COMMIT OR LANTERN_GIT_COMMIT STREQUAL "")
     execute_process(
         COMMAND git rev-parse --short HEAD
@@ -325,6 +352,10 @@ if(LANTERN_BUILD_TESTS)
     add_executable(lantern_slot_clock_test tests/unit/test_slot_clock.c)
     target_link_libraries(lantern_slot_clock_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_slot_clock COMMAND lantern_slot_clock_test)
+
+    add_executable(lantern_support_test tests/unit/test_support.c)
+    target_link_libraries(lantern_support_test PRIVATE ${LANTERN_TEST_LINK_LIB})
+    add_test(NAME lantern_support COMMAND lantern_support_test)
 
     add_executable(lantern_snappy_test tests/unit/test_snappy.c)
     target_link_libraries(lantern_snappy_test PRIVATE ${LANTERN_TEST_LINK_LIB})

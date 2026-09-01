@@ -1,5 +1,5 @@
 /**
- * @file client_network.c
+ * @file network.c
  * @brief Networking and connection management functions
  *
  * Implements peer connection tracking, peer dialer service, ping service,
@@ -13,7 +13,7 @@
  *       5. connection_lock
  */
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include <pthread.h>
 #include <stdio.h>

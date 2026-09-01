@@ -1542,6 +1542,12 @@ static int test_fork_choice_advance_time_schedules_votes(void) {
     assert(lantern_fork_choice_advance_to(&store, 4u, false) == 0);
     head = store.head;
     assert(roots_equal(&head, &block_voted_root));
+    assert(store.new_aggregated_payloads.length == 0u);
+    assert(store.known_aggregated_payloads.length == 3u);
+    assert(store.known_votes.capacity >= 3u);
+    assert(store.known_votes.entries[0].present);
+    assert(store.known_votes.entries[1].present);
+    assert(store.known_votes.entries[2].present);
 
     const LanternRoot *safe_final = &store.safe_target;
     assert(safe_final && roots_equal(safe_final, &block_voted_root));
@@ -1914,6 +1920,153 @@ static int test_fork_choice_accept_new_aggregated_payloads_updates_head(void) {
     return 0;
 }
 
+static int test_latest_votes_survive_payload_eviction(void) {
+    LanternStore store;
+    lantern_store_init(&store);
+
+    LanternAggregatedSignatureProof validator_zero_proof;
+    LanternAggregatedSignatureProof validator_one_proof;
+    assert(build_dummy_proof(&validator_zero_proof, 0u, 0x21) == 0);
+    assert(build_dummy_proof(&validator_one_proof, 1u, 0x31) == 0);
+
+    LanternAttestationData first = {0};
+    first.slot = 1u;
+    first.head.slot = 1u;
+    fill_root(&first.head.root, 0x41);
+    first.target = first.head;
+    LanternRoot first_root;
+    assert(lantern_hash_tree_root_attestation_data(&first, &first_root) == SSZ_SUCCESS);
+    assert(lantern_store_add_known_aggregated_payload(
+        &store,
+        &first_root,
+        &first,
+        &validator_zero_proof) == 0);
+
+    for (size_t i = 0u; i < 512u; ++i) {
+        LanternAttestationData data = {0};
+        data.slot = (uint64_t)i + 2u;
+        data.head.slot = data.slot;
+        fill_root(&data.head.root, (uint8_t)(i + 1u));
+        data.target = data.head;
+        LanternRoot data_root;
+        assert(lantern_hash_tree_root_attestation_data(&data, &data_root) == SSZ_SUCCESS);
+        assert(lantern_store_add_known_aggregated_payload(
+            &store,
+            &data_root,
+            &data,
+            &validator_one_proof) == 0);
+    }
+
+    assert(store.known_aggregated_payloads.length == 512u);
+    bool first_payload_retained = false;
+    for (size_t i = 0u; i < store.known_aggregated_payloads.length; ++i) {
+        if (roots_equal(
+                &store.known_aggregated_payloads.entries[i].data_root,
+                &first_root)) {
+            first_payload_retained = true;
+            break;
+        }
+    }
+    assert(!first_payload_retained);
+    assert(store.known_votes.capacity >= 2u);
+    assert(store.known_votes.entries[0].present);
+    assert(roots_equal(&store.known_votes.entries[0].data_root, &first_root));
+
+    LanternAggregatedSignatureProof validator_two_proof;
+    assert(build_dummy_proof(&validator_two_proof, 2u, 0x41) == 0);
+    LanternAttestationData first_new = {0};
+    first_new.slot = 1000u;
+    first_new.head.slot = first_new.slot;
+    fill_root(&first_new.head.root, 0x51);
+    first_new.target = first_new.head;
+    LanternRoot first_new_root;
+    assert(lantern_hash_tree_root_attestation_data(
+        &first_new,
+        &first_new_root) == SSZ_SUCCESS);
+    assert(lantern_store_add_new_aggregated_payload(
+        &store,
+        &first_new_root,
+        &first_new,
+        &validator_two_proof) == 0);
+    for (size_t i = 0u; i < 64u; ++i) {
+        LanternAttestationData data = {0};
+        data.slot = (uint64_t)i + 1001u;
+        data.head.slot = data.slot;
+        fill_root(&data.head.root, (uint8_t)(i + 0x61u));
+        data.target = data.head;
+        LanternRoot data_root;
+        assert(lantern_hash_tree_root_attestation_data(&data, &data_root) == SSZ_SUCCESS);
+        assert(lantern_store_add_new_aggregated_payload(
+            &store,
+            &data_root,
+            &data,
+            &validator_one_proof) == 0);
+    }
+    assert(store.new_aggregated_payloads.length == 64u);
+    assert(store.new_votes.capacity >= 3u);
+    assert(store.new_votes.entries[2].present);
+    assert(roots_equal(&store.new_votes.entries[2].data_root, &first_new_root));
+    assert(lantern_store_promote_new_aggregated_payloads(&store) == 64u);
+    assert(store.known_votes.entries[2].present);
+    assert(roots_equal(&store.known_votes.entries[2].data_root, &first_new_root));
+
+    lantern_aggregated_signature_proof_reset(&validator_two_proof);
+    lantern_aggregated_signature_proof_reset(&validator_one_proof);
+    lantern_aggregated_signature_proof_reset(&validator_zero_proof);
+    lantern_store_reset(&store);
+    return 0;
+}
+
+static int test_latest_vote_equal_slot_tie_break_is_deterministic(void) {
+    LanternStore store;
+    lantern_store_init(&store);
+
+    LanternAggregatedSignatureProof proof;
+    assert(build_dummy_proof(&proof, 0u, 0x51) == 0);
+
+    LanternAttestationData first = {0};
+    first.slot = 10u;
+    first.head.slot = 10u;
+    fill_root(&first.head.root, 0x61);
+    first.target = first.head;
+    LanternRoot first_root;
+    assert(lantern_hash_tree_root_attestation_data(&first, &first_root) == SSZ_SUCCESS);
+
+    LanternAttestationData second = first;
+    fill_root(&second.head.root, 0x71);
+    second.target = second.head;
+    LanternRoot second_root;
+    assert(lantern_hash_tree_root_attestation_data(&second, &second_root) == SSZ_SUCCESS);
+
+    const LanternAttestationData *lower_data = &first;
+    const LanternRoot *lower_root = &first_root;
+    const LanternAttestationData *higher_data = &second;
+    const LanternRoot *higher_root = &second_root;
+    if (memcmp(first_root.bytes, second_root.bytes, LANTERN_ROOT_SIZE) > 0) {
+        lower_data = &second;
+        lower_root = &second_root;
+        higher_data = &first;
+        higher_root = &first_root;
+    }
+
+    assert(lantern_store_add_known_aggregated_payload(
+        &store,
+        higher_root,
+        higher_data,
+        &proof) == 0);
+    assert(lantern_store_add_known_aggregated_payload(
+        &store,
+        lower_root,
+        lower_data,
+        &proof) == 0);
+    assert(store.known_votes.entries[0].present);
+    assert(roots_equal(&store.known_votes.entries[0].data_root, higher_root));
+
+    lantern_aggregated_signature_proof_reset(&proof);
+    lantern_store_reset(&store);
+    return 0;
+}
+
 int main(void) {
     if (test_fork_choice_block_sequence() != 0) {
         return 1;
@@ -1964,6 +2117,12 @@ int main(void) {
         return 1;
     }
     if (test_fork_choice_accept_new_aggregated_payloads_updates_head() != 0) {
+        return 1;
+    }
+    if (test_latest_votes_survive_payload_eviction() != 0) {
+        return 1;
+    }
+    if (test_latest_vote_equal_slot_tie_break_is_deterministic() != 0) {
         return 1;
     }
     return 0;

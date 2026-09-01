@@ -1,5 +1,5 @@
 /**
- * @file client_network_internal.h
+ * @file network_internal.h
  * @brief Internal declarations for networking and peer management
  *
  * @spec subspecs/networking/connection.py - connection management
@@ -9,8 +9,8 @@
  * It is NOT part of the public API.
  *
  * Related files:
- * - client_network.c: Network connection management
- * - client_peers.c: Peer status tracking
+ * - network.c: Network connection management
+ * - peers.c: Peer status tracking
  *
  * @note Lock ordering (acquire in this order to prevent deadlocks):
  *       1. state_lock

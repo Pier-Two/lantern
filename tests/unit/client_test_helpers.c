@@ -1,6 +1,6 @@
 #include "client_test_helpers.h"
 
-#include "../../src/core/client_internal.h"
+#include "../../src/core/client/internal.h"
 
 #include <ctype.h>
 #include <errno.h>

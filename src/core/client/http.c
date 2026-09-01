@@ -1,5 +1,5 @@
 /**
- * @file client_http.c
+ * @file http.c
  * @brief HTTP server and metrics callbacks
  *
  * Implements callback functions for the HTTP server and metrics collection.
@@ -12,7 +12,7 @@
  *       5. connection_lock
  */
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include <inttypes.h>
 #include <pthread.h>

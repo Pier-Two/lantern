@@ -7,6 +7,8 @@
 #include "lantern/consensus/signature.h"
 
 static const size_t LANTERN_AGG_PROOF_CACHE_LIMIT = 4096u;
+static const size_t LANTERN_NEW_AGG_PROOF_CACHE_LIMIT = 64u;
+static const size_t LANTERN_KNOWN_AGG_PROOF_CACHE_LIMIT = 512u;
 static const size_t LANTERN_ATTESTATION_SIGNATURE_LIMIT = LANTERN_VALIDATOR_REGISTRY_LIMIT;
 
 static bool signature_key_equals(
@@ -78,6 +80,118 @@ static bool proof_has_participant(const LanternAggregatedSignatureProof *proof) 
         }
     }
     return false;
+}
+
+static void latest_vote_map_reset(struct lantern_latest_vote_map *map) {
+    if (!map) {
+        return;
+    }
+    free(map->entries);
+    *map = (struct lantern_latest_vote_map){0};
+}
+
+static void latest_vote_map_clear(struct lantern_latest_vote_map *map) {
+    if (!map || !map->entries) {
+        return;
+    }
+    memset(map->entries, 0, map->capacity * sizeof(*map->entries));
+}
+
+static int latest_vote_map_reserve(
+    struct lantern_latest_vote_map *map,
+    size_t required) {
+    if (!map || required > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return -1;
+    }
+    if (map->capacity >= required) {
+        return 0;
+    }
+    size_t capacity = map->capacity == 0u ? 8u : map->capacity;
+    while (capacity < required) {
+        capacity *= 2u;
+    }
+    if (capacity > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        capacity = LANTERN_VALIDATOR_REGISTRY_LIMIT;
+    }
+    struct lantern_latest_vote_entry *entries = realloc(
+        map->entries,
+        capacity * sizeof(*entries));
+    if (!entries) {
+        return -1;
+    }
+    memset(
+        &entries[map->capacity],
+        0,
+        (capacity - map->capacity) * sizeof(*entries));
+    map->entries = entries;
+    map->capacity = capacity;
+    return 0;
+}
+
+static bool latest_vote_should_replace(
+    const struct lantern_latest_vote_entry *current,
+    const LanternRoot *data_root,
+    const LanternAttestationData *data) {
+    if (!current || !data_root || !data) {
+        return false;
+    }
+    if (!current->present || data->slot > current->data.slot) {
+        return true;
+    }
+    return data->slot == current->data.slot
+        && memcmp(data_root->bytes, current->data_root.bytes, LANTERN_ROOT_SIZE) > 0;
+}
+
+static void latest_vote_map_record_proof(
+    struct lantern_latest_vote_map *map,
+    const LanternRoot *data_root,
+    const LanternAttestationData *data,
+    const LanternAggregatedSignatureProof *proof) {
+    if (!map || !map->entries || !data_root || !data || !proof) {
+        return;
+    }
+    size_t limit = proof_participant_limit(proof);
+    if (limit > map->capacity) {
+        limit = map->capacity;
+    }
+    for (size_t validator = 0u; validator < limit; ++validator) {
+        if (!lantern_bitlist_get(&proof->participants, validator)) {
+            continue;
+        }
+        struct lantern_latest_vote_entry *entry = &map->entries[validator];
+        if (latest_vote_should_replace(entry, data_root, data)) {
+            entry->present = true;
+            entry->data_root = *data_root;
+            entry->data = *data;
+        }
+    }
+}
+
+static int latest_vote_map_promote(
+    struct lantern_latest_vote_map *known,
+    struct lantern_latest_vote_map *pending) {
+    if (!known || !pending) {
+        return -1;
+    }
+    if (latest_vote_map_reserve(known, pending->capacity) != 0) {
+        return -1;
+    }
+    for (size_t validator = 0u; validator < pending->capacity; ++validator) {
+        const struct lantern_latest_vote_entry *candidate =
+            &pending->entries[validator];
+        if (!candidate->present) {
+            continue;
+        }
+        struct lantern_latest_vote_entry *current = &known->entries[validator];
+        if (latest_vote_should_replace(
+                current,
+                &candidate->data_root,
+                &candidate->data)) {
+            *current = *candidate;
+        }
+    }
+    latest_vote_map_clear(pending);
+    return 0;
 }
 
 static bool proof_participants_subset_of(
@@ -306,12 +420,13 @@ static void aggregated_payload_pool_prune_subsets_of_entry(
     }
 }
 
-int lantern_aggregated_payload_pool_add(
+static int aggregated_payload_pool_add_with_limit(
     struct lantern_aggregated_payload_pool *pool,
     const LanternRoot *data_root,
     const LanternAttestationData *data,
-    const LanternAggregatedSignatureProof *proof) {
-    if (!pool || !data_root || !data || !proof) {
+    const LanternAggregatedSignatureProof *proof,
+    size_t max_length) {
+    if (!pool || !data_root || !data || !proof || max_length == 0u) {
         return -1;
     }
     if (!proof_has_participant(proof) || proof->proof_data.length == 0) {
@@ -327,13 +442,13 @@ int lantern_aggregated_payload_pool_add(
     if (aggregated_payload_pool_covers_proof_participants(pool, data_root, proof)) {
         return 0;
     }
-    if (pool->length >= LANTERN_AGG_PROOF_CACHE_LIMIT) {
+    while (pool->length >= max_length) {
         aggregated_payload_pool_remove_index(pool, 0u);
     }
     if (pool->length >= pool->capacity) {
         size_t desired = pool->capacity == 0 ? 8u : pool->capacity * 2u;
-        if (desired > LANTERN_AGG_PROOF_CACHE_LIMIT) {
-            desired = LANTERN_AGG_PROOF_CACHE_LIMIT;
+        if (desired > max_length) {
+            desired = max_length;
         }
         if (desired <= pool->capacity) {
             return -1;
@@ -359,6 +474,19 @@ int lantern_aggregated_payload_pool_add(
     return 0;
 }
 
+int lantern_aggregated_payload_pool_add(
+    struct lantern_aggregated_payload_pool *pool,
+    const LanternRoot *data_root,
+    const LanternAttestationData *data,
+    const LanternAggregatedSignatureProof *proof) {
+    return aggregated_payload_pool_add_with_limit(
+        pool,
+        data_root,
+        data,
+        proof,
+        LANTERN_AGG_PROOF_CACHE_LIMIT);
+}
+
 void lantern_store_init(LanternStore *store) {
     if (!store) {
         return;
@@ -381,6 +509,8 @@ void lantern_store_reset(LanternStore *store) {
     attestation_signature_map_reset(&store->attestation_signatures);
     lantern_aggregated_payload_pool_reset(&store->new_aggregated_payloads);
     lantern_aggregated_payload_pool_reset(&store->known_aggregated_payloads);
+    latest_vote_map_reset(&store->new_votes);
+    latest_vote_map_reset(&store->known_votes);
 }
 
 int lantern_store_set_attestation_signature(
@@ -427,6 +557,32 @@ size_t lantern_store_remove_attestation_signatures_for_data_root(
     return removed;
 }
 
+static int store_add_aggregated_payload(
+    struct lantern_aggregated_payload_pool *pool,
+    struct lantern_latest_vote_map *votes,
+    size_t cache_limit,
+    const LanternRoot *data_root,
+    const LanternAttestationData *data,
+    const LanternAggregatedSignatureProof *proof) {
+    if (!pool || !votes || !data_root || !data || !proof) {
+        return -1;
+    }
+    size_t vote_capacity = proof_participant_limit(proof);
+    if (latest_vote_map_reserve(votes, vote_capacity) != 0) {
+        return -1;
+    }
+    int rc = aggregated_payload_pool_add_with_limit(
+        pool,
+        data_root,
+        data,
+        proof,
+        cache_limit);
+    if (rc == 0) {
+        latest_vote_map_record_proof(votes, data_root, data, proof);
+    }
+    return rc;
+}
+
 int lantern_store_add_new_aggregated_payload(
     LanternStore *store,
     const LanternRoot *data_root,
@@ -435,8 +591,10 @@ int lantern_store_add_new_aggregated_payload(
     if (!store) {
         return -1;
     }
-    return lantern_aggregated_payload_pool_add(
+    return store_add_aggregated_payload(
         &store->new_aggregated_payloads,
+        &store->new_votes,
+        LANTERN_NEW_AGG_PROOF_CACHE_LIMIT,
         data_root,
         data,
         proof);
@@ -450,8 +608,10 @@ int lantern_store_add_known_aggregated_payload(
     if (!store) {
         return -1;
     }
-    return lantern_aggregated_payload_pool_add(
+    return store_add_aggregated_payload(
         &store->known_aggregated_payloads,
+        &store->known_votes,
+        LANTERN_KNOWN_AGG_PROOF_CACHE_LIMIT,
         data_root,
         data,
         proof);
@@ -462,6 +622,7 @@ void lantern_store_clear_new_aggregated_payloads(LanternStore *store) {
         return;
     }
     lantern_aggregated_payload_pool_reset(&store->new_aggregated_payloads);
+    latest_vote_map_clear(&store->new_votes);
 }
 
 size_t lantern_store_remove_new_aggregated_payloads_matching(
@@ -500,6 +661,9 @@ size_t lantern_store_remove_new_aggregated_payloads_matching(
 
 size_t lantern_store_promote_new_aggregated_payloads(LanternStore *store) {
     if (!store) {
+        return 0u;
+    }
+    if (latest_vote_map_promote(&store->known_votes, &store->new_votes) != 0) {
         return 0u;
     }
     size_t moved = 0u;

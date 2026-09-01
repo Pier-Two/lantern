@@ -1,5 +1,5 @@
 /**
- * @file client_sync.c
+ * @file sync.c
  * @brief Block and vote synchronization infrastructure
  *
  * @spec subspecs/forkchoice/store.py in tools/leanSpec
@@ -8,14 +8,14 @@
  * from storage, pending block management, and validator state refresh.
  *
  * Related files:
- * - client_sync_votes.c: Vote processing and validation
- * - client_sync_blocks.c: Block import and signature verification
+ * - sync_votes.c: Vote processing and validation
+ * - sync_blocks.c: Block import and signature verification
  *
  * @note Thread safety: Functions that access shared state acquire appropriate
- *       locks as documented. See client_internal.h for lock ordering.
+ *       locks as documented. See internal.h for lock ordering.
  */
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include <inttypes.h>
 #include <stdlib.h>
