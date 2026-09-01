@@ -1,5 +1,5 @@
 /**
- * @file client_utils.c
+ * @file utils.c
  * @brief Client utility functions and locking primitives
  *
  * Implements utility functions used across client modules including:
@@ -11,7 +11,7 @@
  * @note Thread safety: Lock functions are thread-safe.
  */
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include <errno.h>
 #include <inttypes.h>

@@ -1,5 +1,5 @@
 /**
- * @file client_sync_blocks.c
+ * @file sync_blocks.c
  * @brief Block import and signature verification
  *
  * @spec subspecs/containers/block/block.py in tools/leanSpec
@@ -10,14 +10,14 @@
  * state transitions, and block recording.
  *
  * Related files:
- * - client_sync.c: Main sync logic and gossip handlers
- * - client_sync_votes.c: Vote processing
+ * - sync.c: Main sync logic and gossip handlers
+ * - sync_votes.c: Vote processing
  *
  * @note Thread safety: Functions that access shared state acquire appropriate
- *       locks as documented. See client_internal.h for lock ordering.
+ *       locks as documented. See internal.h for lock ordering.
  */
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include <errno.h>
 #include <inttypes.h>

@@ -1,11 +1,11 @@
 /**
- * @file client_options.c
+ * @file options.c
  * @brief Configuration parsing for the Lantern client options struct
  *
- * @see client_internal.h for shared internal declarations
+ * @see internal.h for shared internal declarations
  */
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include <ctype.h>
 #include <errno.h>

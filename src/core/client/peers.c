@@ -1,5 +1,5 @@
 /**
- * @file client_peers.c
+ * @file peers.c
  * @brief Peer status and vote metric tracking
  *
  * Implements peer status entry management and vote metrics tracking
@@ -13,7 +13,7 @@
  *       5. connection_lock
  */
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include <pthread.h>
 #include <stdlib.h>

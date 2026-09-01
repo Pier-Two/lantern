@@ -1,11 +1,11 @@
 /**
- * @file client_checkpoint.c
+ * @file checkpoint.c
  * @brief State loading and checkpoint sync handling
  *
- * @see client_internal.h for shared internal declarations
+ * @see internal.h for shared internal declarations
  */
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/hash.h"

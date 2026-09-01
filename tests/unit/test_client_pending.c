@@ -6,9 +6,9 @@
 #include <unistd.h>
 
 #include "client_test_helpers.h"
-#include "../../src/core/client_network_internal.h"
-#include "../../src/core/client_services_internal.h"
-#include "../../src/core/client_sync_internal.h"
+#include "../../src/core/client/network_internal.h"
+#include "../../src/core/client/services_internal.h"
+#include "../../src/core/client/sync_internal.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"

@@ -1,5 +1,5 @@
 /**
- * @file client_sync_internal.h
+ * @file sync_internal.h
  * @brief Internal declarations for block/vote synchronization
  *
  * @spec subspecs/sync/sync.py - synchronization protocol
@@ -8,10 +8,10 @@
  * block and vote synchronization. It is NOT part of the public API.
  *
  * Related files:
- * - client_sync.c: Block/vote synchronization main logic
- * - client_sync_blocks.c: Block import and fork choice
- * - client_sync_votes.c: Vote processing and validation
- * - client_pending.c: Pending block management
+ * - sync.c: Block/vote synchronization main logic
+ * - sync_blocks.c: Block import and fork choice
+ * - sync_votes.c: Vote processing and validation
+ * - pending.c: Pending block management
  *
  * @note Lock ordering (acquire in this order to prevent deadlocks):
  *       1. state_lock
@@ -24,7 +24,7 @@
 #ifndef LANTERN_CLIENT_SYNC_INTERNAL_H
 #define LANTERN_CLIENT_SYNC_INTERNAL_H
 
-#include "client_network_internal.h"
+#include "network_internal.h"
 #include "lantern/core/client.h"
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/state.h"

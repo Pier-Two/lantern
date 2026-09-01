@@ -5,7 +5,7 @@
 
 #include "lantern/consensus/state.h"
 
-#include "../../src/core/client_internal.h"
+#include "../../src/core/client/internal.h"
 
 static int expect_case(
     const char *label,

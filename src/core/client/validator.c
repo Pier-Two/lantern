@@ -1,5 +1,5 @@
 /**
- * @file client_validator.c
+ * @file validator.c
  * @brief Validator service and duty management
  *
  * Implements the validator service thread, block proposal,
@@ -13,7 +13,7 @@
  *       5. connection_lock
  */
 
-#include "client_services_internal.h"
+#include "services_internal.h"
 
 #include <inttypes.h>
 #include <pthread.h>
@@ -26,7 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"

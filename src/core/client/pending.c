@@ -1,5 +1,5 @@
 /**
- * @file client_pending.c
+ * @file pending.c
  * @brief Pending and persisted block list management
  *
  * Implements list operations for pending blocks (waiting for parent)
@@ -10,7 +10,7 @@
  *       - Persisted list helpers are thread-safe.
  */
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include <stdint.h>
 #include <stdlib.h>

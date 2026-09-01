@@ -20,9 +20,9 @@
 #include "../support/validator_registry.h"
 #include "../support/storage_cleanup.h"
 #include "client_test_helpers.h"
-#include "../../src/core/client_internal.h"
-#include "../../src/core/client_services_internal.h"
-#include "../../src/core/client_sync_internal.h"
+#include "../../src/core/client/internal.h"
+#include "../../src/core/client/services_internal.h"
+#include "../../src/core/client/sync_internal.h"
 
 static void fill_pubkeys(uint8_t *pubkeys, size_t count)
 {

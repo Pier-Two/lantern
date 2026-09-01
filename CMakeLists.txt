@@ -65,29 +65,29 @@ set(LANTERN_LIBRARY_SOURCES
     src/consensus/state.c
     src/consensus/store.c
     src/consensus/ssz.c
-    src/core/client.c
-    src/core/client_checkpoint.c
-    src/core/client_fork_choice.c
-    src/core/client_http.c
-    src/core/client_init.c
-    src/core/client_keys.c
-    src/core/client_network.c
-    src/core/client_options.c
-    src/core/client_peers.c
-    src/core/client_pending.c
-    src/core/client_reqresp.c
-    src/core/client_subnets.c
-    src/core/client_sync.c
-    src/core/client_sync_blocks.c
-    src/core/client_sync_votes.c
-	    src/core/client_utils.c
-		    src/core/client_validator.c
-		    src/genesis/genesis.c
-		    src/genesis/genesis_parse.c
-		    src/genesis/genesis_parse_helpers.c
-		    src/genesis/genesis_validator_config.c
-		    src/encoding/snappy.c
-	    src/networking/enr.c
+    src/core/client/lifecycle.c
+    src/core/client/checkpoint.c
+    src/core/client/fork_choice.c
+    src/core/client/http.c
+    src/core/client/init.c
+    src/core/client/keys.c
+    src/core/client/network.c
+    src/core/client/options.c
+    src/core/client/peers.c
+    src/core/client/pending.c
+    src/core/client/reqresp.c
+    src/core/client/subnets.c
+    src/core/client/sync.c
+    src/core/client/sync_blocks.c
+    src/core/client/sync_votes.c
+    src/core/client/utils.c
+    src/core/client/validator.c
+    src/genesis/genesis.c
+    src/genesis/genesis_parse.c
+    src/genesis/genesis_parse_helpers.c
+    src/genesis/genesis_validator_config.c
+    src/encoding/snappy.c
+    src/networking/enr.c
     src/networking/gossip.c
     src/networking/gossipsub_service.c
     src/networking/gossip_payloads.c

@@ -1,11 +1,11 @@
 /**
- * @file client_fork_choice.c
+ * @file fork_choice.c
  * @brief Fork-choice interval advancement and aggregated-payload pools
  *
- * @see client_internal.h for shared internal declarations
+ * @see internal.h for shared internal declarations
  */
 
-#include "client_internal.h"
+#include "internal.h"
 
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/slot_clock.h"

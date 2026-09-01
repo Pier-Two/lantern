@@ -1,5 +1,5 @@
 /**
- * @file client_reqresp.c
+ * @file reqresp.c
  * @brief Request/response protocol callbacks and peer status handling
  *
  * @spec subspecs/networking/reqresp in tools/leanSpec
@@ -15,8 +15,8 @@
  *       5. connection_lock
  */
 
-#include "client_internal.h"
-#include "client_network_internal.h"
+#include "internal.h"
+#include "network_internal.h"
 
 #include <inttypes.h>
 #include <pthread.h>
