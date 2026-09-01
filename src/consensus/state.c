@@ -34,7 +34,9 @@ int lantern_proposer_for_slot(
 }
 
 static void record_attestation_validation_metric(double start_seconds, bool valid) {
-    lean_metrics_record_attestation_validation(lantern_time_now_seconds() - start_seconds, valid);
+    lean_metrics_record_attestation_validation(
+        lantern_time_elapsed_seconds(start_seconds, lantern_time_now_seconds()),
+        valid);
 }
 
 static uint64_t lantern_state_justified_slots_anchor(const LanternState *state) {
@@ -2013,7 +2015,11 @@ int lantern_state_process_attestations(
 
     state->latest_justified = latest_justified;
     state->latest_finalized = latest_finalized;
-    lean_metrics_record_state_transition_attestations(att_attempted, lantern_time_now_seconds() - att_batch_start);
+    lean_metrics_record_state_transition_attestations(
+        att_attempted,
+        lantern_time_elapsed_seconds(
+            att_batch_start,
+            lantern_time_now_seconds()));
     return 0;
 }
 
@@ -2031,7 +2037,10 @@ int lantern_state_process_block(
         return -1;
     }
 
-    lean_metrics_record_state_transition_block(lantern_time_now_seconds() - block_metrics_start);
+    lean_metrics_record_state_transition_block(
+        lantern_time_elapsed_seconds(
+            block_metrics_start,
+            lantern_time_now_seconds()));
     return 0;
 }
 
@@ -2065,7 +2074,9 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
     if (lantern_state_process_slots(state, block->slot) != 0) {
         STATE_FAIL("process slots failed current=%" PRIu64, state->slot);
     }
-    double slots_duration = lantern_time_now_seconds() - slots_metrics_start;
+    double slots_duration = lantern_time_elapsed_seconds(
+        slots_metrics_start,
+        lantern_time_now_seconds());
     uint64_t slots_processed = block->slot >= slot_before ? (block->slot - slot_before) : 0;
     lean_metrics_record_state_transition_slots(slots_processed, slots_duration);
     if (lantern_state_process_block(state, block) != 0) {
@@ -2154,7 +2165,10 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
     }
 
     state->slot = block->slot;
-    lean_metrics_record_state_transition(lantern_time_now_seconds() - transition_metrics_start);
+    lean_metrics_record_state_transition(
+        lantern_time_elapsed_seconds(
+            transition_metrics_start,
+            lantern_time_now_seconds()));
 #undef STATE_FAIL
     return 0;
 }

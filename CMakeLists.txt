@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(lantern VERSION 0.1.0 LANGUAGES C)
+project(lantern LANGUAGES C)
 
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
@@ -352,6 +352,10 @@ if(LANTERN_BUILD_TESTS)
     add_executable(lantern_slot_clock_test tests/unit/test_slot_clock.c)
     target_link_libraries(lantern_slot_clock_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_slot_clock COMMAND lantern_slot_clock_test)
+
+    add_executable(lantern_support_test tests/unit/test_support.c)
+    target_link_libraries(lantern_support_test PRIVATE ${LANTERN_TEST_LINK_LIB})
+    add_test(NAME lantern_support COMMAND lantern_support_test)
 
     add_executable(lantern_snappy_test tests/unit/test_snappy.c)
     target_link_libraries(lantern_snappy_test PRIVATE ${LANTERN_TEST_LINK_LIB})

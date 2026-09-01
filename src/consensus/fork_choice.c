@@ -670,7 +670,10 @@ int lantern_fork_choice_add_block_with_state(
         goto rollback;
     }
     lantern_state_reset(&previous_state);
-    lean_metrics_record_fork_choice_block_time(lantern_time_now_seconds() - metrics_start);
+    lean_metrics_record_fork_choice_block_time(
+        lantern_time_elapsed_seconds(
+            metrics_start,
+            lantern_time_now_seconds()));
     fork_choice_publish_current_checkpoints(store);
     return 0;
 

@@ -1,32 +1,47 @@
 #include "lantern/support/time.h"
 
-#include <sys/time.h>
+#if defined(_WIN32)
+#include <windows.h>
+
+static double platform_time_now_seconds(void)
+{
+    LARGE_INTEGER counter;
+    LARGE_INTEGER frequency;
+    if (!QueryPerformanceCounter(&counter) ||
+        !QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0)
+    {
+        return -1.0;
+    }
+
+    return (double)counter.QuadPart / (double)frequency.QuadPart;
+}
+#else
 #include <time.h>
 
-#if defined(__APPLE__) && !defined(CLOCK_MONOTONIC)
-#include <mach/mach_time.h>
-#endif
+static double platform_time_now_seconds(void)
+{
+    struct timespec value;
+    if (clock_gettime(CLOCK_MONOTONIC, &value) != 0)
+    {
+        return -1.0;
+    }
 
-double lantern_time_now_seconds(void) {
-#if defined(CLOCK_MONOTONIC)
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
-        return (double)ts.tv_sec + ((double)ts.tv_nsec / 1e9);
+    return (double)value.tv_sec + ((double)value.tv_nsec / 1e9);
+}
+#endif /* _WIN32 */
+
+double lantern_time_now_seconds(void)
+{
+    return platform_time_now_seconds();
+}
+
+double lantern_time_elapsed_seconds(double started_seconds,
+                                    double finished_seconds)
+{
+    if (started_seconds < 0.0 || finished_seconds < started_seconds)
+    {
+        return 0.0;
     }
-#elif defined(__APPLE__)
-    static mach_timebase_info_data_t timebase = {0};
-    static double scale = 0.0;
-    if (scale == 0.0) {
-        if (mach_timebase_info(&timebase) == KERN_SUCCESS && timebase.denom != 0) {
-            scale = ((double)timebase.numer / (double)timebase.denom) / 1e9;
-        } else {
-            scale = 1.0 / 1e9;
-        }
-    }
-    uint64_t now = mach_absolute_time();
-    return (double)now * scale;
-#endif
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (double)tv.tv_sec + ((double)tv.tv_usec / 1e6);
+
+    return finished_seconds - started_seconds;
 }

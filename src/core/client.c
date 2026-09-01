@@ -106,7 +106,6 @@ static lantern_client_error client_apply_options(
     {
         return LANTERN_CLIENT_ERR_ALLOC;
     }
-    lantern_log_set_node_id(client->node_id);
     if (set_owned_string(&client->listen_address, options->listen_address) != 0)
     {
         return LANTERN_CLIENT_ERR_ALLOC;
@@ -461,8 +460,6 @@ void lantern_shutdown(struct lantern_client *client)
         pthread_mutex_destroy(&client->state_lock);
     }
     lantern_client_reset_local_validators(client);
-    lantern_log_reset_node_id();
-
     lantern_string_list_reset(&client->bootnodes);
     lantern_storage_close(&client->storage);
     free(client->data_dir);
