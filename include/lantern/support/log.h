@@ -66,49 +66,18 @@ extern "C"
 #endif
 
     /**
-     * Write a best-effort trace message with borrowed context.
+     * Write a best-effort message at the specified severity.
      *
      * This function is thread-safe and borrows all pointers for the call.
-     */
-    void lantern_log_trace(const char *component,
-                           const struct lantern_log_metadata *metadata,
-                           const char *fmt, ...) LANTERN_LOG_FORMAT(3, 4);
-
-    /**
-     * Write a best-effort debug message with borrowed context.
      *
-     * This function is thread-safe and borrows all pointers for the call.
+     * @param level Message severity.
+     * @param component Component name.
+     * @param metadata Optional message context.
+     * @param fmt Non-null printf-style message format.
      */
-    void lantern_log_debug(const char *component,
-                           const struct lantern_log_metadata *metadata,
-                           const char *fmt, ...) LANTERN_LOG_FORMAT(3, 4);
-
-    /**
-     * Write a best-effort information message with borrowed context.
-     *
-     * This function is thread-safe and borrows all pointers for the call.
-     */
-    void lantern_log_info(const char *component,
-                          const struct lantern_log_metadata *metadata,
-                          const char *fmt, ...) LANTERN_LOG_FORMAT(3, 4);
-
-    /**
-     * Write a best-effort warning message with borrowed context.
-     *
-     * This function is thread-safe and borrows all pointers for the call.
-     */
-    void lantern_log_warn(const char *component,
-                          const struct lantern_log_metadata *metadata,
-                          const char *fmt, ...) LANTERN_LOG_FORMAT(3, 4);
-
-    /**
-     * Write a best-effort error message with borrowed context.
-     *
-     * This function is thread-safe and borrows all pointers for the call.
-     */
-    void lantern_log_error(const char *component,
-                           const struct lantern_log_metadata *metadata,
-                           const char *fmt, ...) LANTERN_LOG_FORMAT(3, 4);
+    void lantern_log(enum lantern_log_level level, const char *component,
+                     const struct lantern_log_metadata *metadata,
+                     const char *fmt, ...) LANTERN_LOG_FORMAT(4, 5);
 
 #undef LANTERN_LOG_FORMAT
 

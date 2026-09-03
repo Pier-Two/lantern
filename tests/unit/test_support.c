@@ -117,7 +117,7 @@ static int test_log_metadata(void)
         .has_slot = true,
     };
     lantern_log_set_level(LANTERN_LOG_LEVEL_INFO);
-    lantern_log_info("support", &metadata, "message %d", 3);
+    lantern_log(LANTERN_LOG_LEVEL_INFO, "support", &metadata, "message %d", 3);
 
     int restore_result = dup2(saved_stdout, STDOUT_FILENO);
     close(saved_stdout);

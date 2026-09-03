@@ -233,7 +233,7 @@ void lantern_client_unlock_mutex(
     int unlock_rc = pthread_mutex_unlock(mutex);
     if (unlock_rc != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             component,
             &(const struct lantern_log_metadata){.validator = validator_id},
             "failed to unlock %s: %d",
@@ -592,7 +592,7 @@ static int read_node_key_file(
     fp = fopen(path, "rb");
     if (!fp)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){0},
             "unable to open %s for reading",
@@ -628,7 +628,7 @@ static int read_node_key_file(
     size_t read_len = fread(buffer, 1, (size_t)file_size, fp);
     if (read_len != (size_t)file_size)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){0},
             "unable to read %s: read %zu of %ld bytes",
@@ -650,7 +650,7 @@ cleanup:
     {
         if (fclose(fp) != 0)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "client",
                 &(const struct lantern_log_metadata){0},
                 "failed to close %s: errno=%d",
@@ -706,7 +706,7 @@ int load_node_key_bytes(const struct lantern_client_options *options, uint8_t ou
     }
     if (!encoded_key)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = options->node_id},
             "node key input is required");
@@ -719,7 +719,7 @@ int load_node_key_bytes(const struct lantern_client_options *options, uint8_t ou
             CLIENT_UTILS_NODE_KEY_SIZE)
         != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = options->node_id},
             "invalid node key (expected 32-byte hex string)");

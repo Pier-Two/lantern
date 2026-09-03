@@ -241,7 +241,7 @@ static void log_pq_prover_setup_error_if_any(void) {
     if (!detail) {
         return;
     }
-    lantern_log_error("signature", NULL, "%s", pq_error_detail_or_dash(detail));
+    lantern_log(LANTERN_LOG_LEVEL_ERROR, "signature", NULL, "%s", pq_error_detail_or_dash(detail));
     pq_string_free(detail);
 }
 
@@ -595,7 +595,7 @@ bool lantern_signature_verify_pk(
     enum PQSigningError sig_err =
         pq_signature_deserialize(signature->bytes, sizeof(signature->bytes), &pq_signature);
     if (sig_err != Success || !pq_signature) {
-        lantern_log_debug("signature", NULL, "signature deserialize failed");
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG, "signature", NULL, "signature deserialize failed");
         lean_metrics_record_pq_signature_verification_result(false);
         return false;
     }
@@ -607,7 +607,7 @@ bool lantern_signature_verify_pk(
     lean_metrics_record_pq_signature_verification_result(valid);
     pq_signature_free(pq_signature);
     if (!valid) {
-        lantern_log_debug("signature", NULL, "pq_verify rc=%d", verify_rc);
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG, "signature", NULL, "pq_verify rc=%d", verify_rc);
     }
     return valid;
 }
@@ -639,7 +639,7 @@ bool lantern_signature_sign(
         &written);
     pq_signature_free(pq_signature);
     if (serialize_err != Success || written == 0 || written > sizeof(out_signature->bytes)) {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "signature",
             NULL,
             "lantern_signature_sign serialize failed err=%d needed=%zu buffer=%zu",
@@ -668,7 +668,7 @@ bool lantern_signature_aggregate(
         return false;
     }
     if (lantern_byte_list_resize(out_proof, LANTERN_AGG_PROOF_MAX_BYTES) != 0) {
-        lantern_log_error("signature", NULL, "aggregation resize failed max=%zu", (size_t)LANTERN_AGG_PROOF_MAX_BYTES);
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, "signature", NULL, "aggregation resize failed max=%zu", (size_t)LANTERN_AGG_PROOF_MAX_BYTES);
         return false;
     }
 
@@ -693,7 +693,7 @@ bool lantern_signature_aggregate(
                 LANTERN_VALIDATOR_PUBKEY_SIZE,
                 &pubkey_handles[i]);
         if (pk_err != Success) {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "signature",
                 NULL,
                 "aggregation pubkey deserialize failed index=%zu err=%d",
@@ -707,7 +707,7 @@ bool lantern_signature_aggregate(
                 sizeof(signatures[i].bytes),
                 &sig_handles[i]);
         if (sig_err != Success) {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "signature",
                 NULL,
                 "aggregation signature deserialize failed index=%zu err=%d",
@@ -756,7 +756,7 @@ bool lantern_signature_aggregate(
         }
         if (err != Success || written_len == 0 || written_len > out_proof->length) {
             char *detail = pq_take_last_error_message();
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "signature",
                 NULL,
                 "aggregation failed err=%d written=%zu buffer=%zu count=%zu detail=%s",
@@ -768,7 +768,7 @@ bool lantern_signature_aggregate(
             pq_string_free(detail);
             ok = false;
         } else if (lantern_byte_list_resize(out_proof, (size_t)written_len) != 0) {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "signature",
                 NULL,
                 "aggregation resize failed written=%zu",
@@ -793,7 +793,7 @@ bool lantern_signature_aggregate(
 
     if (!ok) {
         (void)lantern_byte_list_resize(out_proof, 0);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "signature",
             NULL,
             "aggregation failed count=%zu epoch=%" PRIu64,
@@ -993,7 +993,7 @@ bool lantern_aggregated_signature_proof_aggregate(
             }
             if (agg_err != Success || written_len == 0u || written_len > out_proof->proof_data.length) {
                 char *detail = pq_take_last_error_message();
-                lantern_log_error(
+                lantern_log(LANTERN_LOG_LEVEL_ERROR,
                     "signature",
                     NULL,
                     "recursive aggregation failed child_count=%zu raw_xmss=%zu err=%d written=%zu buffer=%zu detail=%s",
@@ -1096,7 +1096,7 @@ bool lantern_signature_verify_aggregated(
         double elapsed = get_time_seconds() - start;
         lean_metrics_record_pq_aggregated_signature_verification(elapsed, verify_rc == 1);
         if (verify_rc != 1) {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "signature",
                 NULL,
                 "single-signature aggregation verify failed rc=%d count=%zu epoch=%" PRIu64,
@@ -1123,7 +1123,7 @@ bool lantern_signature_verify_aggregated(
                 LANTERN_VALIDATOR_PUBKEY_SIZE,
                 &pubkey_handles[i]);
         if (pk_err != Success) {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "signature",
                 NULL,
                 "aggregation verify pubkey deserialize failed index=%zu err=%d",
@@ -1149,7 +1149,7 @@ bool lantern_signature_verify_aggregated(
             epoch);
         elapsed = get_time_seconds() - start;
         lean_metrics_record_pq_aggregated_signature_verification(elapsed, verify_rc == 1);
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "signature",
             NULL,
             "aggregation verify rc=%d elapsed=%.6f",
@@ -1171,7 +1171,7 @@ bool lantern_signature_verify_aggregated(
         return false;
     }
     if (verify_rc != 1) {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "signature",
             NULL,
             "aggregation verify failed rc=%d count=%zu epoch=%" PRIu64,
@@ -1284,7 +1284,7 @@ bool lantern_signature_merge_block_type2_proof(
     }
     if (merge_rc != Success || written_len == 0u || written_len > raw_type2.length) {
         char *detail = pq_take_last_error_message();
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "signature",
             NULL,
             "block Type-2 merge failed err=%d entries=%zu written=%zu detail=%s",
@@ -1376,7 +1376,7 @@ bool lantern_signature_verify_block_type2_proof(
     lean_metrics_record_pq_block_aggregated_signatures_verification(elapsed);
     ok = (verify_rc == 1);
     if (!ok) {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "signature",
             &(const struct lantern_log_metadata){.has_slot = true, .slot = block->slot},
             "block Type-2 proof verification failed rc=%d components=%zu proof_len=%zu",
@@ -1495,7 +1495,7 @@ bool lantern_signature_split_block_type2_attestation_proof(
     }
     if (split_rc != Success || written_len == 0u || written_len > recovered.proof_data.length) {
         char *detail = pq_take_last_error_message();
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "signature",
             NULL,
             "block Type-2 split failed err=%d component=%zu components=%zu written=%zu detail=%s",

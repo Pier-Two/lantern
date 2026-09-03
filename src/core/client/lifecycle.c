@@ -161,7 +161,7 @@ static lantern_client_error client_init_locks(struct lantern_client *client)
 {
     if (pthread_mutex_init(&client->pending_lock, NULL) != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to initialize pending block lock");
@@ -173,7 +173,7 @@ static lantern_client_error client_init_locks(struct lantern_client *client)
     {
         if (pthread_mutex_init(&client->status_lock, NULL) != 0)
         {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "client",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "failed to initialize peer status lock");
@@ -186,7 +186,7 @@ static lantern_client_error client_init_locks(struct lantern_client *client)
     {
         if (pthread_mutex_init(&client->state_lock, NULL) != 0)
         {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "client",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "failed to initialize state lock");
@@ -212,7 +212,7 @@ static void client_start_background_services(struct lantern_client *client)
 {
     if (start_peer_dialer(client) != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "network",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to enable peer maintenance");
@@ -220,7 +220,7 @@ static void client_start_background_services(struct lantern_client *client)
 
     if (start_block_proposal_worker(client) != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "validator",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "block proposal worker inactive");
@@ -228,7 +228,7 @@ static void client_start_background_services(struct lantern_client *client)
 
     if (start_timing_service(client) != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "forkchoice",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "chain scheduler inactive");
@@ -420,31 +420,31 @@ void lantern_shutdown(struct lantern_client *client)
 
     reset_genesis_paths(&client->genesis_paths);
     lantern_genesis_artifacts_reset(&client->genesis);
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "client",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "shutdown: stopping request/response service");
     lantern_reqresp_service_reset(&client->reqresp);
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "client",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "shutdown: request/response service stopped");
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "client",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "shutdown: stopping gossipsub");
     lantern_gossipsub_service_stop(&client->gossip);
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "client",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "shutdown: gossipsub stopped");
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "client",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "shutdown: resetting libp2p host");
     lantern_libp2p_host_reset(&client->network);
     lantern_gossipsub_service_reset(&client->gossip);
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "client",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "shutdown: libp2p host reset");

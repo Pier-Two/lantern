@@ -275,7 +275,7 @@ static lantern_client_error apply_option(
         {
             lantern_secure_zero(argument, strlen(argument));
         }
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "main",
             NULL,
             "--node-key was removed; use --node-key-path");
@@ -393,7 +393,7 @@ static int run_until_signal(struct lantern_client *client)
         {
             if (errno != EINTR)
             {
-                lantern_log_error(
+                lantern_log(LANTERN_LOG_LEVEL_ERROR,
                     "cli",
                     &(const struct lantern_log_metadata){.validator = client->node_id},
                     "sleep failed: %s",
@@ -407,7 +407,7 @@ static int run_until_signal(struct lantern_client *client)
 
 static void print_usage(const char *program)
 {
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "main",
         NULL,
         "Usage: %s [options]\n"
@@ -421,7 +421,7 @@ static void print_usage(const char *program)
         "  --node-key-path PATH         File containing the private key",
         program,
         LANTERN_DEFAULT_DATA_DIR);
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "main",
         NULL,
         "  --listen-address ADDR        QUIC listen multiaddr\n"
@@ -436,7 +436,7 @@ static void print_usage(const char *program)
         "  --is-aggregator              Enable aggregation\n"
         "  --prover-arena               Use faster, high-memory leanVM proving\n"
         "  --aggregate-subnet-ids IDS   Comma-separated imported subnets");
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "main",
         NULL,
         "  --xmss-key-dir PATH          XMSS key directory\n"
@@ -470,7 +470,7 @@ int main(int argc, char **argv)
     }
     if (version)
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "main",
             NULL,
             "lantern %s (commit %s, branch %s)",
@@ -486,7 +486,7 @@ int main(int argc, char **argv)
         exit_code = 0;
         goto cleanup;
     }
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "cli",
         NULL,
         "lantern %s (commit %s, branch %s)",
@@ -499,13 +499,13 @@ int main(int argc, char **argv)
     }
     if (lantern_init(&client, &options) != LANTERN_CLIENT_OK)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "cli",
             &(const struct lantern_log_metadata){.validator = options.node_id},
             "initialization failed");
         goto cleanup;
     }
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "cli",
         &(const struct lantern_log_metadata){.validator = client.node_id},
         "lantern ready genesis_time=%" PRIu64 " validators=%" PRIu64

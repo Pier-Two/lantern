@@ -26,7 +26,7 @@ static void log_aggregated_payload_interval_transition(
         return;
     }
     struct lantern_log_metadata meta = {.validator = client->node_id};
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "forkchoice",
         &meta,
         "aggregated payload transition context=%s interval=%" PRIu64 " phase=%" PRIu64

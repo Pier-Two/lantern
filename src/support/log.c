@@ -165,19 +165,22 @@ static void format_component_tag(const char *component, char out[16])
     (void)snprintf(out, 16, "[%s]", lowered);
 }
 
-static void log_message_v(enum lantern_log_level level, const char *component,
-                          const struct lantern_log_metadata *metadata,
-                          const char *fmt, va_list args)
+void lantern_log(enum lantern_log_level level, const char *component,
+                 const struct lantern_log_metadata *metadata, const char *fmt,
+                 ...)
 {
     int min_level = atomic_load_explicit(&s_min_level, memory_order_relaxed);
-    if ((int)level < min_level)
+    if ((int)level < min_level || !fmt)
     {
         return;
     }
 
+    va_list args;
+    va_start(args, fmt);
+
     char formatted[1024];
-    int msg_written =
-        vsnprintf(formatted, sizeof(formatted), fmt ? fmt : "", args);
+    int msg_written = vsnprintf(formatted, sizeof(formatted), fmt, args);
+    va_end(args);
     if (msg_written < 0)
     {
         formatted[0] = '\0';
@@ -222,54 +225,4 @@ static void log_message_v(enum lantern_log_level level, const char *component,
     (void)fprintf(target, " %s\n", formatted);
     (void)fflush(target);
     (void)pthread_mutex_unlock(&s_log_mutex);
-}
-
-void lantern_log_trace(const char *component,
-                       const struct lantern_log_metadata *metadata,
-                       const char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    log_message_v(LANTERN_LOG_LEVEL_TRACE, component, metadata, fmt, args);
-    va_end(args);
-}
-
-void lantern_log_debug(const char *component,
-                       const struct lantern_log_metadata *metadata,
-                       const char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    log_message_v(LANTERN_LOG_LEVEL_DEBUG, component, metadata, fmt, args);
-    va_end(args);
-}
-
-void lantern_log_info(const char *component,
-                      const struct lantern_log_metadata *metadata,
-                      const char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    log_message_v(LANTERN_LOG_LEVEL_INFO, component, metadata, fmt, args);
-    va_end(args);
-}
-
-void lantern_log_warn(const char *component,
-                      const struct lantern_log_metadata *metadata,
-                      const char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    log_message_v(LANTERN_LOG_LEVEL_WARN, component, metadata, fmt, args);
-    va_end(args);
-}
-
-void lantern_log_error(const char *component,
-                       const struct lantern_log_metadata *metadata,
-                       const char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    log_message_v(LANTERN_LOG_LEVEL_ERROR, component, metadata, fmt, args);
-    va_end(args);
 }

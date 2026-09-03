@@ -191,7 +191,7 @@ lantern_client_error lantern_client_options_add_bootnodes_from_file(
     FILE *fp = fopen(path, "r");
     if (!fp)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "cli",
             &(const struct lantern_log_metadata){.validator = options->node_id},
             "unable to open bootnodes file %s",
@@ -269,7 +269,7 @@ lantern_client_error lantern_client_options_add_bootnodes_from_file(
             break;
         }
         ++added;
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "cli",
             &(const struct lantern_log_metadata){
                 .validator = options->node_id,
@@ -280,7 +280,7 @@ lantern_client_error lantern_client_options_add_bootnodes_from_file(
 
     if (fclose(fp) != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "cli",
             &(const struct lantern_log_metadata){.validator = options->node_id},
             "failed to close bootnodes file %s: %s",
@@ -299,7 +299,7 @@ lantern_client_error lantern_client_options_add_bootnodes_from_file(
 
     if (added == 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "cli",
             &(const struct lantern_log_metadata){.validator = options->node_id},
             "no ENRs found in %s",

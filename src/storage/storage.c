@@ -457,7 +457,7 @@ static int verify_block_root(const LanternSignedBlock *block, const LanternRoot 
     {
         return -1;
     }
-    lantern_log_warn(
+    lantern_log(LANTERN_LOG_LEVEL_WARN,
         "storage",
         &(const struct lantern_log_metadata){0},
         "accepted synthetic anchor root alias at slot=%" PRIu64,

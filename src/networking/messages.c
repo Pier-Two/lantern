@@ -37,7 +37,7 @@ static int ensure_block_capacity(LanternSignedBlockList *resp, size_t required) 
 
 static void log_status_payload_debug(const char *label, const uint8_t *data, size_t length) {
     if (!data || length == 0) {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "reqresp",
             NULL,
             "%s len=%zu (no payload)",
@@ -50,7 +50,7 @@ static void log_status_payload_debug(const char *label, const uint8_t *data, siz
     size_t hex_capacity = (preview_len * 2u) + 1u;
     char *hex = (char *)malloc(hex_capacity);
     if (!hex) {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "reqresp",
             NULL,
             "%s len=%zu (preview alloc failed)",
@@ -61,7 +61,7 @@ static void log_status_payload_debug(const char *label, const uint8_t *data, siz
     if (lantern_bytes_to_hex(data, preview_len, hex, hex_capacity, 0) != 0) {
         hex[0] = '\0';
     }
-    lantern_log_warn(
+    lantern_log(LANTERN_LOG_LEVEL_WARN,
         "reqresp",
         NULL,
         "%s len=%zu preview=%s%s",

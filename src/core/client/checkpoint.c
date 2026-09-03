@@ -173,7 +173,7 @@ static lantern_client_error client_fetch_checkpoint_bytes(
     }
 
     struct lantern_log_metadata meta = {.validator = client->node_id};
-    lantern_log_info("checkpoint_sync", &meta, "fetching finalized checkpoint %s from %s", label, url);
+    lantern_log(LANTERN_LOG_LEVEL_INFO, "checkpoint_sync", &meta, "fetching finalized checkpoint %s from %s", label, url);
     int fetch_rc = lantern_http_get_bytes(
         url,
         "application/octet-stream",
@@ -183,7 +183,7 @@ static lantern_client_error client_fetch_checkpoint_bytes(
     {
         if (fetch_rc == LANTERN_HTTP_CLIENT_STATUS_ERROR)
         {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "checkpoint_sync",
                 &meta,
                 "checkpoint %s endpoint returned HTTP %d",
@@ -192,7 +192,7 @@ static lantern_client_error client_fetch_checkpoint_bytes(
         }
         else
         {
-            lantern_log_error("checkpoint_sync", &meta, "failed to fetch checkpoint %s", label);
+            lantern_log(LANTERN_LOG_LEVEL_ERROR, "checkpoint_sync", &meta, "failed to fetch checkpoint %s", label);
         }
         lantern_http_fetch_result_reset(out_result);
         free(url);
@@ -203,7 +203,7 @@ static lantern_client_error client_fetch_checkpoint_bytes(
     if (!out_result->body || out_result->body_len == 0)
     {
         lantern_http_fetch_result_reset(out_result);
-        lantern_log_error("checkpoint_sync", &meta, "checkpoint %s endpoint returned no data", label);
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, "checkpoint_sync", &meta, "checkpoint %s endpoint returned no data", label);
         return LANTERN_CLIENT_ERR_NETWORK;
     }
     return LANTERN_CLIENT_OK;
@@ -238,7 +238,7 @@ static lantern_client_error client_fetch_checkpoint_anchor_block(
         != SSZ_SUCCESS)
     {
         lantern_http_fetch_result_reset(&fetch_result);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "checkpoint_sync",
             &meta,
             "failed to decode checkpoint block SSZ (bytes=%zu)",
@@ -249,7 +249,7 @@ static lantern_client_error client_fetch_checkpoint_anchor_block(
 
     if (lantern_hash_tree_root_block(&out_block->block, out_root) != SSZ_SUCCESS)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "checkpoint_sync",
             &meta,
             "failed to compute checkpoint block root");
@@ -313,7 +313,7 @@ int lantern_client_validate_state_validator_pubkeys(
         || config->validator_count == 0
         || config->validator_count > SIZE_MAX)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             component,
             &meta,
             "local genesis validator pubkeys unavailable for state validation");
@@ -324,7 +324,7 @@ int lantern_client_validate_state_validator_pubkeys(
     if (!state->validators
         || state->validator_count != expected_count)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             component,
             &meta,
             "state validator count mismatch state=%zu local=%zu",
@@ -339,7 +339,7 @@ int lantern_client_validate_state_validator_pubkeys(
             expected_count * sizeof(*state->validators))
         != 0)
     {
-        lantern_log_error(component, &meta, "state validator registry mismatch");
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, component, &meta, "state validator registry mismatch");
         return LANTERN_CLIENT_ERR_GENESIS;
     }
 
@@ -390,7 +390,7 @@ static lantern_client_error client_load_state_from_checkpoint(
 
     if (lantern_ssz_decode_state(&decoded, fetch_result.body, fetch_result.body_len) != SSZ_SUCCESS)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "checkpoint_sync",
             &meta,
             "failed to decode checkpoint state SSZ (bytes=%zu)",
@@ -401,7 +401,7 @@ static lantern_client_error client_load_state_from_checkpoint(
 
     if (decoded.validator_count == 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "checkpoint_sync",
             &meta,
             "checkpoint state validator metadata invalid decoded=%zu",
@@ -412,7 +412,7 @@ static lantern_client_error client_load_state_from_checkpoint(
 
     if (decoded.config.genesis_time != client->genesis.chain_config.genesis_time)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "checkpoint_sync",
             &meta,
             "checkpoint genesis time mismatch checkpoint=%" PRIu64 " local=%" PRIu64,
@@ -427,7 +427,7 @@ static lantern_client_error client_load_state_from_checkpoint(
         || decoded.latest_finalized.slot > decoded.slot
         || decoded.latest_finalized.slot > decoded.latest_justified.slot)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "checkpoint_sync",
             &meta,
             "checkpoint state has inconsistent slot metadata state=%" PRIu64
@@ -453,7 +453,7 @@ static lantern_client_error client_load_state_from_checkpoint(
     LanternRoot state_root;
     if (lantern_hash_tree_root_state(&decoded, &state_root) != SSZ_SUCCESS)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "checkpoint_sync",
             &meta,
             "failed to compute checkpoint state root");
@@ -470,7 +470,7 @@ static lantern_client_error client_load_state_from_checkpoint(
             block_state_root_hex,
             sizeof(block_state_root_hex));
         format_root_hex(&state_root, state_root_hex, sizeof(state_root_hex));
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "checkpoint_sync",
             &meta,
             "checkpoint anchor block/state mismatch block_state_root=%s state_root=%s",
@@ -482,7 +482,7 @@ static lantern_client_error client_load_state_from_checkpoint(
 
     if (!checkpoint_anchor_block_matches_state_header(&anchor_signed_block, &decoded, &state_root))
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "checkpoint_sync",
             &meta,
             "checkpoint anchor block/header mismatch");
@@ -497,7 +497,7 @@ static lantern_client_error client_load_state_from_checkpoint(
 
     if (!client->data_dir)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "storage",
             &meta,
             "checkpoint sync requires a data directory for the anchor block");
@@ -510,7 +510,7 @@ static lantern_client_error client_load_state_from_checkpoint(
             &anchor_signed_block)
         != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "storage",
             &meta,
             "failed to persist checkpoint anchor block");
@@ -523,7 +523,7 @@ static lantern_client_error client_load_state_from_checkpoint(
             &decoded)
         != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "storage",
             &meta,
             "failed to persist checkpoint anchor state alias");
@@ -534,7 +534,7 @@ static lantern_client_error client_load_state_from_checkpoint(
     lantern_state_reset(&client->state);
     client->state = decoded;
     decoded = (LanternState){0};
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "checkpoint_sync",
         &meta,
         "initialized from checkpoint state slot=%" PRIu64
@@ -621,7 +621,7 @@ lantern_client_error client_load_or_build_state(
                     &expected_current_slot,
                     &gap))
             {
-                lantern_log_info(
+                lantern_log(LANTERN_LOG_LEVEL_INFO,
                     "checkpoint_sync",
                     &meta,
                     "persisted state stale slot=%" PRIu64
@@ -639,7 +639,7 @@ lantern_client_error client_load_or_build_state(
             }
             else
             {
-                lantern_log_info(
+                lantern_log(LANTERN_LOG_LEVEL_INFO,
                     "checkpoint_sync",
                     &meta,
                     "using persisted state; skipping checkpoint fetch");
@@ -648,7 +648,7 @@ lantern_client_error client_load_or_build_state(
     }
     else if (storage_state_rc < 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "storage",
             &meta,
             "failed to load persisted state");
@@ -668,7 +668,7 @@ lantern_client_error client_load_or_build_state(
                 options->checkpoint_sync_url);
             if (checkpoint_rc != LANTERN_CLIENT_OK)
             {
-                lantern_log_error(
+                lantern_log(LANTERN_LOG_LEVEL_ERROR,
                     "checkpoint_sync",
                     &meta,
                     "checkpoint sync failed; aborting startup");
@@ -697,7 +697,7 @@ lantern_client_error client_load_or_build_state(
     {
         if (lantern_storage_save_state(&client->storage, &client->state) != 0)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "storage",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "failed to persist initial state snapshot");

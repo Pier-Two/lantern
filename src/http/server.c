@@ -267,7 +267,7 @@ static int handle_admin_aggregator(
     if (!is_get && !is_post)
     {
         int rc = send_method_not_allowed(request);
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "%s %s -> 405 (rc=%d)",
@@ -282,7 +282,7 @@ static int handle_admin_aggregator(
         if (!server->callbacks.get_is_aggregator)
         {
             int rc = send_unavailable(request);
-            lantern_log_info(
+            lantern_log(LANTERN_LOG_LEVEL_INFO,
                 "http",
                 &(const struct lantern_log_metadata){.peer = peer_text},
                 "GET %s -> 503 (rc=%d)",
@@ -295,7 +295,7 @@ static int handle_admin_aggregator(
         if (cb_rc != LANTERN_HTTP_CB_OK)
         {
             int rc = send_unavailable(request);
-            lantern_log_info(
+            lantern_log(LANTERN_LOG_LEVEL_INFO,
                 "http",
                 &(const struct lantern_log_metadata){.peer = peer_text},
                 "GET %s -> 503 (cb_rc=%d rc=%d)",
@@ -316,7 +316,7 @@ static int handle_admin_aggregator(
             return 0;
         }
         int rc = lantern_http_send_response(request, 200, "OK", "application/json", body, (size_t)body_len);
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "GET %s -> 200 (rc=%d)",
@@ -329,7 +329,7 @@ static int handle_admin_aggregator(
     if (!server->callbacks.set_is_aggregator)
     {
         int rc = send_unavailable(request);
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "POST %s -> 503 (rc=%d)",
@@ -340,7 +340,7 @@ static int handle_admin_aggregator(
     if (request->body_len == 0u)
     {
         int rc = send_bad_request(request);
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "POST %s -> 400 (empty body, rc=%d)",
@@ -352,7 +352,7 @@ static int handle_admin_aggregator(
     if (parse_enabled_bool_body(request->body, request->body_len, &enabled) != 0)
     {
         int rc = send_bad_request(request);
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "POST %s -> 400 (bad body, rc=%d)",
@@ -365,7 +365,7 @@ static int handle_admin_aggregator(
     if (cb_rc != LANTERN_HTTP_CB_OK)
     {
         int rc = send_unavailable(request);
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "POST %s -> 503 (cb_rc=%d rc=%d)",
@@ -387,7 +387,7 @@ static int handle_admin_aggregator(
         return 0;
     }
     int rc = lantern_http_send_response(request, 200, "OK", "application/json", resp, (size_t)resp_len);
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "http",
         &(const struct lantern_log_metadata){.peer = peer_text},
         "POST %s -> 200 enabled=%s previous=%s (rc=%d)",
@@ -413,7 +413,7 @@ static int handle_test_driver(
     if (strcmp(method, "POST") != 0)
     {
         int rc = send_method_not_allowed(request);
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "%s %s -> 405 (rc=%d)",
@@ -428,7 +428,7 @@ static int handle_test_driver(
     if (request_body_len > LANTERN_HTTP_MAX_TEST_DRIVER_BODY_SIZE)
     {
         int rc = send_bad_request(request);
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "POST %s -> 400 (body read failed, rc=%d)",
@@ -445,7 +445,7 @@ static int handle_test_driver(
         if (driver_rc != 0)
         {
             int rc = send_bad_request(request);
-            lantern_log_info(
+            lantern_log(LANTERN_LOG_LEVEL_INFO,
                 "http",
                 &(const struct lantern_log_metadata){.peer = peer_text},
                 "POST %s -> 400 (driver_rc=%d error=%s rc=%d)",
@@ -457,7 +457,7 @@ static int handle_test_driver(
             return 0;
         }
         int rc = lantern_http_send_response(request, 204, "No Content", "application/json", NULL, 0);
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "POST %s -> 204 (rc=%d)",
@@ -497,7 +497,7 @@ static int handle_test_driver(
     {
         free(response_body);
         int rc = send_internal(request);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "POST %s -> 500 (driver_rc=%d rc=%d)",
@@ -515,7 +515,7 @@ static int handle_test_driver(
         response_body,
         response_body_len);
     free(response_body);
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "http",
         &(const struct lantern_log_metadata){.peer = peer_text},
         "POST %s -> 200 (rc=%d)",
@@ -539,7 +539,7 @@ static int handle_health(
         strlen(LANTERN_HTTP_JSON_HEALTH));
     if (rc == 0)
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "GET %s -> 200",
@@ -547,7 +547,7 @@ static int handle_health(
     }
     else
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "failed to send health response rc=%d",
@@ -591,7 +591,7 @@ static int send_finalized_error(
     int rc = lantern_http_send_json_error(request, status_code, status_text, body);
     if (callback_rc == LANTERN_HTTP_CB_ERR_NOT_FOUND)
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "finalized %s missing -> 404",
@@ -601,7 +601,7 @@ static int send_finalized_error(
         || callback_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
         || callback_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "finalized %s unavailable rc=%d send_rc=%d",
@@ -611,7 +611,7 @@ static int send_finalized_error(
     }
     else
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "finalized %s failed rc=%d send_rc=%d",
@@ -632,7 +632,7 @@ static int send_finalized_bytes(
     {
         free(bytes);
         int rc = send_internal(request);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "finalized %s empty send_rc=%d",
@@ -651,7 +651,7 @@ static int send_finalized_bytes(
     free(bytes);
     if (rc != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "finalized %s send failed rc=%d",
@@ -660,7 +660,7 @@ static int send_finalized_bytes(
         return rc;
     }
 
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "http",
         &(const struct lantern_log_metadata){.peer = request->peer},
         "GET %s -> 200",
@@ -678,7 +678,7 @@ static int handle_finalized_ssz(
     if (!callback)
     {
         int rc = send_unavailable(request);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "finalized %s callback missing rc=%d",
@@ -753,7 +753,7 @@ static int send_snapshot_error(
     int rc = lantern_http_send_json_error(request, status_code, status_text, body);
     if (status_code == 503)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "%s rc=%d send_rc=%d",
@@ -763,7 +763,7 @@ static int send_snapshot_error(
     }
     else
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "%s rc=%d send_rc=%d",
@@ -782,7 +782,7 @@ static int handle_justified(
     if (!server->callbacks.snapshot_justified)
     {
         int rc = send_unavailable(request);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "justified snapshot callback missing rc=%d",
@@ -814,7 +814,7 @@ static int handle_justified(
         != 0)
     {
         int rc = send_internal(request);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "justified root hex failed send_rc=%d",
@@ -832,7 +832,7 @@ static int handle_justified(
     if (body_written < 0 || (size_t)body_written >= sizeof(body))
     {
         int rc = send_internal(request);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "justified response format failed send_rc=%d",
@@ -849,7 +849,7 @@ static int handle_justified(
         (size_t)body_written);
     if (rc != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "justified response send failed rc=%d",
@@ -857,7 +857,7 @@ static int handle_justified(
         return rc;
     }
 
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "http",
         &(const struct lantern_log_metadata){.peer = request->peer},
         "GET %s -> 200",
@@ -873,7 +873,7 @@ static int handle_fork_choice(
     if (!server->callbacks.snapshot_fork_choice)
     {
         int rc = send_unavailable(request);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "fork choice snapshot callback missing rc=%d",
@@ -900,7 +900,7 @@ static int handle_fork_choice(
     if (result != 0)
     {
         int rc = send_internal(request);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "fork choice response format failed send_rc=%d",
@@ -918,7 +918,7 @@ static int handle_fork_choice(
     free(body);
     if (result != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "http",
             &(const struct lantern_log_metadata){.peer = request->peer},
             "fork choice response send failed rc=%d",
@@ -926,7 +926,7 @@ static int handle_fork_choice(
         return result;
     }
 
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "http",
         &(const struct lantern_log_metadata){.peer = request->peer},
         "GET %s -> 200",

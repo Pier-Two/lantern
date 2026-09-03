@@ -150,14 +150,14 @@ static void drain_protocol_events(struct lantern_libp2p_host *state) {
     libp2p_ping_event_t ping_event;
     while (libp2p_ping_next_event(&state->ping, &ping_event) == LIBP2P_PING_OK) {
         if (ping_event.type == LIBP2P_PING_EVENT_ERROR) {
-            lantern_log_debug("network", NULL, "libp2p ping event error (%d)", (int)ping_event.reason);
+            lantern_log(LANTERN_LOG_LEVEL_DEBUG, "network", NULL, "libp2p ping event error (%d)", (int)ping_event.reason);
         }
     }
 
     libp2p_identify_event_t identify_event;
     while (libp2p_identify_next_event(&state->identify, &identify_event) == LIBP2P_IDENTIFY_OK) {
         if (identify_event.type == LIBP2P_IDENTIFY_EVENT_ERROR) {
-            lantern_log_debug("network", NULL, "libp2p identify event error (%d)", (int)identify_event.reason);
+            lantern_log(LANTERN_LOG_LEVEL_DEBUG, "network", NULL, "libp2p identify event error (%d)", (int)identify_event.reason);
         }
     }
 }
@@ -241,7 +241,7 @@ int lantern_libp2p_host_prepare(struct lantern_libp2p_host *state, const struct 
         return -1;
     }
     if (config->secret_len != LIBP2P_PEER_ID_SECP256K1_PRIVATE_KEY_BYTES) {
-        lantern_log_error("network", NULL, "libp2p expects 32-byte secp256k1 secrets");
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, "network", NULL, "libp2p expects 32-byte secp256k1 secrets");
         return -1;
     }
 
@@ -254,7 +254,7 @@ int lantern_libp2p_host_prepare(struct lantern_libp2p_host *state, const struct 
             sizeof(state->listen_multiaddr),
             &state->listen_multiaddr_len)
         != LIBP2P_MULTIADDR_OK) {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "network",
             &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
             "invalid listen multiaddr");
@@ -416,7 +416,7 @@ int lantern_libp2p_host_launch(struct lantern_libp2p_host *state) {
         return -1;
     }
     if (libp2p_host_start(state->host) != LIBP2P_HOST_OK) {
-        lantern_log_error("network", NULL, "libp2p host start failed");
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, "network", NULL, "libp2p host start failed");
         return -1;
     }
     __atomic_store_n(&state->stop_flag, 0, __ATOMIC_RELAXED);
@@ -426,7 +426,7 @@ int lantern_libp2p_host_launch(struct lantern_libp2p_host *state) {
     }
     state->drive_thread_started = 1;
     state->started = 1;
-    lantern_log_info("network", NULL, "libp2p host started");
+    lantern_log(LANTERN_LOG_LEVEL_INFO, "network", NULL, "libp2p host started");
     return 0;
 }
 

@@ -89,7 +89,7 @@ static bool validate_vote_checkpoint(
 
     if (lantern_root_is_zero(&checkpoint->root))
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             log_facility,
             meta,
             "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " %s root=%s "
@@ -115,7 +115,7 @@ static bool validate_vote_checkpoint(
     bool known = lantern_client_block_known_locked(client, &checkpoint->root, &block_slot);
     if (!known)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             log_facility,
             meta,
             "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " unknown %s root=%s",
@@ -144,7 +144,7 @@ static bool validate_vote_checkpoint(
 
     if (block_slot != checkpoint->slot)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             log_facility,
             meta,
             "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " %s slot mismatch "
@@ -185,7 +185,7 @@ static bool buffer_pending_vote_locked(
 
     if (pending_vote_list_append(&client->pending_gossip_votes, vote, peer_text) == NULL)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "gossip",
             meta,
             "failed to buffer vote validator=%" PRIu64 " slot=%" PRIu64 " pending=%zu",
@@ -197,7 +197,7 @@ static bool buffer_pending_vote_locked(
 
     char retry_hex[VOTE_ROOT_HEX_BUFFER_LEN];
     format_root_hex(&rejection->retry_root, retry_hex, sizeof(retry_hex));
-    lantern_log_debug(
+    lantern_log(LANTERN_LOG_LEVEL_DEBUG,
         "gossip",
         meta,
         "buffered vote validator=%" PRIu64 " slot=%" PRIu64 " waiting_root=%s waiting_slot=%" PRIu64
@@ -241,7 +241,7 @@ static bool cache_attestation_signature_locked(
             signature_to_cache)
         != 0)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "state",
             meta,
             "failed to cache gossip signature validator=%" PRIu64 " slot=%" PRIu64,
@@ -273,7 +273,7 @@ static bool verify_vote_signature_against_target_locked(
     {
         char target_hex[VOTE_ROOT_HEX_BUFFER_LEN];
         format_root_hex(&vote->data.target.root, target_hex, sizeof(target_hex));
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "gossip",
             meta,
             "missing target state root=%s for validator=%" PRIu64 " slot=%" PRIu64,
@@ -299,7 +299,7 @@ static bool verify_vote_signature_against_target_locked(
             meta,
             "gossip"))
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "gossip",
             meta,
             "rejected vote validator=%" PRIu64 " slot=%" PRIu64 " (invalid XMSS signature)",
@@ -336,7 +336,7 @@ static bool process_vote_locked(
 
     if (client->store.block_len == 0u)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "gossip",
             meta,
             "deferring vote validator=%" PRIu64 " slot=%" PRIu64 " (fork choice unavailable)",
@@ -399,7 +399,7 @@ static enum lantern_vote_record_status lantern_client_record_vote_internal(
     format_root_hex(&vote_copy.data.head.root, head_hex, sizeof(head_hex));
     format_root_hex(&vote_copy.data.target.root, target_hex, sizeof(target_hex));
     format_root_hex(&vote_copy.data.source.root, source_hex, sizeof(source_hex));
-    lantern_log_debug(
+    lantern_log(LANTERN_LOG_LEVEL_DEBUG,
         "gossip",
         &meta,
         "%s vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64,
@@ -425,7 +425,7 @@ static enum lantern_vote_record_status lantern_client_record_vote_internal(
     }
     if (vote_processed)
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "gossip",
             &meta,
             "%s vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64
@@ -457,7 +457,7 @@ static enum lantern_vote_record_status lantern_client_record_vote_internal(
     const char *reason_text = rejection.has_reason ? rejection.message : "unknown";
     if (client->sync_started_ms != 0u)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "gossip",
             &meta,
             "%s vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64
@@ -474,7 +474,7 @@ static enum lantern_vote_record_status lantern_client_record_vote_internal(
     }
     else
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "gossip",
             &meta,
             "%s vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64
@@ -493,7 +493,7 @@ static enum lantern_vote_record_status lantern_client_record_vote_internal(
     {
         char root_hex[VOTE_ROOT_HEX_BUFFER_LEN];
         format_root_hex(&rejection.unknown_root, root_hex, sizeof(root_hex));
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "reqresp",
             &meta,
             "dropping vote unknown root=%s slot=%" PRIu64 " (buffer unavailable)",
@@ -545,7 +545,7 @@ bool lantern_client_verify_vote_signature(
     }
     if (!state_override)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             meta,
             "missing state for %s signature verification",
@@ -556,7 +556,7 @@ bool lantern_client_verify_vote_signature(
         state_override->validators ? state_override->validator_count : 0u;
     if (state_validator_count == 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             meta,
             "missing validator registry for %s signature verification",
@@ -565,7 +565,7 @@ bool lantern_client_verify_vote_signature(
     }
     if (vote->data.validator_id >= state_validator_count)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             meta,
             "validator=%" PRIu64 " exceeds %s state validator count=%zu",
@@ -578,7 +578,7 @@ bool lantern_client_verify_vote_signature(
         state_override->validators[vote->data.validator_id].attestation_pubkey;
     if (!pubkey_bytes || lantern_validator_pubkey_is_zero(pubkey_bytes))
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             meta,
             "missing validator pubkey for %s signature verification",
@@ -588,7 +588,7 @@ bool lantern_client_verify_vote_signature(
     LanternRoot vote_root;
     if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != SSZ_SUCCESS)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             meta,
             "failed to hash attestation for validator=%" PRIu64,
@@ -603,7 +603,7 @@ bool lantern_client_verify_vote_signature(
         &vote_root);
     if (!is_signature_valid)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             meta,
             "invalid XMSS signature validator=%" PRIu64 " slot=%" PRIu64 " context=%s",
@@ -706,7 +706,7 @@ bool lantern_client_validate_vote_constraints(
         {
             continue;
         }
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             log_facility,
             meta,
             "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (%s)",
@@ -747,7 +747,7 @@ bool lantern_client_validate_vote_constraints(
         {
             continue;
         }
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             log_facility,
             meta,
             "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (%s)",
@@ -764,7 +764,7 @@ bool lantern_client_validate_vote_constraints(
 
     if (vote->slot < vote->head.slot)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             log_facility,
             meta,
             "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " "
@@ -788,7 +788,7 @@ bool lantern_client_validate_vote_constraints(
     uint64_t allowed_slot = admission_horizon / LANTERN_INTERVALS_PER_SLOT;
     if (vote->slot > allowed_slot)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             log_facility,
             meta,
             "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (current_interval=%" PRIu64 ")",

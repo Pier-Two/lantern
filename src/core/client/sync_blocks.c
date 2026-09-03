@@ -195,7 +195,7 @@ static void update_network_view_after_import(
     }
     if (changed)
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "status",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "network_view head %s%" PRIu64 ", finalized %s%" PRIu64,
@@ -341,7 +341,7 @@ static bool persist_imported_block(
     const struct lantern_log_metadata *log_meta = meta ? meta : &fallback;
     if (lantern_storage_store_block(&client->storage, block) != 0)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "storage",
             log_meta,
             "failed to persist block slot=%" PRIu64,
@@ -369,7 +369,7 @@ static int commit_and_publish_local_block(
     format_root_hex(block_root, root_hex, sizeof(root_hex));
     if (client->sync_started_ms != 0u)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "gossip",
             &meta,
             "received block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s source=local",
@@ -379,7 +379,7 @@ static int commit_and_publish_local_block(
     }
     else
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "gossip",
             &meta,
             "received block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s source=local",
@@ -557,7 +557,7 @@ static bool get_block_root_local(
     }
     if (lantern_hash_tree_root_block(&block->block, out_root) != SSZ_SUCCESS)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             meta,
             "failed to hash block at slot=%" PRIu64,
@@ -587,7 +587,7 @@ static bool should_process_block(
 {
     if (root_known && slot <= known_slot)
     {
-        lantern_log_trace("state", meta, "skipping known block slot=%" PRIu64, slot);
+        lantern_log(LANTERN_LOG_LEVEL_TRACE, "state", meta, "skipping known block slot=%" PRIu64, slot);
         return false;
     }
     return true;
@@ -687,7 +687,7 @@ static void adopt_state_locked(struct lantern_client *client, LanternState *stat
                 &client->state.latest_finalized)
             != 0)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "forkchoice",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "failed to sync fork choice checkpoints when adopting state slot=%" PRIu64,
@@ -780,7 +780,7 @@ static enum block_parent_action handle_block_parent_locked(
             store_latest_finalized ? &store_latest_finalized->root : NULL,
             finalized_hex,
             sizeof(finalized_hex));
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "state",
             &parent_meta,
             "parent missing for block slot=%" PRIu64 " root=%s parent=%s"
@@ -827,7 +827,7 @@ static enum block_parent_action handle_block_parent_locked(
     /* Late blocks transition from their cached parent state, not the newer head. */
     if (block->block.slot <= client->state.slot)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "state",
             meta,
             "routing late block to branch transition slot=%" PRIu64 " state_slot=%" PRIu64,
@@ -846,7 +846,7 @@ static enum block_parent_action handle_block_parent_locked(
        header root may differ from what other clients expect. */
     if (lantern_state_process_slot(&client->state) != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             meta,
             "failed to compute cached header state root at slot=%" PRIu64,
@@ -872,7 +872,7 @@ static enum block_parent_action handle_block_parent_locked(
         char head_hex[ROOT_HEX_BUFFER_LEN];
         format_root_hex(&parent_root, parent_hex, sizeof(parent_hex));
         format_root_hex(&latest_header_root, head_hex, sizeof(head_hex));
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "state",
             meta,
             "block on competing fork slot=%" PRIu64 " parent=%s current_head=%s",
@@ -913,7 +913,7 @@ static bool add_competing_fork_block_locked(
     char parent_hex[ROOT_HEX_BUFFER_LEN];
     format_root_hex(block_root, block_hex, sizeof(block_hex));
     format_root_hex(&block->block.parent_root, parent_hex, sizeof(parent_hex));
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "import",
         meta,
         "slot %" PRIu64 ", %s, accepted off-head, parent %s, reason: known_off_current_head",
@@ -951,7 +951,7 @@ static bool validate_block_vote_constraints_locked(
     const LanternAggregatedAttestations *attestations = &block->block.body.attestations;
     if (attestations->length > 0 && !attestations->data)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             meta,
             "block slot=%" PRIu64 " attestations missing data length=%zu",
@@ -1001,7 +1001,7 @@ static bool validate_block_vote_constraints_locked(
                     &rejection.unknown_root,
                     unknown_hex,
                     sizeof(unknown_hex));
-                lantern_log_debug(
+                lantern_log(LANTERN_LOG_LEVEL_DEBUG,
                     "state",
                     meta,
                     "skipping block attestation unknown root=%s slot=%" PRIu64
@@ -1012,7 +1012,7 @@ static bool validate_block_vote_constraints_locked(
             }
             else if (rejection.has_reason)
             {
-                lantern_log_debug(
+                lantern_log(LANTERN_LOG_LEVEL_DEBUG,
                     "state",
                     meta,
                     "skipping block attestation constraint failure block_slot=%" PRIu64
@@ -1025,7 +1025,7 @@ static bool validate_block_vote_constraints_locked(
 
     if (skipped_constraints > 0)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "state",
             meta,
             "block slot=%" PRIu64 " skipped %" PRIu64 " attestation fork-choice checks",
@@ -1112,7 +1112,7 @@ static bool apply_state_transition_locked(
 
     if (lantern_state_transition(&client->state, block) != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             meta,
             "state transition failed for slot=%" PRIu64,
@@ -1129,7 +1129,7 @@ static bool apply_state_transition_locked(
                &client->state)
             != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "forkchoice",
             meta,
             "failed to add transitioned block at slot=%" PRIu64,
@@ -1165,7 +1165,7 @@ static void advance_fork_choice_time_locked(
     uint64_t now_milliseconds = validator_wall_time_now_millis();
     if (lantern_client_advance_fork_choice_time_locked(client, now_milliseconds, false) != 0)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "forkchoice",
             meta,
             "advancing fork choice time failed after slot=%" PRIu64,
@@ -1298,7 +1298,7 @@ static void prune_finalized_fork_choice_states_if_advanced_locked(
 
     if (!lantern_client_state_for_root_locked(client, &current_finalized->root))
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "forkchoice",
             meta,
             "failed to restore finalized state before pruning finalized_slot=%" PRIu64,
@@ -1308,7 +1308,7 @@ static void prune_finalized_fork_choice_states_if_advanced_locked(
 
     if (lantern_fork_choice_prune_states(&client->store) != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "forkchoice",
             meta,
             "failed to prune fork choice states finalized_slot=%" PRIu64,
@@ -1337,7 +1337,7 @@ static void prune_storage_if_finalized_advanced_locked(
             1u)
         < 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "storage",
             meta,
             "failed to prune persisted data before finalized slot=%" PRIu64,
@@ -1364,7 +1364,7 @@ static void persist_state_locked(
 
     if (lantern_storage_save_state(&client->storage, &client->state) != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "storage",
             meta,
             "failed to persist state after slot=%" PRIu64,
@@ -1399,7 +1399,7 @@ static bool persist_post_state_locked(
 
     if (lantern_storage_store_state_for_root(&client->storage, block_root, post_state) != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "storage",
             meta,
             "failed to persist post-state slot=%" PRIu64,
@@ -1442,7 +1442,7 @@ static void log_imported_block(
     format_root_hex(block_root, block_hex, sizeof(block_hex));
     format_root_hex(&block->block.parent_root, parent_hex, sizeof(parent_hex));
     format_root_hex(head_root, head_hex, sizeof(head_hex));
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "import",
         meta,
         "slot %" PRIu64 ", %s, via %s, parent %s, head %" PRIu64 " %s, took_ms %" PRIu64,
@@ -1470,7 +1470,7 @@ static void log_import_rejected(
     char parent_hex[ROOT_HEX_BUFFER_LEN];
     format_root_hex(block_root, block_hex, sizeof(block_hex));
     format_root_hex(&block->block.parent_root, parent_hex, sizeof(parent_hex));
-    lantern_log_warn(
+    lantern_log(LANTERN_LOG_LEVEL_WARN,
         "import",
         meta,
         "slot %" PRIu64 ", %s, rejected, reason: %s, via %s, parent %s",
@@ -1553,7 +1553,7 @@ static bool lantern_client_import_block_internal(
     bool state_locked = lantern_client_lock_state(client);
     if (!state_locked)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             meta,
             "failed to acquire state lock for block import slot=%" PRIu64,
@@ -1585,7 +1585,7 @@ static bool lantern_client_import_block_internal(
     {
         char block_hex[ROOT_HEX_BUFFER_LEN];
         format_root_hex(&block_root_local, block_hex, sizeof(block_hex));
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "state",
             meta,
             "dropping finalized historical block slot=%" PRIu64 " root=%s finalized_slot=%" PRIu64,
@@ -1675,7 +1675,7 @@ static bool lantern_client_import_block_internal(
     {
         char root_hex[ROOT_HEX_BUFFER_LEN];
         format_root_hex(&block_root_local, root_hex, sizeof(root_hex));
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             meta,
             "vote constraints failed slot=%" PRIu64 " root=%s depth=%" PRIu32,
@@ -2041,7 +2041,7 @@ lantern_client_error lantern_client_record_block(
 
     if (client->sync_started_ms != 0u)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "gossip",
             &meta,
             "received block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s source=%s",
@@ -2052,7 +2052,7 @@ lantern_client_error lantern_client_record_block(
     }
     else
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "gossip",
             &meta,
             "received block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s source=%s",

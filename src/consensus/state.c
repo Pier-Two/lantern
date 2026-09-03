@@ -1548,7 +1548,7 @@ static int lantern_state_prune_justification_roots(
         if (find_rc != 0) {
             if (lantern_state_remove_justification_root(state, (int)i, validator_count) != 0) {
                 if (meta) {
-                    lantern_log_warn(
+                    lantern_log(LANTERN_LOG_LEVEL_WARN,
                         "state",
                         meta,
                         "failed to prune off-chain justification root");
@@ -1560,7 +1560,7 @@ static int lantern_state_prune_justification_roots(
         if (latest_slot <= finalized_slot) {
             if (lantern_state_remove_justification_root(state, (int)i, validator_count) != 0) {
                 if (meta) {
-                    lantern_log_warn(
+                    lantern_log(LANTERN_LOG_LEVEL_WARN,
                         "state",
                         meta,
                         "failed to prune justification root at slot %" PRIu64,
@@ -1659,7 +1659,7 @@ int lantern_state_process_slots(LanternState *state, uint64_t target_slot) {
             .has_slot = true,
             .slot = state->slot,
         };
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             &meta,
             "process slots target=%" PRIu64 " must be in the future (current=%" PRIu64 ")",
@@ -1675,7 +1675,7 @@ int lantern_state_process_slots(LanternState *state, uint64_t target_slot) {
             return -1;
         }
         state->slot += 1;
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "state",
             &(const struct lantern_log_metadata){
                 .has_slot = true,
@@ -1710,7 +1710,7 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
         .slot = block->slot,
     };
     if (block->slot != state->slot) {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             &meta,
             "header rejected: block slot %" PRIu64 " expected state slot %" PRIu64,
@@ -1720,7 +1720,7 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
     }
     if (block->slot <= state->latest_block_header.slot) {
         const char *reason = block->slot == state->latest_block_header.slot ? "duplicate" : "stale";
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             &meta,
             "header rejected: %s slot %" PRIu64 " latest %" PRIu64,
@@ -1734,7 +1734,7 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
         return -1;
     }
     if (block->proposer_index != expected_proposer) {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             &meta,
             "header rejected: proposer %" PRIu64 " expected %" PRIu64,
@@ -1768,7 +1768,7 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
             != 0) {
             received_hex[0] = '\0';
         }
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             &meta,
             "header rejected: parent mismatch expected=%s received=%s",
@@ -1840,7 +1840,7 @@ int lantern_state_process_attestations(
     }
     for (size_t i = 0; i < state->justification_roots.length; ++i) {
         if (lantern_root_is_zero(&state->justification_roots.items[i])) {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "state",
                 &meta,
                 "zero hash is not allowed in justification roots");
@@ -1904,7 +1904,7 @@ int lantern_state_process_attestations(
         if (root_idx < 0) {
             root_idx = lantern_state_add_justification_root(state, &data->target.root, validator_count);
             if (root_idx < 0) {
-                lantern_log_warn(
+                lantern_log(LANTERN_LOG_LEVEL_WARN,
                     "state",
                     &meta,
                     "failed to add justification root for slot %" PRIu64,
@@ -1942,7 +1942,7 @@ int lantern_state_process_attestations(
             }
 
             if (lantern_state_remove_justification_root(state, root_idx, validator_count) != 0) {
-                lantern_log_warn(
+                lantern_log(LANTERN_LOG_LEVEL_WARN,
                     "state",
                     &meta,
                     "failed to remove justification root after justifying slot %" PRIu64,
@@ -2052,7 +2052,7 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
     double transition_metrics_start = lantern_time_now_seconds();
 #define STATE_FAIL(fmt, ...)                                                                 \
     do {                                                                                     \
-        lantern_log_warn(                                                                    \
+        lantern_log(LANTERN_LOG_LEVEL_WARN,                                                                     \
             "state",                                                                         \
             &(const struct lantern_log_metadata){.has_slot = true, .slot = block->slot},     \
             fmt,                                                                             \
@@ -2106,7 +2106,7 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
                 != 0) {
                 computed_hex[0] = '\0';
             }
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "state",
                 &(const struct lantern_log_metadata){.has_slot = true, .slot = block->slot},
                 "state root mismatch: expected=%s computed=%s",
@@ -2134,7 +2134,7 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
                 != 0) {
                 justified_hex[0] = '\0';
             }
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "state",
                 &(const struct lantern_log_metadata){.has_slot = true, .slot = block->slot},
                 "state root context state_slot=%" PRIu64 " header_slot=%" PRIu64
@@ -2149,7 +2149,7 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
                 state->historical_block_hashes.length,
                 state->justification_roots.length,
                 state->justification_validators.bit_length);
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "state",
                 &(const struct lantern_log_metadata){.has_slot = true, .slot = block->slot},
                 "state root checkpoints finalized_slot=%" PRIu64 " finalized_root=%s"
@@ -2324,7 +2324,7 @@ int lantern_state_collect_attestations_for_block(
             if (store->block_len > 0u) {
                 store_justified_slot = store->latest_justified.slot;
             }
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "propose",
                 &meta,
                 "slot %" PRIu64 ", skipped, reason: fixed_point_not_converged"

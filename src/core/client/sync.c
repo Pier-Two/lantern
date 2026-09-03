@@ -56,7 +56,7 @@ void lantern_client_set_sync_state_logged(
         return;
     }
     client->sync_state = new_state;
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "sync",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "%s → %s, %s",
@@ -161,7 +161,7 @@ int gossip_block_handler(
             format_root_hex(&block_root, root_hex, sizeof(root_hex));
         }
         format_root_hex(&block->block.parent_root, parent_hex, sizeof(parent_hex));
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "import",
             &(const struct lantern_log_metadata){
                 .validator = client->node_id,
@@ -336,7 +336,7 @@ static bool verify_and_cache_aggregated_attestation_locked(
             &attestation->data,
             &attestation->proof)
         != 0) {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "gossip",
             meta,
             "failed to cache aggregated attestation proof");
@@ -386,7 +386,7 @@ int gossip_aggregated_attestation_handler(
     if (!verified) {
         char missing_hex[ROOT_HEX_BUFFER_LEN];
         format_root_hex(&missing_root, missing_hex, sizeof(missing_hex));
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "gossip",
             &meta,
             "ignoring aggregated attestation slot=%" PRIu64 " missing_root=%s",
@@ -394,7 +394,7 @@ int gossip_aggregated_attestation_handler(
             missing_hex[0] ? missing_hex : "0x0");
         return LANTERN_CLIENT_ERR_IGNORED;
     }
-    lantern_log_debug(
+    lantern_log(LANTERN_LOG_LEVEL_DEBUG,
         "gossip",
         &meta,
         "accepted aggregated attestation slot=%" PRIu64,
@@ -456,7 +456,7 @@ void persist_anchor_block(
         ? lantern_storage_store_block_for_root(&client->storage, root_to_log, &stored_anchor) != 0
         : lantern_storage_store_block(&client->storage, &stored_anchor) != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "storage",
             &meta,
             "failed to persist anchor block root=%s",
@@ -464,7 +464,7 @@ void persist_anchor_block(
     }
     else
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "storage",
             &meta,
             "persisted anchor block root=%s",
@@ -496,7 +496,7 @@ static bool load_persisted_checkpoint_anchor_block(
     if (lantern_hash_tree_root_block_header(&expected_anchor_header, &expected_anchor_root)
         != SSZ_SUCCESS)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "forkchoice",
             meta,
             "failed to hash checkpoint state latest block header");
@@ -514,7 +514,7 @@ static bool load_persisted_checkpoint_anchor_block(
     {
         if (load_rc < 0)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "forkchoice",
                 meta,
                 "failed to load persisted checkpoint anchor block");
@@ -527,7 +527,7 @@ static bool load_persisted_checkpoint_anchor_block(
     bool loaded = false;
     if (lantern_ssz_decode_signed_block(&signed_anchor, block_bytes, block_len) != SSZ_SUCCESS)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "forkchoice",
             meta,
             "failed to decode persisted checkpoint anchor block");
@@ -537,7 +537,7 @@ static bool load_persisted_checkpoint_anchor_block(
     LanternRoot computed_root;
     if (lantern_hash_tree_root_block(&signed_anchor.block, &computed_root) != SSZ_SUCCESS)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "forkchoice",
             meta,
             "failed to hash persisted checkpoint anchor block");
@@ -550,7 +550,7 @@ static bool load_persisted_checkpoint_anchor_block(
             LANTERN_ROOT_SIZE)
         != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "forkchoice",
             meta,
             "persisted checkpoint anchor block root does not match checkpoint header");
@@ -596,7 +596,7 @@ static int compute_fork_choice_anchor_roots(
 
     if (lantern_hash_tree_root_state(&client->state, out_state_root) != SSZ_SUCCESS)
     {
-        lantern_log_error("forkchoice", meta, "failed to hash anchor state");
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, "forkchoice", meta, "failed to hash anchor state");
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
 
@@ -624,7 +624,7 @@ static int compute_fork_choice_anchor_roots(
                LANTERN_ROOT_SIZE)
                != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "forkchoice",
             meta,
             "missing persisted checkpoint anchor block for non-empty checkpoint header body");
@@ -640,7 +640,7 @@ static int compute_fork_choice_anchor_roots(
     if (lantern_hash_tree_root_block(out_anchor_block, out_anchor_root) != SSZ_SUCCESS)
     {
         lantern_block_body_reset(&out_anchor_block->body);
-        lantern_log_error("forkchoice", meta, "failed to hash anchor block");
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, "forkchoice", meta, "failed to hash anchor block");
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
 
@@ -715,7 +715,7 @@ int initialize_fork_choice(struct lantern_client *client)
         != 0)
     {
         lantern_block_body_reset(&anchor.body);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "forkchoice",
             &meta,
             "failed to set fork choice anchor");
@@ -731,7 +731,7 @@ int initialize_fork_choice(struct lantern_client *client)
                 &anchor_state)
             != 0)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "storage",
                 &meta,
                 "failed to persist anchor state alias");
@@ -912,7 +912,7 @@ int restore_persisted_blocks(struct lantern_client *client)
                keep_root_count)
             < 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "storage",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to prune persisted data before finalized slot=%" PRIu64,
@@ -990,7 +990,7 @@ int restore_persisted_blocks(struct lantern_client *client)
             false)
         != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "forkchoice",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "advancing fork choice time after restore failed");
@@ -1024,7 +1024,7 @@ int restore_persisted_blocks(struct lantern_client *client)
             &restored_finalized)
         != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "forkchoice",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "restoring persisted checkpoints failed");
@@ -1595,7 +1595,7 @@ bool lantern_client_schedule_next_range_request(struct lantern_client *client)
     (void)lantern_string_copy(peer_text, sizeof(peer_text), range->request_peer);
     pthread_mutex_unlock(&client->status_lock);
 
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "sync",
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
@@ -1736,7 +1736,7 @@ bool lantern_client_complete_range_request(
     }
     pthread_mutex_unlock(&client->status_lock);
 
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "sync",
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
@@ -1779,7 +1779,7 @@ static bool schedule_blocks_request_batch(
     {
         if (client)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "backfill",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "not scheduled, reason: invalid_request, roots %zu",
@@ -1789,7 +1789,7 @@ static bool schedule_blocks_request_batch(
     }
     if (root_count > LANTERN_MAX_REQUEST_BLOCKS)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "backfill",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "not scheduled, reason: too_many_roots, roots %zu",
@@ -1798,7 +1798,7 @@ static bool schedule_blocks_request_batch(
     }
     if (!client->status_lock_initialized)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "backfill",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "not scheduled, reason: status_lock_not_initialized, roots %zu",
@@ -1809,7 +1809,7 @@ static bool schedule_blocks_request_batch(
     {
         if (lantern_root_is_zero(&roots[i]))
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "backfill",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "not scheduled, reason: zero_root, roots %zu",
@@ -1820,7 +1820,7 @@ static bool schedule_blocks_request_batch(
 
     if (pthread_mutex_lock(&client->status_lock) != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "backfill",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "not scheduled, reason: status_lock_failed, roots %zu",
@@ -1860,7 +1860,7 @@ static bool schedule_blocks_request_batch(
     }
     if (request_root_count == 0)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "backfill",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "not scheduled, reason: roots_pending, roots %zu",
@@ -1883,7 +1883,7 @@ static bool schedule_blocks_request_batch(
             selected_peer,
             sizeof(selected_peer)))
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "backfill",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "not scheduled, reason: no_eligible_peer, roots %zu, peers %zu",
@@ -1906,7 +1906,7 @@ static bool schedule_blocks_request_batch(
             root_count,
             &request_id))
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "backfill",
             &(const struct lantern_log_metadata){
                 .validator = client->node_id,
@@ -1932,7 +1932,7 @@ static bool schedule_blocks_request_batch(
     }
     pthread_mutex_unlock(&client->status_lock);
 
-    lantern_log_debug(
+    lantern_log(LANTERN_LOG_LEVEL_DEBUG,
         "reqresp",
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
@@ -1957,7 +1957,7 @@ static bool schedule_blocks_request_batch(
             client,
             request_id,
             LANTERN_BLOCKS_REQUEST_ABORTED);
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "backfill",
             &(const struct lantern_log_metadata){
                 .validator = client->node_id,
@@ -1968,7 +1968,7 @@ static bool schedule_blocks_request_batch(
         return false;
     }
 
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "backfill",
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
@@ -2283,7 +2283,7 @@ void lantern_client_pending_remove_branch_by_root(
     {
         char root_hex[ROOT_HEX_BUFFER_LEN];
         format_root_hex(root, root_hex, sizeof(root_hex));
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "sync",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "pruned pending branch root=%s removed=%zu",
@@ -2423,7 +2423,7 @@ void lantern_client_request_pending_parent_after_blocks(
     {
         format_root_hex(&requested_root, requested_hex, sizeof(requested_hex));
     }
-    lantern_log_debug(
+    lantern_log(LANTERN_LOG_LEVEL_DEBUG,
         "sync",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "pending parent scan requested_root=%s candidates=%zu prefer_requested=%s",
@@ -2488,7 +2488,7 @@ void lantern_client_request_pending_parent_after_blocks(
 
     if (request_count == 0)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "sync",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "pending parent request skipped candidates=%zu",
@@ -2503,7 +2503,7 @@ void lantern_client_request_pending_parent_after_blocks(
             request_roots,
             request_count))
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "sync",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "pending parent request scheduled count=%zu",
@@ -2582,7 +2582,7 @@ bool lantern_client_enqueue_pending_block(
         char parent_hex[ROOT_HEX_BUFFER_LEN];
         format_root_hex(&block_root_local, root_hex, sizeof(root_hex));
         format_root_hex(&request_root, parent_hex, sizeof(parent_hex));
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "sync",
             &(const struct lantern_log_metadata){
                 .validator = client->node_id,
@@ -2604,7 +2604,7 @@ bool lantern_client_enqueue_pending_block(
                     &request_root,
                     1u))
             {
-                lantern_log_info(
+                lantern_log(LANTERN_LOG_LEVEL_INFO,
                     "backfill",
                     &(const struct lantern_log_metadata){
                         .validator = client->node_id,
@@ -2637,7 +2637,7 @@ bool lantern_client_enqueue_pending_block(
             {
                 char dropped_hex[ROOT_HEX_BUFFER_LEN];
                 format_root_hex(&block_root_local, dropped_hex, sizeof(dropped_hex));
-                lantern_log_warn(
+                lantern_log(LANTERN_LOG_LEVEL_WARN,
                     "state",
                     &(const struct lantern_log_metadata){.validator = client->node_id},
                     "pending block queue full while syncing; dropping shallow incoming root=%s depth=%" PRIu32
@@ -2651,7 +2651,7 @@ bool lantern_client_enqueue_pending_block(
 
             char evicted_hex[ROOT_HEX_BUFFER_LEN];
             format_root_hex(&list->items[shallowest_index].root, evicted_hex, sizeof(evicted_hex));
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "state",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "pending block queue full while syncing; evicting shallow root=%s depth=%" PRIu32
@@ -2665,7 +2665,7 @@ bool lantern_client_enqueue_pending_block(
         {
             char dropped_hex[ROOT_HEX_BUFFER_LEN];
             format_root_hex(&list->items[0].root, dropped_hex, sizeof(dropped_hex));
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "state",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "pending block queue full; dropping oldest root=%s",
@@ -2684,7 +2684,7 @@ bool lantern_client_enqueue_pending_block(
     if (!entry)
     {
         lantern_client_unlock_pending(client, locked);
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "state",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to queue pending block slot=%" PRIu64,
@@ -2739,7 +2739,7 @@ bool lantern_client_enqueue_pending_block(
                 1u))
         {
             request_scheduled = true;
-            lantern_log_info(
+            lantern_log(LANTERN_LOG_LEVEL_INFO,
                 "backfill",
                 &(const struct lantern_log_metadata){
                     .validator = client->node_id,
@@ -2751,7 +2751,7 @@ bool lantern_client_enqueue_pending_block(
         }
     }
 
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "import",
         &meta,
         "slot %" PRIu64 ", %s, queued, reason: parent_missing, parent %s, requested %s",
@@ -2760,7 +2760,7 @@ bool lantern_client_enqueue_pending_block(
         parent_hex[0] ? parent_hex : "0x0",
         request_scheduled ? "true" : "false");
 
-    lantern_log_debug(
+    lantern_log(LANTERN_LOG_LEVEL_DEBUG,
         "sync",
         &meta,
         "pending enqueue root=%s parent=%s depth=%" PRIu32 " pending=%zu parent_cached=%s "
@@ -2832,7 +2832,7 @@ void lantern_client_process_pending_children(
 
         char parent_hex[ROOT_HEX_BUFFER_LEN];
         format_root_hex(&current_parent, parent_hex, sizeof(parent_hex));
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "sync",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "pending child replay starting parent=%s pending=%zu queue_len=%zu",
@@ -2858,7 +2858,7 @@ void lantern_client_process_pending_children(
             }
             if (clone_signed_block(&entry->block, &replays[replay_count].block) != 0)
             {
-                lantern_log_warn(
+                lantern_log(LANTERN_LOG_LEVEL_WARN,
                     "state",
                     &(const struct lantern_log_metadata){.validator = client->node_id},
                     "failed to clone pending child block for replay");
@@ -2928,7 +2928,7 @@ void lantern_client_process_pending_children(
                 {
                     char root_hex[ROOT_HEX_BUFFER_LEN];
                     format_root_hex(&replays[i].root, root_hex, sizeof(root_hex));
-                    lantern_log_warn(
+                    lantern_log(LANTERN_LOG_LEVEL_WARN,
                         "sync",
                         &(const struct lantern_log_metadata){.validator = client->node_id},
                         "failed to queue pending child root=%s for iterative replay",
@@ -2939,7 +2939,7 @@ void lantern_client_process_pending_children(
         }
         free(replays);
 
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "sync",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "pending child replay finished parent=%s pending=%zu replayed=%zu imported=%zu queued=%zu",
@@ -2948,7 +2948,7 @@ void lantern_client_process_pending_children(
             replay_count,
             imported_count,
             queued_children);
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "sync",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "pending children processed parent=%s pending=%zu replayed=%zu imported=%zu queued=%zu",

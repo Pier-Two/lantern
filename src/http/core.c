@@ -186,7 +186,7 @@ static void handle_http_request(struct evhttp_request *transport, void *context)
         404,
         "Not Found",
         server->config.unknown_json);
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         core_log_module(server),
         &(const struct lantern_log_metadata){.peer = request.peer},
         "%s %s -> 404 (rc=%d)",
@@ -201,7 +201,7 @@ static void *http_server_thread(void *context)
     int result = event_base_dispatch(server->event_base);
     if (result < 0)
     {
-        lantern_log_error(core_log_module(server), NULL, "HTTP event loop failed");
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, core_log_module(server), NULL, "HTTP event loop failed");
     }
     return NULL;
 }
@@ -264,7 +264,7 @@ int lantern_http_core_start(
         normalized.port);
     if (!socket)
     {
-        lantern_log_error(normalized.log_module, NULL, "HTTP bind failed port=%" PRIu16, normalized.port);
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, normalized.log_module, NULL, "HTTP bind failed port=%" PRIu16, normalized.port);
         release_transport(server);
         return LANTERN_HTTP_CORE_ERR_IO;
     }
@@ -287,7 +287,7 @@ int lantern_http_core_start(
         return LANTERN_HTTP_CORE_ERR_IO;
     }
     server->thread_started = 1;
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         normalized.log_module,
         NULL,
         "%s listening port=%" PRIu16,

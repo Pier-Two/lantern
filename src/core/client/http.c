@@ -139,7 +139,7 @@ int http_set_is_aggregator_cb(void *context, bool enabled, bool *out_previous)
 
     if (previous != enabled)
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "validator",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "aggregator role %s via admin API",
@@ -433,7 +433,7 @@ lantern_client_error client_start_apis(struct lantern_client *client)
                 &metrics_callbacks)
             != 0)
         {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "client",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "failed to start metrics server on port %" PRIu16,
@@ -457,7 +457,7 @@ lantern_client_error client_start_apis(struct lantern_client *client)
     {
         if (lantern_http_server_start(&client->http_server, &http_config) != 0)
         {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "client",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "failed to start HTTP server on port %" PRIu16,

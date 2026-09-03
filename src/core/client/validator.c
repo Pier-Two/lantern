@@ -295,7 +295,7 @@ static void validator_log_status_for_slot(struct lantern_client *client, uint64_
         sizeof(network_finalized_text),
         !lantern_root_is_zero(&network_view.finalized.root),
         network_view.finalized.slot);
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "status",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "slot %" PRIu64 ", head %" PRIu64 ", head_root %s, justified %" PRIu64
@@ -443,7 +443,7 @@ static bool validator_duty_gate_allows(
         if (duty_state->duty_gate_closed)
         {
             duty_state->duty_gate_closed = false;
-            lantern_log_info(
+            lantern_log(LANTERN_LOG_LEVEL_INFO,
                 "validator",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "duty gate reopened: network stall detected duty=%s slot=%" PRIu64
@@ -466,7 +466,7 @@ static bool validator_duty_gate_allows(
         if (allow)
         {
             duty_state->duty_gate_closed = false;
-            lantern_log_info(
+            lantern_log(LANTERN_LOG_LEVEL_INFO,
                 "validator",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "duty gate reopened: local view caught up duty=%s slot=%" PRIu64
@@ -483,7 +483,7 @@ static bool validator_duty_gate_allows(
         if (!allow)
         {
             duty_state->duty_gate_closed = true;
-            lantern_log_info(
+            lantern_log(LANTERN_LOG_LEVEL_INFO,
                 "validator",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "duty gate closed: local view stale duty=%s slot=%" PRIu64
@@ -546,7 +546,7 @@ static void validator_log_duty_skipped(
 
     if (should_log)
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "duty",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "slot %" PRIu64 ", skipped, reason: %s",
@@ -951,7 +951,7 @@ static void validator_log_signature_reuse_conflict(
     char requested_hex[2 * LANTERN_ROOT_SIZE + 3];
     format_root_hex(recorded_message, recorded_hex, sizeof(recorded_hex));
     format_root_hex(requested_message, requested_hex, sizeof(requested_hex));
-    lantern_log_warn(
+    lantern_log(LANTERN_LOG_LEVEL_WARN,
         "validator",
         NULL,
         "slot %" PRIu64 ", skipped, reason: xmss_key_reuse_conflict"
@@ -1442,7 +1442,7 @@ static int block_proposal_commit_and_log(struct lantern_async_block_proposal_job
                &slot_start_milliseconds)
             != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "propose",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "slot %" PRIu64 ", skipped, reason: slot_boundary_unavailable",
@@ -1493,7 +1493,7 @@ static int block_proposal_commit_and_log(struct lantern_async_block_proposal_job
             lantern_client_unlock_mutex(
                 &client->validator_lock, client->node_id, "validator_lock", "validator");
         }
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "propose",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "slot %" PRIu64 ", %s, %zu attestations",
@@ -1503,7 +1503,7 @@ static int block_proposal_commit_and_log(struct lantern_async_block_proposal_job
     }
     else
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "propose",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "slot %" PRIu64 ", skipped, reason: publish_failed, rc %d",
@@ -1545,7 +1545,7 @@ static int finish_block_proposal_job(struct lantern_async_block_proposal_job *jo
     if (proof_rc != LANTERN_CLIENT_OK)
     {
         lean_metrics_record_block_building_failure();
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "propose",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "slot %" PRIu64 ", skipped, reason: proof_failed, rc %d, proof %.3fs",
@@ -1559,7 +1559,7 @@ static int finish_block_proposal_job(struct lantern_async_block_proposal_job *jo
     lean_metrics_record_block_build_stage_timings(&job->stage_timings);
     lean_metrics_record_block_building_time(total_seconds);
     lean_metrics_record_block_building_success();
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "propose",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "slot %" PRIu64 ", %s, proof ready, attestation_count=%zu, proof %.3fs, total %.3fs",
@@ -1654,7 +1654,7 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
                 &vote->signature)
             != 0)
         {
-            lantern_log_debug(
+            lantern_log(LANTERN_LOG_LEVEL_DEBUG,
                 "validator",
                 &meta,
                 "failed to cache local vote for aggregation validator=%" PRIu64 " slot=%" PRIu64,
@@ -1671,7 +1671,7 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
             &subnet_id)
         == 0) {
         if (lantern_gossipsub_service_publish_vote_subnet(&client->gossip, vote, subnet_id) != 0) {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "gossip",
                 &meta,
                 "failed to publish subnet attestation validator=%" PRIu64 " slot=%" PRIu64 " subnet=%zu",
@@ -1681,7 +1681,7 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
             return LANTERN_CLIENT_ERR_NETWORK;
         }
     } else {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "gossip",
             &meta,
             "failed to compute attestation subnet validator=%" PRIu64 " slot=%" PRIu64,
@@ -1693,7 +1693,7 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
     char source_hex[2 * LANTERN_ROOT_SIZE + 3];
     format_root_hex(&vote->data.target.root, target_hex, sizeof(target_hex));
     format_root_hex(&vote->data.source.root, source_hex, sizeof(source_hex));
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "attest",
         &meta,
         "slot %" PRIu64 ", validator %" PRIu64 ", target %s @ %" PRIu64
@@ -1730,7 +1730,7 @@ int lantern_client_publish_block(struct lantern_client *client, const LanternSig
     }
     if (lantern_gossipsub_service_publish_block(&client->gossip, block) != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "propose",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "slot %" PRIu64 ", skipped, reason: publish_failed",
@@ -1749,7 +1749,7 @@ int lantern_client_publish_block(struct lantern_client *client, const LanternSig
         root_hex[0] = '\0';
     }
 
-    lantern_log_debug(
+    lantern_log(LANTERN_LOG_LEVEL_DEBUG,
         "propose",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "slot %" PRIu64 ", %s, published, attestations %zu",
@@ -2048,7 +2048,7 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
             : LANTERN_CLIENT_ERR_VALIDATOR;
         if (sign_rc != LANTERN_CLIENT_OK)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "duty",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "slot %" PRIu64 ", skipped, reason: attestation_sign_failed, validator %" PRIu64
@@ -2066,7 +2066,7 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
         int publish_rc = validator_publish_vote(client, &vote);
         if (publish_rc != LANTERN_CLIENT_OK)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "duty",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "slot %" PRIu64 ", skipped, reason: attestation_publish_failed, validator %" PRIu64
@@ -2475,7 +2475,7 @@ int start_block_proposal_worker(struct lantern_client *client)
         client->block_proposal_sync_initialized = false;
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "validator",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "block proposal worker started");
@@ -2497,7 +2497,7 @@ void stop_block_proposal_worker(struct lantern_client *client)
     int join_rc = pthread_join(client->block_proposal_thread, NULL);
     if (join_rc != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "validator",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "pthread_join failed: %d",
@@ -2510,7 +2510,7 @@ void stop_block_proposal_worker(struct lantern_client *client)
     pthread_cond_destroy(&client->block_proposal_cond);
     pthread_mutex_destroy(&client->block_proposal_lock);
     client->block_proposal_sync_initialized = false;
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "validator",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "block proposal worker stopped");
@@ -2563,7 +2563,7 @@ int start_timing_service(struct lantern_client *client)
     if (pthread_create(&client->timing_thread, NULL, timing_thread, client) != 0)
     {
         __atomic_store_n(&client->timing_stop_flag, 1, __ATOMIC_RELAXED);
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "forkchoice",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to start timing service thread");
@@ -2571,7 +2571,7 @@ int start_timing_service(struct lantern_client *client)
     }
 
     client->timing_thread_started = true;
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "forkchoice",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "chain scheduler started");
@@ -2599,7 +2599,7 @@ void stop_timing_service(struct lantern_client *client)
     int join_rc = pthread_join(client->timing_thread, NULL);
     if (join_rc != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "forkchoice",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "pthread_join failed: %d",
@@ -2607,7 +2607,7 @@ void stop_timing_service(struct lantern_client *client)
     }
 
     client->timing_thread_started = false;
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "forkchoice",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "chain scheduler stopped");
@@ -2637,7 +2637,7 @@ lantern_client_error client_setup_validators(
 
     if (!client->assigned_validators)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "node-id '%s' not found in validator-config",
@@ -2652,7 +2652,7 @@ lantern_client_error client_setup_validators(
 
     if (!client->assigned_validators->enr.ip || client->assigned_validators->enr.quic_port == 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "validator '%s' missing ENR fields",
@@ -2662,7 +2662,7 @@ lantern_client_error client_setup_validators(
 
     if (lantern_client_configure_xmss_sources(client, options) != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to configure xmss key sources");
@@ -2673,7 +2673,7 @@ lantern_client_error client_setup_validators(
 
     if (populate_local_validators(client) != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to enumerate local validators for '%s'",
@@ -2683,7 +2683,7 @@ lantern_client_error client_setup_validators(
 
     if (client->local_validator_count == 0 || client->state.validator_count == 0u)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "no local validators assigned for '%s'; check validator-config",
@@ -2697,7 +2697,7 @@ lantern_client_error client_setup_validators(
             "client")
         != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "validator pubkey validation failed for '%s'",
@@ -2710,7 +2710,7 @@ lantern_client_error client_setup_validators(
         return LANTERN_CLIENT_ERR_VALIDATOR;
     }
 
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "client",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "validator slice start=%" PRIu64 " count=%zu",

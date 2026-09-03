@@ -703,7 +703,7 @@ static int exchange_prepare_blocks_response(struct lantern_reqresp_exchange *exc
         lantern_blocks_by_root_request_reset(&req);
         return -1;
     }
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "network",
         &(const struct lantern_log_metadata){.peer = exchange->peer_id_text[0] ? exchange->peer_id_text : NULL},
         "served blocks-by-root request (%zu roots)",
@@ -1124,7 +1124,7 @@ static void reqresp_drive(
         } else if (exchange_cancel_pending_open(exchange)) {
             detached = service_remove_exchange(service, exchange) != 0;
         }
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "reqresp",
             &(const struct lantern_log_metadata){
                 .peer = exchange->peer_id_text[0] ? exchange->peer_id_text : NULL},

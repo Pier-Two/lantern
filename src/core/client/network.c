@@ -393,7 +393,7 @@ static bool dedup_peer_connections_after_open(
         {
             continue;
         }
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "network",
             &(const struct lantern_log_metadata){
                 .validator = client->node_id,
@@ -561,7 +561,7 @@ void connection_counter_update(
         lantern_client_set_sync_state_logged(client, LANTERN_SYNC_STATE_IDLE, "no peers");
         pthread_mutex_unlock(&client->status_lock);
     }
-    lantern_log_trace(
+    lantern_log(LANTERN_LOG_LEVEL_TRACE,
         "network",
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
@@ -658,7 +658,7 @@ void request_status_now(struct lantern_client *client, const struct lantern_peer
     }
     if (status_peer && !lantern_client_is_peer_connected(client, status_peer))
     {
-        lantern_log_trace(
+        lantern_log(LANTERN_LOG_LEVEL_TRACE,
             "reqresp",
             &(const struct lantern_log_metadata){
                 .validator = client->node_id,
@@ -679,7 +679,7 @@ void request_status_now(struct lantern_client *client, const struct lantern_peer
         guard_claimed = lantern_client_try_begin_status_request(client, status_peer);
         if (!guard_claimed)
         {
-            lantern_log_trace(
+            lantern_log(LANTERN_LOG_LEVEL_TRACE,
                 "reqresp",
                 &meta,
                 "status request already in flight; skipping");
@@ -700,7 +700,7 @@ void request_status_now(struct lantern_client *client, const struct lantern_peer
         const char *msg = (status_rc == 0)
             ? "initiated status request to peer"
             : "unable to initiate status request to peer";
-        lantern_log_trace(
+        lantern_log(LANTERN_LOG_LEVEL_TRACE,
             "reqresp",
             &meta,
             "%s",
@@ -708,7 +708,7 @@ void request_status_now(struct lantern_client *client, const struct lantern_peer
     }
     else if (status_rc != 0)
     {
-        lantern_log_trace(
+        lantern_log(LANTERN_LOG_LEVEL_TRACE,
             "reqresp",
             &(const struct lantern_log_metadata){
                 .validator = client->node_id},
@@ -716,7 +716,7 @@ void request_status_now(struct lantern_client *client, const struct lantern_peer
     }
     else
     {
-        lantern_log_trace(
+        lantern_log(LANTERN_LOG_LEVEL_TRACE,
             "reqresp",
             &(const struct lantern_log_metadata){
                 .validator = client->node_id},
@@ -785,7 +785,7 @@ void adopt_validator_listen_address(struct lantern_client *client)
     int written = snprintf(derived, sizeof(derived), fmt, enr->ip, (unsigned)enr->quic_port);
     if (written <= 0 || (size_t)written >= sizeof(derived))
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "network",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to derive listen address from ENR ip=%s port=%u",
@@ -795,14 +795,14 @@ void adopt_validator_listen_address(struct lantern_client *client)
     }
     if (set_owned_string(&client->listen_address, derived) != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "network",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to apply derived listen address %s",
             derived);
         return;
     }
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "network",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "using validator ENR listen multiaddr %s",
@@ -828,7 +828,7 @@ void identify_dial_multiaddr(
         return;
     }
 
-    lantern_log_trace(
+    lantern_log(LANTERN_LOG_LEVEL_TRACE,
         "network",
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
@@ -1174,7 +1174,7 @@ static void handle_connection_opened_event(
     {
         char peer_text[128];
         format_peer_id_text(peer, peer_text, sizeof(peer_text));
-        lantern_log_trace(
+        lantern_log(LANTERN_LOG_LEVEL_TRACE,
             "reqresp",
             &(const struct lantern_log_metadata){
                 .validator = client->node_id,
@@ -1236,7 +1236,7 @@ static void handle_connection_closed_event(
     };
     if (locally_initiated && peer_still_connected)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "network",
             &meta,
             "duplicate connection closed reason=%d (%s) app_error=%" PRIu64 " transport_error=%" PRIu64,
@@ -1247,7 +1247,7 @@ static void handle_connection_closed_event(
     }
     else if (locally_initiated)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "network",
             &meta,
             "local connection closed reason=%d (%s) app_error=%" PRIu64 " transport_error=%" PRIu64,
@@ -1258,7 +1258,7 @@ static void handle_connection_closed_event(
     }
     else
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "network",
             &meta,
             "connection closed reason=%d (%s) app_error=%" PRIu64 " transport_error=%" PRIu64,
@@ -1295,7 +1295,7 @@ static void handle_outgoing_connection_error_event(
     char peer_text[128];
     format_peer_id_text(peer, peer_text, sizeof(peer_text));
 
-    lantern_log_warn(
+    lantern_log(LANTERN_LOG_LEVEL_WARN,
         "network",
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
@@ -1456,7 +1456,7 @@ lantern_client_error client_start_network(
 
     if (lantern_libp2p_host_prepare(&client->network, &net_cfg) != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to initialize libp2p host");
@@ -1467,7 +1467,7 @@ lantern_client_error client_start_network(
     {
         if (pthread_mutex_init(&client->connection_lock, NULL) != 0)
         {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "network",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "failed to initialize connection lock");
@@ -1511,20 +1511,20 @@ lantern_client_error client_start_protocols(
     bool have_fork_digest = client_resolve_gossip_fork_digest(client, fork_digest) == 0;
     if (have_fork_digest) {
         if (lantern_gossip_fork_digest_to_hex(fork_digest, topic_network_name) != 0) {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "client",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "failed to format gossip fork digest for topic strings");
             return LANTERN_CLIENT_ERR_NETWORK;
         }
     } else {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "gossip fork digest missing from genesis ENRs; falling back to --devnet topic slot '%s'",
             client->devnet ? client->devnet : "-");
         if (!client->devnet || client->devnet[0] == '\0') {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "client",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "gossip topic fallback requires a non-empty --devnet value");
@@ -1534,7 +1534,7 @@ lantern_client_error client_start_protocols(
     }
     if (has_explicit_aggregate_subnets) {
         subnet_id = client->aggregate_subnet_ids[0];
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "gossip",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "aggregator subnet ids configured count=%zu primary=%zu committee_count=%zu",
@@ -1547,7 +1547,7 @@ lantern_client_error client_start_protocols(
                 attestation_committee_count,
                 &subnet_id)
             != 0) {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "client",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "failed to compute startup attestation subnet validator=%" PRIu64,
@@ -1560,13 +1560,13 @@ lantern_client_error client_start_protocols(
         && client->assigned_validators->enr.is_aggregator
         && client->assigned_validators->has_subnet) {
         if (lantern_client_aggregation_subnet_id(client, &subnet_id) != 0) {
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "client",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "failed to resolve configured aggregator subnet");
             return LANTERN_CLIENT_ERR_NETWORK;
         }
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "gossip",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "aggregator subnet configured subnet=%zu committee_count=%zu",
@@ -1581,7 +1581,7 @@ lantern_client_error client_start_protocols(
             &subscription_subnet_id_count)
         != 0) {
         free(subscription_subnet_ids);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to resolve attestation subnet subscriptions");
@@ -1601,7 +1601,7 @@ lantern_client_error client_start_protocols(
     client->gossip.aggregated_attestation_handler_user_data = client;
     if (lantern_gossipsub_service_start(&client->gossip, &gossip_cfg) != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to start gossipsub service");
@@ -1615,7 +1615,7 @@ lantern_client_error client_start_protocols(
                     &client->gossip,
                     current_subnet_id)
                 != 0) {
-                lantern_log_error(
+                lantern_log(LANTERN_LOG_LEVEL_ERROR,
                     "client",
                     &(const struct lantern_log_metadata){.validator = client->node_id},
                     "failed to subscribe attestation subnet subnet=%zu",
@@ -1625,7 +1625,7 @@ lantern_client_error client_start_protocols(
                 return LANTERN_CLIENT_ERR_NETWORK;
             }
         }
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "gossip",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "attestation subnet subscribed subnet=%zu committee_count=%zu explicit_aggregate_subnets=%s",
@@ -1633,7 +1633,7 @@ lantern_client_error client_start_protocols(
             attestation_committee_count,
             has_explicit_aggregate_subnets ? "true" : "false");
     }
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "gossip",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "gossip subscriptions: block + aggregation + %zu attestation subnet(s)",
@@ -1658,7 +1658,7 @@ lantern_client_error client_start_protocols(
     req_config.callbacks = &req_callbacks;
     if (lantern_reqresp_service_start(&client->reqresp, &req_config) != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to start request/response service");
@@ -1671,7 +1671,7 @@ lantern_client_error client_start_protocols(
     if (lantern_libp2p_host_register_event_handler(&client->network, connection_events_cb, client) != 0
         || lantern_libp2p_host_register_drive_handler(&client->network, peer_maintenance_drive, client) != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "network",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to register libp2p client handlers");
@@ -1680,7 +1680,7 @@ lantern_client_error client_start_protocols(
 
     if (append_genesis_bootnodes(client) != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to append bootnodes from genesis");
@@ -1696,14 +1696,14 @@ lantern_client_error client_start_protocols(
             client->assigned_validators->enr.is_aggregator)
         != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to build local ENR");
         return LANTERN_CLIENT_ERR_NETWORK;
     }
 
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "client",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "local ENR prepared sequence=%" PRIu64,
@@ -1711,7 +1711,7 @@ lantern_client_error client_start_protocols(
 
     if (lantern_libp2p_host_launch(&client->network) != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to launch libp2p host");
