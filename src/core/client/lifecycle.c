@@ -269,6 +269,8 @@ lantern_client_error lantern_init(
     uint8_t node_key[NODE_PRIVATE_KEY_SIZE];
     lantern_client_error err = LANTERN_CLIENT_OK;
 
+    lantern_secure_zero(node_key, sizeof(node_key));
+
     lantern_signature_configure_shadow_costs(
         options->shadow_xmss_rates,
         options->shadow_xmss_rates_set);
@@ -313,16 +315,13 @@ lantern_client_error lantern_init(
     }
 
     err = client_start_network(client, options, node_key);
-    if (err != LANTERN_CLIENT_OK)
+    if (err == LANTERN_CLIENT_OK)
     {
-        memset(node_key, 0, sizeof(node_key));
-        goto error;
+        err = client_start_protocols(client, node_key);
     }
-
-    err = client_start_protocols(client, node_key);
+    lantern_secure_zero(node_key, sizeof(node_key));
     if (err != LANTERN_CLIENT_OK)
     {
-        memset(node_key, 0, sizeof(node_key));
         goto error;
     }
 
@@ -337,7 +336,6 @@ lantern_client_error lantern_init(
     return LANTERN_CLIENT_OK;
 
 error:
-    memset(node_key, 0, sizeof(node_key));
     lantern_shutdown(client);
     return (err == LANTERN_CLIENT_OK) ? LANTERN_CLIENT_ERR_RUNTIME : err;
 }

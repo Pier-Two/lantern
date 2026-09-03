@@ -357,7 +357,7 @@ void connection_events_cb(
  *
  * @param client   Client to start networking for
  * @param options  User options containing key paths
- * @param node_key Buffer for the loaded node private key (cleared on return)
+ * @param node_key Caller-owned buffer that receives the node private key
  *
  * @return LANTERN_CLIENT_OK on success, or a negative lantern_client_error
  *
@@ -373,7 +373,7 @@ lantern_client_error client_start_network(
  * Start gossip, request/response, and peer protocols.
  *
  * @param client   Client to start protocols for
- * @param node_key Node private key buffer (cleared on return)
+ * @param node_key Borrowed node private key used during protocol startup
  *
  * @return LANTERN_CLIENT_OK on success, or a negative lantern_client_error
  *

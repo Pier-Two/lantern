@@ -1431,7 +1431,7 @@ static int client_resolve_gossip_fork_digest(
  *
  * @param client   Client to start networking for
  * @param options  User options containing key paths
- * @param node_key Buffer for the loaded node private key (cleared on return)
+ * @param node_key Caller-owned buffer that receives the node private key
  *
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_CONFIG on key load failure
@@ -1487,7 +1487,7 @@ lantern_client_error client_start_network(
  * using the provided node key.
  *
  * @param client   Client with an active libp2p host
- * @param node_key Node private key used for ENR construction
+ * @param node_key Borrowed node private key used during protocol startup
  *
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_NETWORK on protocol startup failure
@@ -1718,7 +1718,5 @@ lantern_client_error client_start_protocols(
         return LANTERN_CLIENT_ERR_NETWORK;
     }
 
-    memset(node_key, 0, NODE_PRIVATE_KEY_SIZE);
     return LANTERN_CLIENT_OK;
 }
-

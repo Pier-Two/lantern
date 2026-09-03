@@ -1,5 +1,6 @@
 #include "lantern/core/client.h"
 #include "lantern/support/log.h"
+#include "lantern/support/secure_mem.h"
 #include "lantern/support/strings.h"
 #include "lantern/support/version.h"
 
@@ -27,7 +28,7 @@ enum {
     OPT_USE_GENESIS_STATE,
     OPT_VALIDATOR_CONFIG,
     OPT_NODE_ID,
-    OPT_NODE_KEY,
+    OPT_REJECT_NODE_KEY,
     OPT_NODE_KEY_PATH,
     OPT_LISTEN_ADDRESS,
     OPT_CHECKPOINT_SYNC_URL,
@@ -65,7 +66,7 @@ static const struct option OPTIONS[] = {
     {"validator-keys-path", required_argument, NULL, OPT_LEGACY_VALIDATOR_KEYS_PATH},
     {"validator-config", required_argument, NULL, OPT_LEGACY_VALIDATOR_CONFIG_PATH},
     {"node-id", required_argument, NULL, OPT_NODE_ID},
-    {"node-key", required_argument, NULL, OPT_NODE_KEY},
+    {"node-key", required_argument, NULL, OPT_REJECT_NODE_KEY},
     {"node-key-path", required_argument, NULL, OPT_NODE_KEY_PATH},
     {"listen-address", required_argument, NULL, OPT_LISTEN_ADDRESS},
     {"checkpoint-sync-url", required_argument, NULL, OPT_CHECKPOINT_SYNC_URL},
@@ -241,7 +242,7 @@ static lantern_client_error set_shadow_rate(
 static lantern_client_error apply_option(
     struct lantern_client_options *options,
     int option,
-    const char *argument,
+    char *argument,
     bool *help,
     bool *version)
 {
@@ -269,9 +270,16 @@ static lantern_client_error apply_option(
     case OPT_NODE_ID:
         options->node_id = argument;
         return LANTERN_CLIENT_OK;
-    case OPT_NODE_KEY:
-        options->node_key_hex = argument;
-        return LANTERN_CLIENT_OK;
+    case OPT_REJECT_NODE_KEY:
+        if (argument)
+        {
+            lantern_secure_zero(argument, strlen(argument));
+        }
+        lantern_log_error(
+            "main",
+            NULL,
+            "--node-key was removed; use --node-key-path");
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     case OPT_NODE_KEY_PATH:
         options->node_key_path = argument;
         return LANTERN_CLIENT_OK;
@@ -368,8 +376,7 @@ static int parse_arguments(
             return -1;
         }
     }
-    if ((options->node_key_hex && options->node_key_path)
-        || (options->aggregate_subnet_id_count > 0u && !options->is_aggregator))
+    if (options->aggregate_subnet_id_count > 0u && !options->is_aggregator)
     {
         return -1;
     }
@@ -411,7 +418,6 @@ static void print_usage(const char *program)
         "  --use-genesis-state          Deprecated; ignored\n"
         "  --validator_config DIR       Directory with validator artifacts\n"
         "  --node-id NAME               Node identifier\n"
-        "  --node-key HEX               Local 32-byte private key\n"
         "  --node-key-path PATH         File containing the private key",
         program,
         LANTERN_DEFAULT_DATA_DIR);

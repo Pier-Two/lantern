@@ -98,23 +98,11 @@ int set_owned_string(char **dest, const char *value);
 
 
 /**
- * Read file contents and trim whitespace.
- *
- * @param path      File path
- * @param out_text  Output buffer (caller owns)
- * @return 0 on success, -1 on error
- *
- * @note Thread safety: This function is thread-safe
- */
-int read_trimmed_file(const char *path, char **out_text);
-
-
-/**
  * Load node key bytes from options.
  *
  * Reads from either node_key_hex or node_key_path.
  *
- * @param options  Client options
+ * @param options  Client options with caller-owned key input
  * @param out_key  Output buffer (32 bytes)
  * @return 0 on success, -1 on error
  *

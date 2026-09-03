@@ -3,7 +3,7 @@
 #if defined(_WIN32)
 #include <windows.h>
 
-static double platform_time_now_seconds(void)
+double lantern_time_now_seconds(void)
 {
     LARGE_INTEGER counter;
     LARGE_INTEGER frequency;
@@ -18,7 +18,7 @@ static double platform_time_now_seconds(void)
 #else
 #include <time.h>
 
-static double platform_time_now_seconds(void)
+double lantern_time_now_seconds(void)
 {
     struct timespec value;
     if (clock_gettime(CLOCK_MONOTONIC, &value) != 0)
@@ -29,11 +29,6 @@ static double platform_time_now_seconds(void)
     return (double)value.tv_sec + ((double)value.tv_nsec / 1e9);
 }
 #endif /* _WIN32 */
-
-double lantern_time_now_seconds(void)
-{
-    return platform_time_now_seconds();
-}
 
 double lantern_time_elapsed_seconds(double started_seconds,
                                     double finished_seconds)

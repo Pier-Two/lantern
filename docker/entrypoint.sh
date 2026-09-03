@@ -42,7 +42,6 @@ VALIDATOR_CONFIG_DIR="${LANTERN_VALIDATOR_CONFIG_DIR:-${GENESIS_DIR}}"
 ANNOTATED_VALIDATORS="${VALIDATOR_CONFIG_DIR}/annotated_validators.yaml"
 VALIDATOR_CONFIG="${VALIDATOR_CONFIG_DIR}/validator-config.yaml"
 
-NODE_KEY_HEX="${LANTERN_NODE_KEY_HEX:-}"
 NODE_KEY_PATH="${LANTERN_NODE_KEY_PATH:-${CONFIG_DIR}/keys/${NODE_ID}.key}"
 
 BOOTNODES="${LANTERN_BOOTNODES:-${NODES_FILE}}"
@@ -54,8 +53,8 @@ for required in "${GENESIS_CONFIG}" "${ANNOTATED_VALIDATORS}" "${NODES_FILE}" "$
     fi
 done
 
-if [[ -z "${NODE_KEY_HEX}" && ! -f "${NODE_KEY_PATH}" ]]; then
-    echo "Node key missing; set LANTERN_NODE_KEY_HEX or provide ${NODE_KEY_PATH}" >&2
+if [[ ! -f "${NODE_KEY_PATH}" ]]; then
+    echo "Node key missing: ${NODE_KEY_PATH}" >&2
     exit 1
 fi
 declare -a args
@@ -72,11 +71,7 @@ args=(
     "--devnet" "${DEVNET}"
 )
 
-if [[ -n "${NODE_KEY_HEX}" ]]; then
-    args+=("--node-key" "${NODE_KEY_HEX}")
-else
-    args+=("--node-key-path" "${NODE_KEY_PATH}")
-fi
+args+=("--node-key-path" "${NODE_KEY_PATH}")
 
 IFS=',' read -ra bootnode_items <<< "${BOOTNODES}"
 for entry in "${bootnode_items[@]}"; do

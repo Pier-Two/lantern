@@ -52,6 +52,8 @@ struct lantern_libp2p_host {
     libp2p_host_t *host;
     void *host_storage;
     size_t host_storage_len;
+    /** Owned identity key. Reset clears it after the host stops using it. */
+    uint8_t identity_private_key[LIBP2P_PEER_ID_SECP256K1_PRIVATE_KEY_BYTES];
     uint8_t listen_multiaddr[LANTERN_LIBP2P_MULTIADDR_MAX_BYTES];
     size_t listen_multiaddr_len;
     uint8_t local_peer_id[LIBP2P_PEER_ID_MAX_BYTES];
@@ -104,7 +106,6 @@ int lantern_libp2p_enr_to_multiaddr(
     size_t buffer_len,
     struct lantern_peer_id *peer_id);
 int lantern_peer_id_from_text(const char *text, struct lantern_peer_id *out_peer);
-/* Returns the number of characters written on success, or -1 on failure. */
 int lantern_peer_id_to_text(const struct lantern_peer_id *peer, char *buffer, size_t buffer_len);
 int lantern_peer_id_equal(const struct lantern_peer_id *left, const struct lantern_peer_id *right);
 libp2p_host_time_us_t lantern_libp2p_now_us(void);

@@ -559,20 +559,24 @@ int set_owned_string(char **dest, const char *value)
 
 
 /**
- * Read file contents and trim whitespace.
+ * Read node-key text into a length-tracked buffer.
  *
- * @param path      File path
- * @param out_text  Output buffer (caller owns)
+ * @param path          File path
+ * @param out_text      Output buffer (caller owns)
+ * @param out_capacity  Allocated buffer size in bytes
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if path or out_text is NULL
  * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
- * @return LANTERN_CLIENT_ERR_CONFIG if the file cannot be read or trimmed
+ * @return LANTERN_CLIENT_ERR_CONFIG if the file cannot be read
  *
  * @note Thread safety: This function is thread-safe
  */
-int read_trimmed_file(const char *path, char **out_text)
+static int read_node_key_file(
+    const char *path,
+    char **out_text,
+    size_t *out_capacity)
 {
-    if (!path || !out_text)
+    if (!path || !out_text || !out_capacity)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
@@ -580,8 +584,10 @@ int read_trimmed_file(const char *path, char **out_text)
     int result = LANTERN_CLIENT_OK;
     FILE *fp = NULL;
     char *buffer = NULL;
+    size_t alloc_size = 0u;
 
     *out_text = NULL;
+    *out_capacity = 0u;
 
     fp = fopen(path, "rb");
     if (!fp)
@@ -611,7 +617,7 @@ int read_trimmed_file(const char *path, char **out_text)
         goto cleanup;
     }
 
-    size_t alloc_size = (size_t)file_size + 1;
+    alloc_size = (size_t)file_size + 1u;
     buffer = malloc(alloc_size);
     if (!buffer)
     {
@@ -634,15 +640,8 @@ int read_trimmed_file(const char *path, char **out_text)
     }
     buffer[read_len] = '\0';
 
-    char *trimmed = lantern_trim_whitespace(buffer);
-    if (!trimmed)
-    {
-        result = LANTERN_CLIENT_ERR_CONFIG;
-        goto cleanup;
-    }
-    size_t trimmed_len = strlen(trimmed);
-    memmove(buffer, trimmed, trimmed_len + 1);
     *out_text = buffer;
+    *out_capacity = alloc_size;
     buffer = NULL;
     result = LANTERN_CLIENT_OK;
 
@@ -659,6 +658,7 @@ cleanup:
                 errno);
         }
     }
+    lantern_secure_zero(buffer, alloc_size);
     free(buffer);
     return result;
 }
@@ -669,7 +669,7 @@ cleanup:
  *
  * Reads from either node_key_hex or node_key_path.
  *
- * @param options  Client options
+ * @param options  Client options with caller-owned key input
  * @param out_key  Output buffer (32 bytes)
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if options or out_key is NULL
@@ -688,41 +688,36 @@ int load_node_key_bytes(const struct lantern_client_options *options, uint8_t ou
     lantern_secure_zero(out_key, CLIENT_UTILS_NODE_KEY_SIZE);
 
     int result = LANTERN_CLIENT_OK;
-    char *owned = NULL;
+    char *key_text = NULL;
+    size_t key_text_capacity = 0u;
+    const char *encoded_key = options->node_key_hex;
 
-    if (options->node_key_hex)
+    if (!encoded_key && options->node_key_path)
     {
-        owned = lantern_string_duplicate(options->node_key_hex);
-        if (!owned)
-        {
-            return LANTERN_CLIENT_ERR_ALLOC;
-        }
-    }
-    else if (options->node_key_path)
-    {
-        int rc = read_trimmed_file(options->node_key_path, &owned);
+        int rc = read_node_key_file(
+            options->node_key_path,
+            &key_text,
+            &key_text_capacity);
         if (rc != LANTERN_CLIENT_OK)
         {
             return rc;
         }
+        encoded_key = key_text;
     }
-    else
+    if (!encoded_key)
     {
         lantern_log_error(
             "client",
             &(const struct lantern_log_metadata){.validator = options->node_id},
-            "--node-key or --node-key-path is required");
+            "node key input is required");
         return LANTERN_CLIENT_ERR_CONFIG;
     }
 
-    char *trimmed = lantern_trim_whitespace(owned);
-    if (!trimmed)
-    {
-        result = LANTERN_CLIENT_ERR_CONFIG;
-        goto cleanup;
-    }
-
-    if (lantern_hex_decode(trimmed, out_key, CLIENT_UTILS_NODE_KEY_SIZE) != 0)
+    if (lantern_hex_decode(
+            encoded_key,
+            out_key,
+            CLIENT_UTILS_NODE_KEY_SIZE)
+        != 0)
     {
         lantern_log_error(
             "client",
@@ -731,11 +726,14 @@ int load_node_key_bytes(const struct lantern_client_options *options, uint8_t ou
         result = LANTERN_CLIENT_ERR_CONFIG;
     }
 
-cleanup:
-    if (owned)
+    if (key_text)
     {
-        lantern_secure_zero(owned, strlen(owned));
-        free(owned);
+        lantern_secure_zero(key_text, key_text_capacity);
+        free(key_text);
+    }
+    if (result != LANTERN_CLIENT_OK)
+    {
+        lantern_secure_zero(out_key, CLIENT_UTILS_NODE_KEY_SIZE);
     }
     return result;
 }

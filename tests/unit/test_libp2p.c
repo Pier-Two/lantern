@@ -1,9 +1,11 @@
 #include "../../src/core/client/network_internal.h"
+#include "../../src/core/client/internal.h"
 
 #include "lantern/core/client.h"
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/networking/enr.h"
 #include "lantern/networking/libp2p.h"
+#include "lantern/support/secure_mem.h"
 #include "lantern/support/string_list.h"
 
 #include <pthread.h>
@@ -136,6 +138,86 @@ static int dial_starts_after_launch(void) {
     lantern_libp2p_host_reset(&host);
 
     return rc == 0 ? 0 : 1;
+}
+
+static int host_identity_owns_private_key(void)
+{
+    struct lantern_libp2p_host host;
+    uint8_t caller_key[sizeof(kHostSecret)];
+    uint8_t signature[LIBP2P_PEER_ID_SECP256K1_SIGNATURE_MAX_BYTES];
+    const uint8_t message[] = "owned identity key";
+    size_t signature_len = 0u;
+
+    lantern_libp2p_host_init(&host);
+    memcpy(caller_key, kHostSecret, sizeof(caller_key));
+    struct lantern_libp2p_config config = {
+        .listen_multiaddr = "/ip4/127.0.0.1/udp/19312/quic-v1",
+        .secp256k1_secret = caller_key,
+        .secret_len = sizeof(caller_key),
+    };
+
+    if (lantern_libp2p_host_prepare(&host, &config) != 0
+        || host.host_identity_storage.private_key
+            != host.identity_private_key)
+    {
+        lantern_libp2p_host_reset(&host);
+        return 1;
+    }
+
+    lantern_secure_zero(caller_key, sizeof(caller_key));
+    libp2p_host_err_t sign_result = libp2p_host_sign(
+        host.host,
+        message,
+        sizeof(message) - 1u,
+        signature,
+        sizeof(signature),
+        &signature_len);
+    lantern_libp2p_host_reset(&host);
+
+    if (sign_result != LIBP2P_HOST_OK || signature_len == 0u)
+    {
+        return 1;
+    }
+    for (size_t i = 0; i < sizeof(host.identity_private_key); ++i)
+    {
+        if (host.identity_private_key[i] != 0u)
+        {
+            return 1;
+        }
+    }
+    for (size_t i = 0; i < sizeof(host.certificate_key_der); ++i)
+    {
+        if (host.certificate_key_der[i] != 0u)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int node_key_decode_failure_clears_output(void)
+{
+    static const char invalid_key[] =
+        "b71c71a67e1177ad4e901695e1b4b9ee"
+        "17ae16c6668d313eac2f96dbcda3f29z";
+    struct lantern_client_options options;
+    uint8_t key[sizeof(kHostSecret)];
+
+    lantern_client_options_init(&options);
+    options.node_key_hex = invalid_key;
+    memset(key, 0xa5, sizeof(key));
+    if (load_node_key_bytes(&options, key) == LANTERN_CLIENT_OK)
+    {
+        return 1;
+    }
+    for (size_t i = 0; i < sizeof(key); ++i)
+    {
+        if (key[i] != 0u)
+        {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static int connection_counter_keeps_peer_until_last_connection_closes(void) {
@@ -384,6 +466,12 @@ int main(void) {
     }
 
     if (peer_maintenance_uses_drive_schedule() != 0) {
+        return 1;
+    }
+
+    if (host_identity_owns_private_key() != 0
+        || node_key_decode_failure_clears_output() != 0)
+    {
         return 1;
     }
 

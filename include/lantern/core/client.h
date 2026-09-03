@@ -65,7 +65,9 @@ struct lantern_client_options {
     const char *validator_config_dir;
     const char *nodes_path;
     const char *node_id;
+    /** Borrowed key text. The caller clears it after lantern_init returns. */
     const char *node_key_hex;
+    /** Borrowed path to the node-key file. */
     const char *node_key_path;
     const char *listen_address;
     const char *checkpoint_sync_url;
