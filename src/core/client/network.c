@@ -1050,13 +1050,15 @@ void peer_status_refresh(struct lantern_client *client)
     lantern_string_list_init(&connected_snapshot);
     (void)snapshot_connected_peers(client, &connected_snapshot);
 
-    for (size_t idx = 0; idx < connected_snapshot.len; ++idx)
+    size_t connected_count = lantern_string_list_count(&connected_snapshot);
+    for (size_t idx = 0; idx < connected_count; ++idx)
     {
         if (__atomic_load_n(&client->dialer_stop_flag, __ATOMIC_RELAXED) != 0)
         {
             break;
         }
-        const char *peer_text = connected_snapshot.items[idx];
+        const char *peer_text =
+            lantern_string_list_get(&connected_snapshot, idx);
         if (peer_text && peer_text[0])
         {
             request_status_now(client, NULL, peer_text);

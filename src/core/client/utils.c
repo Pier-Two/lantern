@@ -33,6 +33,7 @@
 #endif
 
 #include "lantern/consensus/fork_choice.h"
+#include "lantern/support/hex.h"
 #include "lantern/support/log.h"
 #include "lantern/support/secure_mem.h"
 #include "lantern/support/strings.h"
@@ -351,10 +352,10 @@ void format_root_hex(const LanternRoot *root, char *out, size_t out_len)
 
     if (lantern_root_is_zero(root))
     {
-        (void)lantern_string_copy(out, out_len, "0x0");
+        (void)lantern_string_copy(out, out_len, "0x0", NULL);
         return;
     }
-    if (lantern_bytes_to_hex(root->bytes, sizeof(root->bytes), out, out_len, 1) != 0)
+    if (lantern_hex_encode(root->bytes, sizeof(root->bytes), out, out_len, 1) != 0)
     {
         out[0] = '\0';
     }

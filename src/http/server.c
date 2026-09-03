@@ -29,8 +29,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "lantern/support/hex.h"
 #include "lantern/support/log.h"
-#include "lantern/support/strings.h"
 #include "test_driver/driver.h"
 
 static const size_t LANTERN_HTTP_MAX_TEST_DRIVER_BODY_SIZE = 64u * 1024u * 1024u;
@@ -88,28 +88,28 @@ static int format_fork_choice_response(
     char justified_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     char finalized_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     char safe_target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    if (lantern_bytes_to_hex(
+    if (lantern_hex_encode(
             snapshot->head.bytes,
             LANTERN_ROOT_SIZE,
             head_hex,
             sizeof(head_hex),
             1)
         != 0
-        || lantern_bytes_to_hex(
+        || lantern_hex_encode(
                snapshot->justified.root.bytes,
                LANTERN_ROOT_SIZE,
                justified_hex,
                sizeof(justified_hex),
                1)
                != 0
-        || lantern_bytes_to_hex(
+        || lantern_hex_encode(
                snapshot->finalized.root.bytes,
                LANTERN_ROOT_SIZE,
                finalized_hex,
                sizeof(finalized_hex),
                1)
                != 0
-        || lantern_bytes_to_hex(
+        || lantern_hex_encode(
                snapshot->safe_target.bytes,
                LANTERN_ROOT_SIZE,
                safe_target_hex,
@@ -135,14 +135,14 @@ static int format_fork_choice_response(
         const struct lantern_fork_choice_tree_node *node = &snapshot->nodes[i];
         char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        if (lantern_bytes_to_hex(
+        if (lantern_hex_encode(
                 node->root.bytes,
                 LANTERN_ROOT_SIZE,
                 root_hex,
                 sizeof(root_hex),
                 1)
             != 0
-            || lantern_bytes_to_hex(
+            || lantern_hex_encode(
                    node->parent_root.bytes,
                    LANTERN_ROOT_SIZE,
                    parent_hex,
@@ -805,7 +805,7 @@ static int handle_justified(
     }
 
     char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    if (lantern_bytes_to_hex(
+    if (lantern_hex_encode(
             justified.root.bytes,
             LANTERN_ROOT_SIZE,
             root_hex,

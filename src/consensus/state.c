@@ -12,7 +12,7 @@
 #include <string.h>
 
 #include "lantern/support/log.h"
-#include "lantern/support/strings.h"
+#include "lantern/support/hex.h"
 #include "lantern/support/time.h"
 #include "lantern/metrics/lean_metrics.h"
 
@@ -33,9 +33,31 @@ int lantern_proposer_for_slot(
     return 0;
 }
 
+static double metrics_now_seconds_or_negative(void) {
+    double seconds;
+    if (lantern_time_now_seconds(&seconds) != LANTERN_TIME_OK) {
+        return -1.0;
+    }
+    return seconds;
+}
+
+static double metrics_elapsed_seconds_or_zero(
+    double started_seconds,
+    double finished_seconds) {
+    double elapsed_seconds;
+    if (lantern_time_elapsed_seconds(
+            started_seconds,
+            finished_seconds,
+            &elapsed_seconds)
+        != LANTERN_TIME_OK) {
+        return 0.0;
+    }
+    return elapsed_seconds;
+}
+
 static void record_attestation_validation_metric(double start_seconds, bool valid) {
     lean_metrics_record_attestation_validation(
-        lantern_time_elapsed_seconds(start_seconds, lantern_time_now_seconds()),
+        metrics_elapsed_seconds_or_zero(start_seconds, metrics_now_seconds_or_negative()),
         valid);
 }
 
@@ -1750,7 +1772,7 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
     if (memcmp(block->parent_root.bytes, latest_header_root.bytes, LANTERN_ROOT_SIZE) != 0) {
         char expected_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         char received_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        if (lantern_bytes_to_hex(
+        if (lantern_hex_encode(
                 latest_header_root.bytes,
                 LANTERN_ROOT_SIZE,
                 expected_hex,
@@ -1759,7 +1781,7 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
             != 0) {
             expected_hex[0] = '\0';
         }
-        if (lantern_bytes_to_hex(
+        if (lantern_hex_encode(
                 block->parent_root.bytes,
                 LANTERN_ROOT_SIZE,
                 received_hex,
@@ -1851,14 +1873,14 @@ int lantern_state_process_attestations(
     LanternCheckpoint latest_justified = state->latest_justified;
     LanternCheckpoint latest_finalized = state->latest_finalized;
     uint64_t finalized_slot = latest_finalized.slot;
-    double att_batch_start = lantern_time_now_seconds();
+    double att_batch_start = metrics_now_seconds_or_negative();
     size_t att_attempted = attestations->length;
     bool finalization_attempted = false;
 
     for (size_t i = 0; i < attestations->length; ++i) {
         const LanternAggregatedAttestation *attestation = &attestations->data[i];
         const LanternAttestationData *data = &attestation->data;
-        double att_validation_start = lantern_time_now_seconds();
+        double att_validation_start = metrics_now_seconds_or_negative();
         bool source_is_justified = false;
         if (lantern_state_get_justified_slot_bit(state, data->source.slot, &source_is_justified) != 0
             || !source_is_justified) {
@@ -2017,9 +2039,9 @@ int lantern_state_process_attestations(
     state->latest_finalized = latest_finalized;
     lean_metrics_record_state_transition_attestations(
         att_attempted,
-        lantern_time_elapsed_seconds(
+        metrics_elapsed_seconds_or_zero(
             att_batch_start,
-            lantern_time_now_seconds()));
+            metrics_now_seconds_or_negative()));
     return 0;
 }
 
@@ -2029,7 +2051,7 @@ int lantern_state_process_block(
     if (!state || !block) {
         return -1;
     }
-    double block_metrics_start = lantern_time_now_seconds();
+    double block_metrics_start = metrics_now_seconds_or_negative();
     if (lantern_state_process_block_header(state, block) != 0) {
         return -1;
     }
@@ -2038,9 +2060,9 @@ int lantern_state_process_block(
     }
 
     lean_metrics_record_state_transition_block(
-        lantern_time_elapsed_seconds(
+        metrics_elapsed_seconds_or_zero(
             block_metrics_start,
-            lantern_time_now_seconds()));
+            metrics_now_seconds_or_negative()));
     return 0;
 }
 
@@ -2049,7 +2071,7 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
         return -1;
     }
     const LanternBlock *block = &signed_block->block;
-    double transition_metrics_start = lantern_time_now_seconds();
+    double transition_metrics_start = metrics_now_seconds_or_negative();
 #define STATE_FAIL(fmt, ...)                                                                 \
     do {                                                                                     \
         lantern_log(LANTERN_LOG_LEVEL_WARN,                                                                     \
@@ -2070,13 +2092,13 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
         STATE_FAIL("block proof invalid");
     }
     uint64_t slot_before = state->slot;
-    double slots_metrics_start = lantern_time_now_seconds();
+    double slots_metrics_start = metrics_now_seconds_or_negative();
     if (lantern_state_process_slots(state, block->slot) != 0) {
         STATE_FAIL("process slots failed current=%" PRIu64, state->slot);
     }
-    double slots_duration = lantern_time_elapsed_seconds(
+    double slots_duration = metrics_elapsed_seconds_or_zero(
         slots_metrics_start,
-        lantern_time_now_seconds());
+        metrics_now_seconds_or_negative());
     uint64_t slots_processed = block->slot >= slot_before ? (block->slot - slot_before) : 0;
     lean_metrics_record_state_transition_slots(slots_processed, slots_duration);
     if (lantern_state_process_block(state, block) != 0) {
@@ -2088,7 +2110,7 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
         if (memcmp(block->state_root.bytes, computed_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
             char expected_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
             char computed_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-            if (lantern_bytes_to_hex(
+            if (lantern_hex_encode(
                     block->state_root.bytes,
                     LANTERN_ROOT_SIZE,
                     expected_hex,
@@ -2097,7 +2119,7 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
                 != 0) {
                 expected_hex[0] = '\0';
             }
-            if (lantern_bytes_to_hex(
+            if (lantern_hex_encode(
                     computed_state_root.bytes,
                     LANTERN_ROOT_SIZE,
                     computed_hex,
@@ -2116,7 +2138,7 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
             char justified_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
             finalized_hex[0] = '\0';
             justified_hex[0] = '\0';
-            if (lantern_bytes_to_hex(
+            if (lantern_hex_encode(
                     state->latest_finalized.root.bytes,
                     LANTERN_ROOT_SIZE,
                     finalized_hex,
@@ -2125,7 +2147,7 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
                 != 0) {
                 finalized_hex[0] = '\0';
             }
-            if (lantern_bytes_to_hex(
+            if (lantern_hex_encode(
                     state->latest_justified.root.bytes,
                     LANTERN_ROOT_SIZE,
                     justified_hex,
@@ -2166,9 +2188,9 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
 
     state->slot = block->slot;
     lean_metrics_record_state_transition(
-        lantern_time_elapsed_seconds(
+        metrics_elapsed_seconds_or_zero(
             transition_metrics_start,
-            lantern_time_now_seconds()));
+            metrics_now_seconds_or_negative()));
 #undef STATE_FAIL
     return 0;
 }

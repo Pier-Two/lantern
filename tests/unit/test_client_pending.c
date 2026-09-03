@@ -1809,7 +1809,8 @@ static int test_imported_blocks_update_sync_network_view(void)
     if (fixture.client.range_sync.next_request_slot != second_block.block.slot + 1u
         || fixture.client.range_sync.target_slot != second_block.block.slot
         || fixture.client.range_sync.request_id != active_request_id
-        || fixture.client.range_sync.failed_peers.len != 0u) {
+        || lantern_string_list_count(
+               &fixture.client.range_sync.failed_peers) != 0u) {
         fprintf(stderr, "imported catch-up block did not advance active range state\n");
         goto cleanup;
     }
@@ -1819,7 +1820,8 @@ static int test_imported_blocks_update_sync_network_view(void)
         LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS);
     if (fixture.client.range_sync.target_slot != 0u
         || fixture.client.range_sync.request_id != 0u
-        || fixture.client.range_sync.failed_peers.len != 0u) {
+        || lantern_string_list_count(
+               &fixture.client.range_sync.failed_peers) != 0u) {
         fprintf(stderr, "completed range request retained reached range state\n");
         goto cleanup;
     }
@@ -2944,7 +2946,7 @@ static int test_range_response_bounds_and_separate_progress(void)
         || client.range_sync.imported_head_slot != 20u
         || client.range_sync.target_slot != 22u
         || client.range_sync.request_id != 0u
-        || client.range_sync.failed_peers.len != 0u) {
+        || lantern_string_list_count(&client.range_sync.failed_peers) != 0u) {
         fprintf(stderr, "range completion advanced beyond imported progress\n");
         goto cleanup;
     }
@@ -3006,7 +3008,7 @@ static int test_partial_range_failure_preserves_imported_progress(void)
             LANTERN_BLOCKS_REQUEST_FAILED)
         || client.range_sync.next_request_slot != 23u
         || client.range_sync.request_id != 0u
-        || client.range_sync.failed_peers.len != 0u)
+        || lantern_string_list_count(&client.range_sync.failed_peers) != 0u)
     {
         fprintf(stderr, "partial range failure discarded imported progress\n");
         goto cleanup;

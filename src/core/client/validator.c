@@ -74,6 +74,31 @@ static void validator_log_duty_skipped(
     uint64_t slot,
     const char *reason);
 
+static double metrics_now_seconds_or_negative(void)
+{
+    double seconds;
+    if (lantern_time_now_seconds(&seconds) != LANTERN_TIME_OK)
+    {
+        return -1.0;
+    }
+    return seconds;
+}
+
+static double metrics_elapsed_seconds_or_zero(
+    double started_seconds,
+    double finished_seconds)
+{
+    double elapsed_seconds;
+    if (lantern_time_elapsed_seconds(
+            started_seconds,
+            finished_seconds,
+            &elapsed_seconds) != LANTERN_TIME_OK)
+    {
+        return 0.0;
+    }
+    return elapsed_seconds;
+}
+
 static bool validator_record_aggregation_skipped_once(
     struct lantern_client *client,
     uint64_t slot,
@@ -652,12 +677,12 @@ lantern_client_error validator_collect_and_aggregate_attestation_signatures(
         *out_missing_state = false;
     }
 
-    double lock_started_seconds = lantern_time_now_seconds();
+    double lock_started_seconds = metrics_now_seconds_or_negative();
     bool state_locked = lantern_client_lock_state(client);
-    double lock_finished_seconds = lantern_time_now_seconds();
+    double lock_finished_seconds = metrics_now_seconds_or_negative();
     validator_add_stage_seconds(
         stage_timings ? &stage_timings->lock_waits_seconds : NULL,
-        lantern_time_elapsed_seconds(
+        metrics_elapsed_seconds_or_zero(
             lock_started_seconds,
             lock_finished_seconds));
     if (!state_locked)
@@ -680,7 +705,7 @@ lantern_client_error validator_collect_and_aggregate_attestation_signatures(
 
     bool raw_only = scope_slot != NULL;
     int snapshot_rc = lantern_state_clone(&client->state, &state_snapshot);
-    double collection_started_seconds = lantern_time_now_seconds();
+    double collection_started_seconds = metrics_now_seconds_or_negative();
     if (snapshot_rc == 0)
     {
         snapshot_rc = signature_map_snapshot(
@@ -688,13 +713,13 @@ lantern_client_error validator_collect_and_aggregate_attestation_signatures(
             &client->store.attestation_signatures,
             scope_slot);
     }
-    double collection_finished_seconds = lantern_time_now_seconds();
+    double collection_finished_seconds = metrics_now_seconds_or_negative();
     validator_add_stage_seconds(
         stage_timings ? &stage_timings->vote_collection_seconds : NULL,
-        lantern_time_elapsed_seconds(
+        metrics_elapsed_seconds_or_zero(
             collection_started_seconds,
             collection_finished_seconds));
-    double other_started_seconds = lantern_time_now_seconds();
+    double other_started_seconds = metrics_now_seconds_or_negative();
     if (!raw_only && snapshot_rc == 0)
     {
         snapshot_rc = payload_pool_snapshot(
@@ -707,10 +732,10 @@ lantern_client_error validator_collect_and_aggregate_attestation_signatures(
             &store_snapshot.known_aggregated_payloads,
             &client->store.known_aggregated_payloads);
     }
-    double other_finished_seconds = lantern_time_now_seconds();
+    double other_finished_seconds = metrics_now_seconds_or_negative();
     validator_add_stage_seconds(
         stage_timings ? &stage_timings->other_prover_setup_seconds : NULL,
-        lantern_time_elapsed_seconds(
+        metrics_elapsed_seconds_or_zero(
             other_started_seconds,
             other_finished_seconds));
 
@@ -734,12 +759,12 @@ lantern_client_error validator_collect_and_aggregate_attestation_signatures(
 
     if (rc == LANTERN_CLIENT_OK)
     {
-        double commit_lock_started_seconds = lantern_time_now_seconds();
+        double commit_lock_started_seconds = metrics_now_seconds_or_negative();
         bool commit_locked = lantern_client_lock_state(client);
-        double commit_lock_finished_seconds = lantern_time_now_seconds();
+        double commit_lock_finished_seconds = metrics_now_seconds_or_negative();
         validator_add_stage_seconds(
             stage_timings ? &stage_timings->lock_waits_seconds : NULL,
-            lantern_time_elapsed_seconds(
+            metrics_elapsed_seconds_or_zero(
                 commit_lock_started_seconds,
                 commit_lock_finished_seconds));
         if (!commit_locked)
@@ -1231,24 +1256,24 @@ static lantern_client_error validator_prepare_block_proposal_job(
     }
     job->client = client;
     job->local_index = local_index;
-    job->build_started_seconds = lantern_time_now_seconds();
+    job->build_started_seconds = metrics_now_seconds_or_negative();
     lantern_signed_block_init(&job->block);
     lantern_state_init(&job->proof_state);
     lantern_state_init(&job->post_state);
     lantern_signature_zero(&job->proposer_signature);
 
     LanternRoot parent_root;
-    double collect_started_seconds = lantern_time_now_seconds();
+    double collect_started_seconds = metrics_now_seconds_or_negative();
     double collect_finished_seconds = collect_started_seconds;
     lantern_client_error result = LANTERN_CLIENT_OK;
     struct lantern_local_validator *local = &client->local_validators[local_index];
 
-    double lock_started_seconds = lantern_time_now_seconds();
+    double lock_started_seconds = metrics_now_seconds_or_negative();
     bool state_locked = lantern_client_lock_state(client);
-    double lock_finished_seconds = lantern_time_now_seconds();
+    double lock_finished_seconds = metrics_now_seconds_or_negative();
     validator_add_stage_seconds(
         &job->stage_timings.lock_waits_seconds,
-        lantern_time_elapsed_seconds(
+        metrics_elapsed_seconds_or_zero(
             lock_started_seconds,
             lock_finished_seconds));
     if (!state_locked)
@@ -1270,7 +1295,7 @@ static lantern_client_error validator_prepare_block_proposal_job(
         lantern_client_unlock_state(client, state_locked);
         goto cleanup;
     }
-    double collection_started_seconds = lantern_time_now_seconds();
+    double collection_started_seconds = metrics_now_seconds_or_negative();
     if (lantern_state_collect_attestations_for_block(
             &client->state,
             &client->store,
@@ -1285,20 +1310,20 @@ static lantern_client_error validator_prepare_block_proposal_job(
         lantern_client_unlock_state(client, state_locked);
         goto cleanup;
     }
-    double collection_finished_for_stage_seconds = lantern_time_now_seconds();
+    double collection_finished_for_stage_seconds = metrics_now_seconds_or_negative();
     validator_add_stage_seconds(
         &job->stage_timings.vote_collection_seconds,
-        lantern_time_elapsed_seconds(
+        metrics_elapsed_seconds_or_zero(
             collection_started_seconds,
             collection_finished_for_stage_seconds));
-    collect_finished_seconds = lantern_time_now_seconds();
+    collect_finished_seconds = metrics_now_seconds_or_negative();
 
     job->block.block.slot = slot;
     job->block.block.proposer_index = local->global_index;
     job->block.block.parent_root = parent_root;
 
     LanternRoot computed_state_root;
-    double other_started_seconds = lantern_time_now_seconds();
+    double other_started_seconds = metrics_now_seconds_or_negative();
     if (lantern_state_compute_post_state(
             &client->state,
             &client->store,
@@ -1319,16 +1344,16 @@ static lantern_client_error validator_prepare_block_proposal_job(
         lantern_client_unlock_state(client, state_locked);
         goto cleanup;
     }
-    double other_finished_seconds = lantern_time_now_seconds();
+    double other_finished_seconds = metrics_now_seconds_or_negative();
     validator_add_stage_seconds(
         &job->stage_timings.other_prover_setup_seconds,
-        lantern_time_elapsed_seconds(
+        metrics_elapsed_seconds_or_zero(
             other_started_seconds,
             other_finished_seconds));
     lantern_client_unlock_state(client, state_locked);
     state_locked = false;
 
-    other_started_seconds = lantern_time_now_seconds();
+    other_started_seconds = metrics_now_seconds_or_negative();
     if (lantern_hash_tree_root_block(&job->block.block, &job->block_root) != SSZ_SUCCESS)
     {
         result = LANTERN_CLIENT_ERR_RUNTIME;
@@ -1345,16 +1370,16 @@ static lantern_client_error validator_prepare_block_proposal_job(
         result = LANTERN_CLIENT_ERR_VALIDATOR;
         goto cleanup;
     }
-    other_finished_seconds = lantern_time_now_seconds();
+    other_finished_seconds = metrics_now_seconds_or_negative();
     validator_add_stage_seconds(
         &job->stage_timings.other_prover_setup_seconds,
-        lantern_time_elapsed_seconds(
+        metrics_elapsed_seconds_or_zero(
             other_started_seconds,
             other_finished_seconds));
 
     lean_metrics_record_block_aggregated_payloads(job->block.block.body.attestations.length);
     lean_metrics_record_block_building_payload_aggregation_time(
-        lantern_time_elapsed_seconds(
+        metrics_elapsed_seconds_or_zero(
             collect_started_seconds,
             collect_finished_seconds));
 
@@ -1523,7 +1548,7 @@ static int finish_block_proposal_job(struct lantern_async_block_proposal_job *jo
     char root_hex[2 * LANTERN_ROOT_SIZE + 3];
     format_root_hex(&job->block_root, root_hex, sizeof(root_hex));
 
-    double proof_started_seconds = lantern_time_now_seconds();
+    double proof_started_seconds = metrics_now_seconds_or_negative();
     lantern_signature_set_stage_timings(&job->stage_timings);
     lantern_client_error proof_rc = validator_build_block_merge_proof_with_state(
         &job->proof_state,
@@ -1533,12 +1558,12 @@ static int finish_block_proposal_job(struct lantern_async_block_proposal_job *jo
         &job->proposer_signature,
         &job->block);
     lantern_signature_set_stage_timings(NULL);
-    double proof_finished_seconds = lantern_time_now_seconds();
-    double proof_seconds = lantern_time_elapsed_seconds(
+    double proof_finished_seconds = metrics_now_seconds_or_negative();
+    double proof_seconds = metrics_elapsed_seconds_or_zero(
         proof_started_seconds,
         proof_finished_seconds);
     double total_seconds =
-        lantern_time_elapsed_seconds(
+        metrics_elapsed_seconds_or_zero(
             job->build_started_seconds,
             proof_finished_seconds);
 
@@ -2033,7 +2058,7 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
         {
             continue;
         }
-        double production_start = lantern_time_now_seconds();
+        double production_start = metrics_now_seconds_or_negative();
         LanternSignedVote vote;
         memset(&vote, 0, sizeof(vote));
         vote.data.validator_id = validator->global_index;
@@ -2080,9 +2105,9 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
             }
         }
         lean_metrics_record_attestations_production_time(
-            lantern_time_elapsed_seconds(
+            metrics_elapsed_seconds_or_zero(
                 production_start,
-                lantern_time_now_seconds()));
+                metrics_now_seconds_or_negative()));
     }
 
     if (have_lock)
@@ -2132,7 +2157,7 @@ int validator_publish_aggregated_attestations(struct lantern_client *client, uin
 
     struct lantern_aggregated_payload_pool aggregated_payloads = {0};
 
-    double aggregation_started_seconds = lantern_time_now_seconds();
+    double aggregation_started_seconds = metrics_now_seconds_or_negative();
     bool missing_state = false;
     lantern_client_error result = validator_collect_and_aggregate_attestation_signatures(
         client,
@@ -2141,9 +2166,9 @@ int validator_publish_aggregated_attestations(struct lantern_client *client, uin
         NULL,
         &missing_state);
     size_t successful_aggregations = 0u;
-    double aggregation_finished_seconds = lantern_time_now_seconds();
+    double aggregation_finished_seconds = metrics_now_seconds_or_negative();
     double aggregation_seconds =
-        lantern_time_elapsed_seconds(
+        metrics_elapsed_seconds_or_zero(
             aggregation_started_seconds,
             aggregation_finished_seconds);
     uint64_t aggregated_attestations_total = 0;

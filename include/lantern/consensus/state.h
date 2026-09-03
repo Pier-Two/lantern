@@ -12,7 +12,8 @@ struct lantern_attestation_signature_map;
 struct lantern_aggregated_payload_pool;
 struct lantern_state_hash_cache;
 
-typedef enum {
+typedef enum
+{
     LANTERN_STATE_AGGREGATE_OK = 0,
     LANTERN_STATE_AGGREGATE_INVALID_PARAM = -1,
     LANTERN_STATE_AGGREGATE_ALLOC = -2,
@@ -20,13 +21,15 @@ typedef enum {
     LANTERN_STATE_AGGREGATE_RUNTIME = -4
 } lantern_state_aggregate_result;
 
-struct lantern_root_list {
+struct lantern_root_list
+{
     LanternRoot *items;
     size_t length;
     size_t capacity;
 };
 
-typedef struct {
+typedef struct
+{
     LanternConfig config;
     uint64_t slot;
     LanternBlockHeader latest_block_header;
@@ -47,60 +50,52 @@ int lantern_root_list_resize(struct lantern_root_list *list, size_t new_length);
 
 void lantern_state_init(LanternState *state);
 void lantern_state_reset(LanternState *state);
-int lantern_proposer_for_slot(
-    uint64_t slot,
-    uint64_t validator_count,
-    uint64_t *out_proposer_index);
+int lantern_proposer_for_slot(uint64_t slot, uint64_t validator_count,
+                              uint64_t *out_proposer_index);
 int lantern_state_clone(const LanternState *source, LanternState *dest);
-int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, uint64_t num_validators);
+int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time,
+                                   uint64_t num_validators);
 int lantern_state_process_slot(LanternState *state);
 int lantern_state_process_slots(LanternState *state, uint64_t target_slot);
-int lantern_state_process_block_header(LanternState *state, const LanternBlock *block);
+int lantern_state_process_block_header(LanternState *state,
+                                       const LanternBlock *block);
 int lantern_state_validate_attestation_data_constraints(
     const LanternAggregatedAttestations *attestations,
     bool require_unique_data);
 int lantern_state_process_attestations(
-    LanternState *state,
-    const LanternAggregatedAttestations *attestations);
-int lantern_state_process_block(
-    LanternState *state,
-    const LanternBlock *block);
-bool lantern_state_slot_in_justified_window(const LanternState *state, uint64_t slot);
-int lantern_state_get_justified_slot_bit(const LanternState *state, uint64_t slot, bool *out_value);
+    LanternState *state, const LanternAggregatedAttestations *attestations);
+int lantern_state_process_block(LanternState *state, const LanternBlock *block);
+bool lantern_state_slot_in_justified_window(const LanternState *state,
+                                            uint64_t slot);
+int lantern_state_get_justified_slot_bit(const LanternState *state,
+                                         uint64_t slot, bool *out_value);
 int lantern_state_mark_justified_slot(LanternState *state, uint64_t slot);
-int lantern_state_transition(LanternState *state, const LanternSignedBlock *signed_block);
-int lantern_state_select_block_parent(
-    LanternState *state,
-    const LanternStore *store,
-    LanternRoot *out_parent_root);
+int lantern_state_transition(LanternState *state,
+                             const LanternSignedBlock *signed_block);
+int lantern_state_select_block_parent(LanternState *state,
+                                      const LanternStore *store,
+                                      LanternRoot *out_parent_root);
 int lantern_state_collect_attestations_for_block(
-    const LanternState *state,
-    const LanternStore *store,
-    uint64_t block_slot,
-    uint64_t proposer_index,
-    const LanternRoot *parent_root,
+    const LanternState *state, const LanternStore *store, uint64_t block_slot,
+    uint64_t proposer_index, const LanternRoot *parent_root,
     LanternAggregatedAttestations *out_attestations,
     struct lantern_aggregated_payload_pool *out_payloads);
-int lantern_state_compute_vote_checkpoints(
-    const LanternState *state,
-    const LanternStore *store,
-    LanternCheckpoint *out_head,
-    LanternCheckpoint *out_target,
-    LanternCheckpoint *out_source);
-int lantern_state_compute_post_state(
-    const LanternState *state,
-    const LanternStore *store,
-    const LanternSignedBlock *block,
-    LanternState *out_post_state,
-    LanternRoot *out_state_root);
-int lantern_state_preview_post_state_root(
-    const LanternState *state,
-    const LanternStore *store,
-    const LanternSignedBlock *block,
-    LanternRoot *out_state_root);
-lantern_state_aggregate_result lantern_state_aggregate(
-    const LanternState *state,
-    const LanternStore *store,
-    struct lantern_aggregated_payload_pool *out_payloads);
+int lantern_state_compute_vote_checkpoints(const LanternState *state,
+                                           const LanternStore *store,
+                                           LanternCheckpoint *out_head,
+                                           LanternCheckpoint *out_target,
+                                           LanternCheckpoint *out_source);
+int lantern_state_compute_post_state(const LanternState *state,
+                                     const LanternStore *store,
+                                     const LanternSignedBlock *block,
+                                     LanternState *out_post_state,
+                                     LanternRoot *out_state_root);
+int lantern_state_preview_post_state_root(const LanternState *state,
+                                          const LanternStore *store,
+                                          const LanternSignedBlock *block,
+                                          LanternRoot *out_state_root);
+lantern_state_aggregate_result
+lantern_state_aggregate(const LanternState *state, const LanternStore *store,
+                        struct lantern_aggregated_payload_pool *out_payloads);
 
 #endif /* LANTERN_CONSENSUS_STATE_H */

@@ -3,8 +3,11 @@
 
 #include <stdint.h>
 
-static inline uint64_t lantern_consensus_quorum_threshold(uint64_t validator_count) {
-    if (validator_count == 0) {
+static inline uint64_t
+lantern_consensus_quorum_threshold(uint64_t validator_count)
+{
+    if (validator_count == 0)
+    {
         return 0;
     }
 
@@ -13,15 +16,19 @@ static inline uint64_t lantern_consensus_quorum_threshold(uint64_t validator_cou
     uint64_t threshold = (uint64_t)((numerator + 2u) / 3u);
 #else
     uint64_t numerator;
-    if (validator_count > ((UINT64_MAX - 2u) / 2u)) {
+    if (validator_count > ((UINT64_MAX - 2u) / 2u))
+    {
         numerator = UINT64_MAX - 2u;
-    } else {
+    }
+    else
+    {
         numerator = validator_count * 2u;
     }
     uint64_t threshold = (numerator + 2u) / 3u;
 #endif
 
-    if (threshold == 0) {
+    if (threshold == 0)
+    {
         threshold = 1;
     }
     return threshold;

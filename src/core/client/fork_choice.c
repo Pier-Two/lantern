@@ -98,7 +98,9 @@ int lantern_client_tick_fork_choice_interval_locked(
     size_t new_before = client->store.new_aggregated_payloads.length;
     size_t known_before = client->store.known_aggregated_payloads.length;
 
-    double tick_start_seconds = lantern_time_now_seconds();
+    double tick_start_seconds;
+    enum lantern_time_result tick_time_result =
+        lantern_time_now_seconds(&tick_start_seconds);
     int rc = lantern_fork_choice_advance_to(&client->store, next_interval, has_proposal);
     if (rc != 0) {
         return rc;
@@ -107,7 +109,7 @@ int lantern_client_tick_fork_choice_interval_locked(
         return -1;
     }
 
-    if (tick_start_seconds > 0.0) {
+    if (tick_time_result == LANTERN_TIME_OK && tick_start_seconds > 0.0) {
         if (client->last_tick_interval_started_seconds > 0.0
             && tick_start_seconds >= client->last_tick_interval_started_seconds) {
             lean_metrics_record_tick_interval_duration(

@@ -375,7 +375,7 @@ static int append_peer_vote_metric(
     {
         const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
         char peer_id[sizeof(metric->peer_id)];
-        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id);
+        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id, NULL);
 
         rc = lantern_http_buffer_appendf(
             buf,

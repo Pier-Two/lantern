@@ -304,7 +304,7 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
             const struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
             struct lantern_peer_vote_metric *metric =
                 &out_snapshot->peer_vote_metrics[out_snapshot->peer_vote_metrics_count++];
-            (void)lantern_string_copy(metric->peer_id, sizeof(metric->peer_id), entry->peer_id);
+            (void)lantern_string_copy(metric->peer_id, sizeof(metric->peer_id), entry->peer_id, NULL);
             metric->received_total = entry->votes_received;
             metric->accepted_total = entry->votes_accepted;
             metric->rejected_total = entry->votes_rejected;

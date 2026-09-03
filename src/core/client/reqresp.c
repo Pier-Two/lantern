@@ -672,7 +672,8 @@ static void lantern_client_peer_status_update(
         && range->next_request_slot != 0u
         && range->next_request_slot <= range->target_slot)
     {
-        if (lantern_string_list_remove(&range->failed_peers, peer_id_text))
+        if (lantern_string_list_remove(&range->failed_peers, peer_id_text) ==
+            LANTERN_STRING_LIST_OK)
         {
             range->peers_exhausted = false;
         }
@@ -884,7 +885,7 @@ void reqresp_status_failure(void *context, const char *peer_id, int error)
     }
     struct lantern_client *client = context;
     char peer_copy[sizeof(((struct lantern_peer_status_entry *)0)->peer_id)];
-    (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_id);
+    (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_id, NULL);
     if (error == 0)
     {
         error = LIBP2P_HOST_ERR_INTERNAL;
@@ -1849,7 +1850,7 @@ static void lantern_client_on_peer_status(
     }
 
     char peer_copy[sizeof(((struct lantern_peer_status_entry *)0)->peer_id)];
-    (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_id);
+    (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_id, NULL);
 
     LanternCheckpoint local_head = {0};
     bool head_known = false;

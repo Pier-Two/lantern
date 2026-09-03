@@ -26,8 +26,8 @@
 #ifndef LANTERN_CLIENT_SERVICES_INTERNAL_H
 #define LANTERN_CLIENT_SERVICES_INTERNAL_H
 
-#include "lantern/core/client.h"
 #include "lantern/consensus/containers.h"
+#include "lantern/core/client.h"
 #include "lantern/http/server.h"
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/networking/reqresp_service.h"
@@ -38,16 +38,17 @@
 #include <sys/types.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /* Include network internal header for shared types */
 #include "network_internal.h"
 
-
 /* ============================================================================
  * Validator Service Functions
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /**
  * Sign an arbitrary message root with one of a validator's XMSS keys.
@@ -73,13 +74,10 @@ extern "C" {
  *
  * @note Thread safety: Caller must ensure exclusive access to validator
  */
-int validator_sign_with_key(
-    struct lantern_local_validator *validator,
-    uint64_t slot,
-    const LanternRoot *message,
-    bool use_proposal_key,
-    LanternSignature *out_signature);
-
+int validator_sign_with_key(struct lantern_local_validator *validator,
+                            uint64_t slot, const LanternRoot *message,
+                            bool use_proposal_key,
+                            LanternSignature *out_signature);
 
 /**
  * Publish a vote to the network.
@@ -94,8 +92,8 @@ int validator_sign_with_key(
  *
  * @note Thread safety: This function is thread-safe
  */
-int validator_publish_vote(struct lantern_client *client, const LanternSignedVote *vote);
-
+int validator_publish_vote(struct lantern_client *client,
+                           const LanternSignedVote *vote);
 
 /**
  * Build a block for a validator.
@@ -114,12 +112,8 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
  *
  * @note Thread safety: This function acquires state_lock
  */
-int validator_build_block(
-    struct lantern_client *client,
-    uint64_t slot,
-    size_t local_index,
-    LanternSignedBlock *out_block);
-
+int validator_build_block(struct lantern_client *client, uint64_t slot,
+                          size_t local_index, LanternSignedBlock *out_block);
 
 /**
  * Propose a block for a validator.
@@ -136,11 +130,11 @@ int validator_build_block(
  *
  * @note Thread safety: This function acquires validator_lock
  */
-int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t local_index);
+int validator_propose_block(struct lantern_client *client, uint64_t slot,
+                            size_t local_index);
 
 int start_block_proposal_worker(struct lantern_client *client);
 void stop_block_proposal_worker(struct lantern_client *client);
-
 
 /**
  * Publish attestations for all enabled validators.
@@ -157,8 +151,8 @@ void stop_block_proposal_worker(struct lantern_client *client);
  *
  * @note Thread safety: This function acquires state_lock and validator_lock
  */
-int validator_publish_attestations(struct lantern_client *client, uint64_t slot);
-
+int validator_publish_attestations(struct lantern_client *client,
+                                   uint64_t slot);
 
 /**
  * Timing service thread function.
@@ -169,7 +163,6 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
  * @note Thread safety: This function runs in a separate thread
  */
 void *timing_thread(void *arg);
-
 
 /**
  * Start the timing service.
@@ -184,7 +177,6 @@ void *timing_thread(void *arg);
  */
 int start_timing_service(struct lantern_client *client);
 
-
 /**
  * Stop the timing service.
  *
@@ -194,10 +186,10 @@ int start_timing_service(struct lantern_client *client);
  */
 void stop_timing_service(struct lantern_client *client);
 
-
 /* ============================================================================
  * HTTP Callback Functions
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /**
  * Get the current justified checkpoint for HTTP API.
@@ -220,20 +212,19 @@ int http_snapshot_justified(void *context, LanternCheckpoint *out_checkpoint);
  * @note Thread safety: This function may acquire state_lock
  */
 int http_snapshot_fork_choice(
-    void *context,
-    struct lantern_fork_choice_tree_snapshot *out_snapshot);
-
+    void *context, struct lantern_fork_choice_tree_snapshot *out_snapshot);
 
 /**
  * Read the node's current aggregator role flag.
  *
  * @param context       Client instance
- * @param out_enabled   Output: true if the node is currently acting as aggregator
+ * @param out_enabled   Output: true if the node is currently acting as
+ * aggregator
  * @return 0 on success
- * @return LANTERN_HTTP_CB_ERR_INVALID_STATE if the node has no assigned validator entry
+ * @return LANTERN_HTTP_CB_ERR_INVALID_STATE if the node has no assigned
+ * validator entry
  */
 int http_get_is_aggregator_cb(void *context, bool *out_enabled);
-
 
 /**
  * Toggle the node's aggregator role at runtime.
@@ -242,13 +233,13 @@ int http_get_is_aggregator_cb(void *context, bool *out_enabled);
  * @param enabled       Desired aggregator state
  * @param out_previous  Output: aggregator state before the update
  * @return 0 on success
- * @return LANTERN_HTTP_CB_ERR_INVALID_STATE if the node has no assigned validator entry
+ * @return LANTERN_HTTP_CB_ERR_INVALID_STATE if the node has no assigned
+ * validator entry
  * @return LANTERN_HTTP_CB_ERR_LOCK_FAILED if the lock cannot be acquired
  *
  * @note Thread safety: Serializes concurrent toggles under validator_lock.
  */
 int http_set_is_aggregator_cb(void *context, bool enabled, bool *out_previous);
-
 
 /**
  * Get metrics snapshot for HTTP API.
@@ -259,7 +250,8 @@ int http_set_is_aggregator_cb(void *context, bool enabled, bool *out_previous);
  *
  * @note Thread safety: This function acquires state_lock and status_lock
  */
-int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snapshot);
+int metrics_snapshot_cb(void *context,
+                        struct lantern_metrics_snapshot *out_snapshot);
 
 /**
  * Get finalized state SSZ bytes for checkpoint sync.
@@ -271,7 +263,8 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
  *
  * @note Thread safety: This function may acquire state_lock
  */
-int http_finalized_state_ssz_cb(void *context, uint8_t **out_bytes, size_t *out_len);
+int http_finalized_state_ssz_cb(void *context, uint8_t **out_bytes,
+                                size_t *out_len);
 
 /**
  * Get finalized signed block SSZ bytes for checkpoint sync.
@@ -283,12 +276,13 @@ int http_finalized_state_ssz_cb(void *context, uint8_t **out_bytes, size_t *out_
  *
  * @note Thread safety: Reads fork-choice's checkpoint snapshot.
  */
-int http_finalized_block_ssz_cb(void *context, uint8_t **out_bytes, size_t *out_len);
-
+int http_finalized_block_ssz_cb(void *context, uint8_t **out_bytes,
+                                size_t *out_len);
 
 /* ============================================================================
  * Reqresp Callback Functions
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /**
  * Build a status message for reqresp protocol.
@@ -303,7 +297,6 @@ int http_finalized_block_ssz_cb(void *context, uint8_t **out_bytes, size_t *out_
  */
 int reqresp_build_status(void *context, LanternStatusMessage *out_status);
 
-
 /**
  * Handle an incoming status message from a peer.
  *
@@ -316,11 +309,9 @@ int reqresp_build_status(void *context, LanternStatusMessage *out_status);
  *
  * @note Thread safety: This function acquires status_lock
  */
-int reqresp_handle_status(
-    void *context,
-    const LanternStatusMessage *peer_status,
-    const char *peer_id);
-
+int reqresp_handle_status(void *context,
+                          const LanternStatusMessage *peer_status,
+                          const char *peer_id);
 
 /**
  * Handle a status request failure.
@@ -332,7 +323,6 @@ int reqresp_handle_status(
  * @note Thread safety: This function acquires status_lock
  */
 void reqresp_status_failure(void *context, const char *peer_id, int error);
-
 
 /**
  * Collect blocks for a blocks_by_root request.
@@ -347,34 +337,27 @@ void reqresp_status_failure(void *context, const char *peer_id, int error);
  *
  * @note Thread safety: This function is thread-safe
  */
-int reqresp_collect_blocks(
-    void *context,
-    const LanternRoot *roots,
-    size_t root_count,
-    LanternSignedBlockList *out_blocks);
+int reqresp_collect_blocks(void *context, const LanternRoot *roots,
+                           size_t root_count,
+                           LanternSignedBlockList *out_blocks);
 
-int reqresp_collect_blocks_by_range(
-    void *context,
-    uint64_t start_slot,
-    uint64_t count,
-    LanternSignedBlockList *out_blocks);
+int reqresp_collect_blocks_by_range(void *context, uint64_t start_slot,
+                                    uint64_t count,
+                                    LanternSignedBlockList *out_blocks);
 
 int reqresp_current_slot(void *context, uint64_t *out_slot);
 
-int reqresp_handle_block_response(
-    void *context,
-    const LanternSignedBlock *block,
-    const char *peer_id,
-    uint64_t request_id);
+int reqresp_handle_block_response(void *context,
+                                  const LanternSignedBlock *block,
+                                  const char *peer_id, uint64_t request_id);
 
 void reqresp_blocks_request_complete(
-    void *context,
-    uint64_t request_id,
+    void *context, uint64_t request_id,
     enum lantern_reqresp_blocks_request_result result);
 
-lantern_client_error lantern_client_block_importer_start(struct lantern_client *client);
+lantern_client_error
+lantern_client_block_importer_start(struct lantern_client *client);
 void lantern_client_block_importer_stop(struct lantern_client *client);
-
 
 /**
  * Handle completion of a tracked blocks request batch.
@@ -385,22 +368,20 @@ void lantern_client_block_importer_stop(struct lantern_client *client);
  * acquire pending_lock when a successful response schedules more backfill.
  */
 void lantern_client_on_blocks_request_complete_batch_with_id(
-    struct lantern_client *client,
-    uint64_t request_id,
+    struct lantern_client *client, uint64_t request_id,
     enum lantern_blocks_request_outcome outcome);
 
-bool lantern_client_import_block(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    const struct lantern_log_metadata *meta,
-    uint32_t backfill_depth,
-    bool allow_historical);
-
+bool lantern_client_import_block(struct lantern_client *client,
+                                 const LanternSignedBlock *block,
+                                 const LanternRoot *block_root,
+                                 const struct lantern_log_metadata *meta,
+                                 uint32_t backfill_depth,
+                                 bool allow_historical);
 
 /* ============================================================================
  * Key Management Functions
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /**
  * Clean up a single local validator's resources.
@@ -409,8 +390,8 @@ bool lantern_client_import_block(
  *
  * @note Thread safety: Caller must ensure exclusive access to the validator
  */
-void lantern_client_local_validator_cleanup(struct lantern_local_validator *validator);
-
+void lantern_client_local_validator_cleanup(
+    struct lantern_local_validator *validator);
 
 /**
  * Reset all local validators and free resources.
@@ -420,7 +401,6 @@ void lantern_client_local_validator_cleanup(struct lantern_local_validator *vali
  * @note Thread safety: Caller must ensure exclusive access during shutdown
  */
 void lantern_client_reset_local_validators(struct lantern_client *client);
-
 
 /**
  * Configure xmss key sources from options and environment.
@@ -435,7 +415,6 @@ int lantern_client_configure_xmss_sources(
     struct lantern_client *client,
     const struct lantern_client_options *options);
 
-
 /**
  * Load all xmss keys for the client.
  *
@@ -448,7 +427,6 @@ int lantern_client_configure_xmss_sources(
  */
 int lantern_client_load_xmss_keys(struct lantern_client *client);
 
-
 /**
  * Configure the client's local validator slice and key material.
  *
@@ -459,10 +437,9 @@ int lantern_client_load_xmss_keys(struct lantern_client *client);
  *
  * @note Thread safety: Initialization only; not safe for concurrent use.
  */
-lantern_client_error client_setup_validators(
-    struct lantern_client *client,
-    const struct lantern_client_options *options);
-
+lantern_client_error
+client_setup_validators(struct lantern_client *client,
+                        const struct lantern_client_options *options);
 
 /**
  * Start HTTP and metrics APIs for the client.
@@ -474,7 +451,6 @@ lantern_client_error client_setup_validators(
  * @note Thread safety: Must be called before serving concurrent requests.
  */
 lantern_client_error client_start_apis(struct lantern_client *client);
-
 
 #ifdef __cplusplus
 }

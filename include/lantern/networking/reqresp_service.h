@@ -9,12 +9,17 @@
 #include "lantern/networking/libp2p.h"
 #include "lantern/networking/messages.h"
 
-#define LANTERN_REQRESP_STATUS_PROTOCOL_SNAPPY "/leanconsensus/req/status/1/ssz_snappy"
-#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_SNAPPY "/leanconsensus/req/blocks_by_root/1/ssz_snappy"
-#define LANTERN_REQRESP_BLOCKS_BY_RANGE_PROTOCOL_SNAPPY "/leanconsensus/req/blocks_by_range/1/ssz_snappy"
+#define LANTERN_REQRESP_STATUS_PROTOCOL_SNAPPY                                 \
+    "/leanconsensus/req/status/1/ssz_snappy"
+#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_SNAPPY                         \
+    "/leanconsensus/req/blocks_by_root/1/ssz_snappy"
+#define LANTERN_REQRESP_BLOCKS_BY_RANGE_PROTOCOL_SNAPPY                        \
+    "/leanconsensus/req/blocks_by_range/1/ssz_snappy"
 #define LANTERN_REQRESP_STATUS_PROTOCOL LANTERN_REQRESP_STATUS_PROTOCOL_SNAPPY
-#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_SNAPPY
-#define LANTERN_REQRESP_BLOCKS_BY_RANGE_PROTOCOL LANTERN_REQRESP_BLOCKS_BY_RANGE_PROTOCOL_SNAPPY
+#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL                                \
+    LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_SNAPPY
+#define LANTERN_REQRESP_BLOCKS_BY_RANGE_PROTOCOL                               \
+    LANTERN_REQRESP_BLOCKS_BY_RANGE_PROTOCOL_SNAPPY
 #define LANTERN_REQRESP_MAX_CHUNK_BYTES (10u * 1024u * 1024u)
 #define LANTERN_REQRESP_MAX_ERROR_MESSAGE_SIZE 256u
 #define LANTERN_MIN_SLOTS_FOR_BLOCK_REQUESTS 3600u
@@ -29,14 +34,16 @@ enum
     LANTERN_REQRESP_ERR_INVALID_PAYLOAD = -1008,
 };
 
-enum lantern_reqresp_protocol_kind {
+enum lantern_reqresp_protocol_kind
+{
     LANTERN_REQRESP_PROTOCOL_STATUS = 0,
     LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT = 1,
     LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE = 2,
     LANTERN_REQRESP_PROTOCOL_KIND_COUNT,
 };
 
-enum lantern_reqresp_blocks_request_result {
+enum lantern_reqresp_blocks_request_result
+{
     LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED = 0,
     LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS = 1,
     LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_EMPTY = 2,
@@ -47,86 +54,71 @@ enum lantern_reqresp_blocks_request_result {
 struct lantern_log_metadata;
 struct lantern_reqresp_exchange;
 
-struct lantern_reqresp_service_callbacks {
+struct lantern_reqresp_service_callbacks
+{
     void *context;
     int (*build_status)(void *context, LanternStatusMessage *out_status);
-    int (*handle_status)(
-        void *context,
-        const LanternStatusMessage *peer_status,
-        const char *peer_id);
-    void (*status_failure)(
-        void *context,
-        const char *peer_id,
-        int error);
-    int (*collect_blocks)(
-        void *context,
-        const LanternRoot *roots,
-        size_t root_count,
-        LanternSignedBlockList *out_blocks);
-    int (*collect_blocks_by_range)(
-        void *context,
-        uint64_t start_slot,
-        uint64_t count,
-        LanternSignedBlockList *out_blocks);
+    int (*handle_status)(void *context, const LanternStatusMessage *peer_status,
+                         const char *peer_id);
+    void (*status_failure)(void *context, const char *peer_id, int error);
+    int (*collect_blocks)(void *context, const LanternRoot *roots,
+                          size_t root_count,
+                          LanternSignedBlockList *out_blocks);
+    int (*collect_blocks_by_range)(void *context, uint64_t start_slot,
+                                   uint64_t count,
+                                   LanternSignedBlockList *out_blocks);
     int (*current_slot)(void *context, uint64_t *out_slot);
-    int (*handle_block_response)(
-        void *context,
-        const LanternSignedBlock *block,
-        const char *peer_id,
-        uint64_t request_id);
+    int (*handle_block_response)(void *context, const LanternSignedBlock *block,
+                                 const char *peer_id, uint64_t request_id);
     void (*blocks_request_complete)(
-        void *context,
-        uint64_t request_id,
+        void *context, uint64_t request_id,
         enum lantern_reqresp_blocks_request_result result);
 };
 
-struct lantern_reqresp_service_config {
+struct lantern_reqresp_service_config
+{
     struct lantern_libp2p_host *network;
     const struct lantern_reqresp_service_callbacks *callbacks;
 };
 
-struct lantern_reqresp_protocol_context {
+struct lantern_reqresp_protocol_context
+{
     struct lantern_reqresp_service *service;
     enum lantern_reqresp_protocol_kind kind;
 };
 
-struct lantern_reqresp_service {
+struct lantern_reqresp_service
+{
     struct lantern_libp2p_host *network;
     struct lantern_reqresp_service_callbacks callbacks;
     libp2p_host_protocol_t protocols[LANTERN_REQRESP_PROTOCOL_KIND_COUNT];
-    struct lantern_reqresp_protocol_context protocol_contexts[LANTERN_REQRESP_PROTOCOL_KIND_COUNT];
+    struct lantern_reqresp_protocol_context
+        protocol_contexts[LANTERN_REQRESP_PROTOCOL_KIND_COUNT];
     struct lantern_reqresp_exchange *exchanges;
     int lock_initialized;
     pthread_mutex_t lock;
 };
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 void lantern_reqresp_service_init(struct lantern_reqresp_service *service);
 void lantern_reqresp_service_reset(struct lantern_reqresp_service *service);
 bool lantern_reqresp_service_cancel_blocks_by_range(
-    struct lantern_reqresp_service *service,
-    uint64_t request_id);
+    struct lantern_reqresp_service *service, uint64_t request_id);
 int lantern_reqresp_service_request_status(
     struct lantern_reqresp_service *service,
-    const struct lantern_peer_id *peer_id,
-    const char *peer_id_text);
+    const struct lantern_peer_id *peer_id, const char *peer_id_text);
 int lantern_reqresp_service_request_blocks(
     struct lantern_reqresp_service *service,
-    const struct lantern_peer_id *peer_id,
-    const char *peer_id_text,
-    const LanternRoot *roots,
-    size_t root_count,
-    uint64_t request_id);
+    const struct lantern_peer_id *peer_id, const char *peer_id_text,
+    const LanternRoot *roots, size_t root_count, uint64_t request_id);
 int lantern_reqresp_service_request_blocks_by_range(
     struct lantern_reqresp_service *service,
-    const struct lantern_peer_id *peer_id,
-    const char *peer_id_text,
-    uint64_t start_slot,
-    uint64_t count,
-    uint64_t request_id);
+    const struct lantern_peer_id *peer_id, const char *peer_id_text,
+    uint64_t start_slot, uint64_t count, uint64_t request_id);
 int lantern_reqresp_service_start(
     struct lantern_reqresp_service *service,
     const struct lantern_reqresp_service_config *config);

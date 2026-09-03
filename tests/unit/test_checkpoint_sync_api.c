@@ -20,7 +20,7 @@
 #include "lantern/http/client.h"
 #include "lantern/http/server.h"
 #include "lantern/storage/storage.h"
-#include "lantern/support/strings.h"
+#include "lantern/support/hex.h"
 #include "../support/storage_cleanup.h"
 #include "../support/validator_registry.h"
 
@@ -752,7 +752,7 @@ static int test_justified_state_endpoint(void)
 
     char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     expect_zero(
-        lantern_bytes_to_hex(
+        lantern_hex_encode(
             ctx.checkpoint.root.bytes,
             LANTERN_ROOT_SIZE,
             root_hex,
@@ -898,7 +898,7 @@ static int test_fork_choice_endpoint(void)
     for (size_t i = 0; i < 3u; ++i)
     {
         expect_zero(
-            lantern_bytes_to_hex(
+            lantern_hex_encode(
                 nodes[i].root.bytes,
                 LANTERN_ROOT_SIZE,
                 node_root_hex[i],
@@ -906,7 +906,7 @@ static int test_fork_choice_endpoint(void)
                 1),
             "fork choice node root hex");
         expect_zero(
-            lantern_bytes_to_hex(
+            lantern_hex_encode(
                 nodes[i].parent_root.bytes,
                 LANTERN_ROOT_SIZE,
                 node_parent_hex[i],
@@ -915,7 +915,7 @@ static int test_fork_choice_endpoint(void)
             "fork choice node parent hex");
     }
     expect_zero(
-        lantern_bytes_to_hex(
+        lantern_hex_encode(
             ctx.snapshot.head.bytes,
             LANTERN_ROOT_SIZE,
             head_hex,
@@ -923,7 +923,7 @@ static int test_fork_choice_endpoint(void)
             1),
         "fork choice head hex");
     expect_zero(
-        lantern_bytes_to_hex(
+        lantern_hex_encode(
             ctx.snapshot.justified.root.bytes,
             LANTERN_ROOT_SIZE,
             justified_hex,
@@ -931,7 +931,7 @@ static int test_fork_choice_endpoint(void)
             1),
         "fork choice justified hex");
     expect_zero(
-        lantern_bytes_to_hex(
+        lantern_hex_encode(
             ctx.snapshot.finalized.root.bytes,
             LANTERN_ROOT_SIZE,
             finalized_hex,
@@ -939,7 +939,7 @@ static int test_fork_choice_endpoint(void)
             1),
         "fork choice finalized hex");
     expect_zero(
-        lantern_bytes_to_hex(
+        lantern_hex_encode(
             ctx.snapshot.safe_target.bytes,
             LANTERN_ROOT_SIZE,
             safe_target_hex,

@@ -15,7 +15,8 @@
 #include "transport/quic/quic_service.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 struct lantern_enr_record;
@@ -27,28 +28,29 @@ struct lantern_libp2p_host;
 #define LANTERN_LIBP2P_MULTIADDR_MAX_BYTES 256u
 #define LANTERN_LIBP2P_PEER_TEXT_MAX_BYTES 128u
 
-struct lantern_peer_id {
+struct lantern_peer_id
+{
     uint8_t bytes[LIBP2P_PEER_ID_MAX_BYTES];
     size_t len;
 };
 
 typedef void (*lantern_libp2p_host_event_handler)(
-    struct lantern_libp2p_host *network,
-    const libp2p_host_event_t *event,
+    struct lantern_libp2p_host *network, const libp2p_host_event_t *event,
     void *user_data);
 
 typedef void (*lantern_libp2p_drive_handler)(
-    struct lantern_libp2p_host *network,
-    libp2p_host_time_us_t now_us,
+    struct lantern_libp2p_host *network, libp2p_host_time_us_t now_us,
     void *user_data);
 
-struct lantern_libp2p_config {
+struct lantern_libp2p_config
+{
     const char *listen_multiaddr;
     const uint8_t *secp256k1_secret;
     size_t secret_len;
 };
 
-struct lantern_libp2p_host {
+struct lantern_libp2p_host
+{
     libp2p_host_t *host;
     void *host_storage;
     size_t host_storage_len;
@@ -69,10 +71,12 @@ struct lantern_libp2p_host {
     libp2p_identify_t identify;
     libp2p_host_protocol_t default_protocols[3];
     size_t default_protocol_count;
-    lantern_libp2p_host_event_handler event_handlers[LANTERN_LIBP2P_MAX_EVENT_HANDLERS];
+    lantern_libp2p_host_event_handler
+        event_handlers[LANTERN_LIBP2P_MAX_EVENT_HANDLERS];
     void *event_handler_user_data[LANTERN_LIBP2P_MAX_EVENT_HANDLERS];
     size_t event_handler_count;
-    lantern_libp2p_drive_handler drive_handlers[LANTERN_LIBP2P_MAX_DRIVE_HANDLERS];
+    lantern_libp2p_drive_handler
+        drive_handlers[LANTERN_LIBP2P_MAX_DRIVE_HANDLERS];
     void *drive_handler_user_data[LANTERN_LIBP2P_MAX_DRIVE_HANDLERS];
     size_t drive_handler_count;
     pthread_t drive_thread;
@@ -83,34 +87,34 @@ struct lantern_libp2p_host {
 
 void lantern_libp2p_host_init(struct lantern_libp2p_host *state);
 void lantern_libp2p_host_reset(struct lantern_libp2p_host *state);
-int lantern_libp2p_host_prepare(struct lantern_libp2p_host *state, const struct lantern_libp2p_config *config);
+int lantern_libp2p_host_prepare(struct lantern_libp2p_host *state,
+                                const struct lantern_libp2p_config *config);
 int lantern_libp2p_host_launch(struct lantern_libp2p_host *state);
 void lantern_libp2p_host_stop(struct lantern_libp2p_host *state);
 int lantern_libp2p_host_register_protocol(
-    struct lantern_libp2p_host *state,
-    const libp2p_host_protocol_t *protocol);
+    struct lantern_libp2p_host *state, const libp2p_host_protocol_t *protocol);
 int lantern_libp2p_host_register_event_handler(
     struct lantern_libp2p_host *state,
-    lantern_libp2p_host_event_handler handler,
-    void *user_data);
+    lantern_libp2p_host_event_handler handler, void *user_data);
 int lantern_libp2p_host_register_drive_handler(
-    struct lantern_libp2p_host *state,
-    lantern_libp2p_drive_handler handler,
+    struct lantern_libp2p_host *state, lantern_libp2p_drive_handler handler,
     void *user_data);
-int lantern_libp2p_host_dial_multiaddr(
-    struct lantern_libp2p_host *state,
-    const char *multiaddr_text);
-int lantern_libp2p_enr_to_multiaddr(
-    const struct lantern_enr_record *record,
-    char *buffer,
-    size_t buffer_len,
-    struct lantern_peer_id *peer_id);
-int lantern_peer_id_from_text(const char *text, struct lantern_peer_id *out_peer);
-int lantern_peer_id_to_text(const struct lantern_peer_id *peer, char *buffer, size_t buffer_len);
-int lantern_peer_id_equal(const struct lantern_peer_id *left, const struct lantern_peer_id *right);
+int lantern_libp2p_host_dial_multiaddr(struct lantern_libp2p_host *state,
+                                       const char *multiaddr_text);
+int lantern_libp2p_enr_to_multiaddr(const struct lantern_enr_record *record,
+                                    char *buffer, size_t buffer_len,
+                                    struct lantern_peer_id *peer_id);
+int lantern_peer_id_from_text(const char *text,
+                              struct lantern_peer_id *out_peer);
+int lantern_peer_id_to_text(const struct lantern_peer_id *peer, char *buffer,
+                            size_t buffer_len);
+int lantern_peer_id_equal(const struct lantern_peer_id *left,
+                          const struct lantern_peer_id *right);
 libp2p_host_time_us_t lantern_libp2p_now_us(void);
-libp2p_quic_err_t lantern_libp2p_quic_random(uint8_t *out, size_t out_len, void *user_data);
-libp2p_gossipsub_err_t lantern_libp2p_gossipsub_random(uint8_t *out, size_t out_len, void *user_data);
+libp2p_quic_err_t lantern_libp2p_quic_random(uint8_t *out, size_t out_len,
+                                             void *user_data);
+libp2p_gossipsub_err_t
+lantern_libp2p_gossipsub_random(uint8_t *out, size_t out_len, void *user_data);
 
 #ifdef __cplusplus
 }

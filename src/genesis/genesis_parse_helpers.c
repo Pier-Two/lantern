@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "lantern/support/strings.h"
+#include "lantern/support/hex.h"
 
 uint64_t genesis_parse_u64(const char *value, int *ok)
 {

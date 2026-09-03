@@ -5,8 +5,8 @@
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/store.h"
 #include "lantern/consensus/ssz.h"
+#include "lantern/support/hex.h"
 #include "lantern/support/log.h"
-#include "lantern/support/strings.h"
 #include "fixture_runner.h"
 #include "tests/support/fixture_loader.h"
 #include "src/test_driver/driver.h"
@@ -47,7 +47,7 @@ static void configure_logging(void) {
         }
         return;
     }
-    lantern_log_set_level(LANTERN_LOG_LEVEL_WARN);
+    (void)lantern_log_set_level(LANTERN_LOG_LEVEL_WARN);
 }
 
 static int preview_post_state_root_without_signatures(
@@ -852,7 +852,7 @@ static void format_root_hex(const LanternRoot *root, char *buf, size_t buf_len) 
     if (!root || !buf || buf_len == 0) {
         return;
     }
-    if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, buf, buf_len, 1) != 0) {
+    if (lantern_hex_encode(root->bytes, LANTERN_ROOT_SIZE, buf, buf_len, 1) != 0) {
         buf[0] = '\0';
     }
 }

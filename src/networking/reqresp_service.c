@@ -1611,7 +1611,8 @@ static int service_open_exchange(
         (void)lantern_string_copy(
             exchange->peer_id_text,
             sizeof(exchange->peer_id_text),
-            peer_id_text);
+            peer_id_text,
+            NULL);
     }
     if (root_count > 0u) {
         if (!roots) {

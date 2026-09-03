@@ -64,8 +64,8 @@ static libp2p_ping_err_t lantern_ping_time(libp2p_host_time_us_t *out_now_us, vo
 }
 
 libp2p_host_time_us_t lantern_libp2p_now_us(void) {
-    double seconds = lantern_time_now_seconds();
-    if (seconds <= 0.0) {
+    double seconds;
+    if (lantern_time_now_seconds(&seconds) != LANTERN_TIME_OK || seconds <= 0.0) {
         return 0;
     }
     return (libp2p_host_time_us_t)(seconds * 1000000.0);

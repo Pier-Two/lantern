@@ -1250,7 +1250,8 @@ static void block_fetch_record_failed_peer(
     (void)lantern_string_copy(
         fetch->failed_peers[fetch->failed_peer_count],
         sizeof(fetch->failed_peers[fetch->failed_peer_count]),
-        peer_id);
+        peer_id,
+        NULL);
     fetch->failed_peer_count += 1u;
 }
 
@@ -1322,7 +1323,7 @@ static bool reserve_active_blocks_request_locked(
     memcpy(entry->roots, roots, root_count * sizeof(*entry->roots));
     entry->root_count = root_count;
     entry->request_id = request_id;
-    (void)lantern_string_copy(entry->peer_id, sizeof(entry->peer_id), peer_id);
+    (void)lantern_string_copy(entry->peer_id, sizeof(entry->peer_id), peer_id, NULL);
     client->active_blocks_request_count += 1u;
     *out_request_id = request_id;
     return true;
@@ -1489,7 +1490,7 @@ bool lantern_client_select_blocks_request_peer_locked(
     {
         return false;
     }
-    (void)lantern_string_copy(out_peer, out_peer_len, selected->peer_id);
+    (void)lantern_string_copy(out_peer, out_peer_len, selected->peer_id, NULL);
     return out_peer[0] != '\0';
 }
 
@@ -1586,13 +1587,14 @@ bool lantern_client_schedule_next_range_request(struct lantern_client *client)
     (void)lantern_string_copy(
         range->request_peer,
         sizeof(range->request_peer),
-        peer->peer_id);
+        peer->peer_id,
+        NULL);
 
     uint64_t request_id = range->request_id;
     uint64_t start_slot = range->request_start_slot;
     uint64_t target_slot = range->target_slot;
     char peer_text[PEER_TEXT_BUFFER_LEN];
-    (void)lantern_string_copy(peer_text, sizeof(peer_text), range->request_peer);
+    (void)lantern_string_copy(peer_text, sizeof(peer_text), range->request_peer, NULL);
     pthread_mutex_unlock(&client->status_lock);
 
     lantern_log(LANTERN_LOG_LEVEL_INFO,
@@ -1699,7 +1701,7 @@ bool lantern_client_complete_range_request(
     uint64_t start_slot = range->request_start_slot;
     uint64_t count = range->request_count;
     char peer_text[PEER_TEXT_BUFFER_LEN];
-    (void)lantern_string_copy(peer_text, sizeof(peer_text), range->request_peer);
+    (void)lantern_string_copy(peer_text, sizeof(peer_text), range->request_peer, NULL);
     range->request_id = 0u;
     range->request_start_slot = 0u;
     range->request_count = 0u;
@@ -2031,7 +2033,8 @@ bool lantern_client_complete_blocks_request(
     (void)lantern_string_copy(
         out_completion->peer_id,
         sizeof(out_completion->peer_id),
-        request->peer_id);
+        request->peer_id,
+        NULL);
     out_completion->root_count = request->root_count;
     out_completion->first_root = request->roots[0];
 
@@ -2559,7 +2562,7 @@ bool lantern_client_enqueue_pending_block(
         peer_copy[0] = '\0';
         if (peer_text && *peer_text)
         {
-            (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_text);
+            (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_text, NULL);
         }
         if (backfill_depth > existing->backfill_depth)
         {
@@ -2572,7 +2575,8 @@ bool lantern_client_enqueue_pending_block(
                 (void)lantern_string_copy(
                     existing->peer_text,
                     sizeof(existing->peer_text),
-                    peer_text);
+                    peer_text,
+                    NULL);
             }
         }
         size_t pending_len = list->length;
@@ -2730,7 +2734,7 @@ bool lantern_client_enqueue_pending_block(
         peer_copy[0] = '\0';
         if (peer_text && *peer_text)
         {
-            (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_text);
+            (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_text, NULL);
         }
         if (lantern_client_try_schedule_blocks_request_batch(
                 client,
@@ -2874,7 +2878,8 @@ void lantern_client_process_pending_children(
                     (void)lantern_string_copy(
                         replays[replay_count].peer_text,
                         sizeof(replays[replay_count].peer_text),
-                        entry->peer_text);
+                        entry->peer_text,
+                        NULL);
                 }
                 replay_count += 1u;
             }

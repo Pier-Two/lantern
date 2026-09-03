@@ -5,7 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-enum lantern_snappy_error {
+enum lantern_snappy_error
+{
     LANTERN_SNAPPY_OK = 0,
     LANTERN_SNAPPY_ERROR_INVALID_INPUT = -1,
     LANTERN_SNAPPY_ERROR_BUFFER_TOO_SMALL = -2,
@@ -19,46 +20,30 @@ int lantern_snappy_max_compressed_size_raw(size_t input_len, size_t *max_size);
 
 bool lantern_snappy_is_framed(const uint8_t *input, size_t input_len);
 
-int lantern_snappy_compress(
-    const uint8_t *input,
-    size_t input_len,
-    uint8_t *output,
-    size_t output_len,
-    size_t *written);
+int lantern_snappy_compress(const uint8_t *input, size_t input_len,
+                            uint8_t *output, size_t output_len,
+                            size_t *written);
 
 /* Raw (unframed) Snappy compression. Useful when the peer expects a plain
  * Snappy block instead of the Snappy framed stream with CRCs. */
-int lantern_snappy_compress_raw(
-    const uint8_t *input,
-    size_t input_len,
-    uint8_t *output,
-    size_t output_len,
-    size_t *written);
+int lantern_snappy_compress_raw(const uint8_t *input, size_t input_len,
+                                uint8_t *output, size_t output_len,
+                                size_t *written);
 
 /* Raw (unframed) Snappy uncompressed length. */
-int lantern_snappy_uncompressed_length_raw(
-    const uint8_t *input,
-    size_t input_len,
-    size_t *result);
+int lantern_snappy_uncompressed_length_raw(const uint8_t *input,
+                                           size_t input_len, size_t *result);
 
-int lantern_snappy_uncompressed_length(
-    const uint8_t *input,
-    size_t input_len,
-    size_t *result);
+int lantern_snappy_uncompressed_length(const uint8_t *input, size_t input_len,
+                                       size_t *result);
 
 /* Raw (unframed) Snappy decompression. */
-int lantern_snappy_decompress_raw(
-    const uint8_t *input,
-    size_t input_len,
-    uint8_t *output,
-    size_t output_len,
-    size_t *written);
+int lantern_snappy_decompress_raw(const uint8_t *input, size_t input_len,
+                                  uint8_t *output, size_t output_len,
+                                  size_t *written);
 
-int lantern_snappy_decompress(
-    const uint8_t *input,
-    size_t input_len,
-    uint8_t *output,
-    size_t output_len,
-    size_t *written);
+int lantern_snappy_decompress(const uint8_t *input, size_t input_len,
+                              uint8_t *output, size_t output_len,
+                              size_t *written);
 
 #endif /* LANTERN_ENCODING_SNAPPY_H */

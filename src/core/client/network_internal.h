@@ -23,21 +23,22 @@
 #ifndef LANTERN_CLIENT_NETWORK_INTERNAL_H
 #define LANTERN_CLIENT_NETWORK_INTERNAL_H
 
-#include "lantern/core/client.h"
 #include "lantern/consensus/containers.h"
+#include "lantern/core/client.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
-
 
 /* ============================================================================
  * Constants
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /** Peer dial interval in seconds */
 #define LANTERN_PEER_DIAL_INTERVAL_SECONDS 5u
@@ -51,10 +52,10 @@ extern "C" {
 /** Size of an Ed25519 node private key in bytes. */
 static const size_t NODE_PRIVATE_KEY_SIZE = 32u;
 
-
 /* ============================================================================
  * Internal Types
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /**
  * Outcome of a blocks request operation.
@@ -72,7 +73,6 @@ enum lantern_blocks_request_outcome
 /** Peer status considered stale after this many milliseconds. */
 #define LANTERN_PEER_STATUS_STALE_MS (30000u)
 
-
 /**
  * Peer status tracking entry.
  *
@@ -83,11 +83,11 @@ enum lantern_blocks_request_outcome
  */
 struct lantern_peer_status_entry
 {
-    char peer_id[128];                    /**< Peer ID string */
-    LanternStatusMessage status;          /**< Latest status message from peer */
-    uint64_t last_status_ms;              /**< Timestamp of last status message */
-    bool status_request_inflight;         /**< True if status request is pending */
-    bool status_request_failed;           /**< True until a status request succeeds */
+    char peer_id[128];            /**< Peer ID string */
+    LanternStatusMessage status;  /**< Latest status message from peer */
+    uint64_t last_status_ms;      /**< Timestamp of last status message */
+    bool status_request_inflight; /**< True if status request is pending */
+    bool status_request_failed;   /**< True until a status request succeeds */
     uint64_t votes_received;
     uint64_t votes_accepted;
     uint64_t votes_rejected;
@@ -97,7 +97,8 @@ struct lantern_peer_status_entry
 
 /* ============================================================================
  * Peer Status Functions
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /**
  * Find a peer status entry by peer ID.
@@ -108,10 +109,9 @@ struct lantern_peer_status_entry
  *
  * @note Thread safety: Caller must hold status_lock
  */
-struct lantern_peer_status_entry *lantern_client_find_status_entry_locked(
-    struct lantern_client *client,
-    const char *peer_id);
-
+struct lantern_peer_status_entry *
+lantern_client_find_status_entry_locked(struct lantern_client *client,
+                                        const char *peer_id);
 
 /**
  * Find or create a peer status entry.
@@ -122,10 +122,9 @@ struct lantern_peer_status_entry *lantern_client_find_status_entry_locked(
  *
  * @note Thread safety: Caller must hold status_lock
  */
-struct lantern_peer_status_entry *lantern_client_ensure_status_entry_locked(
-    struct lantern_client *client,
-    const char *peer_id);
-
+struct lantern_peer_status_entry *
+lantern_client_ensure_status_entry_locked(struct lantern_client *client,
+                                          const char *peer_id);
 
 /**
  * Record a vote delivery from a peer.
@@ -136,11 +135,9 @@ struct lantern_peer_status_entry *lantern_client_ensure_status_entry_locked(
  *
  * @note Thread safety: This function acquires status_lock
  */
-void lantern_client_note_vote_delivery(
-    struct lantern_client *client,
-    const char *peer_id,
-    const LanternSignedVote *vote);
-
+void lantern_client_note_vote_delivery(struct lantern_client *client,
+                                       const char *peer_id,
+                                       const LanternSignedVote *vote);
 
 /**
  * Record the outcome of processing a vote from a peer.
@@ -152,12 +149,10 @@ void lantern_client_note_vote_delivery(
  *
  * @note Thread safety: This function acquires status_lock
  */
-void lantern_client_note_vote_outcome(
-    struct lantern_client *client,
-    const char *peer_id,
-    const LanternSignedVote *vote,
-    bool accepted);
-
+void lantern_client_note_vote_outcome(struct lantern_client *client,
+                                      const char *peer_id,
+                                      const LanternSignedVote *vote,
+                                      bool accepted);
 
 /**
  * Try to begin a status request to a peer.
@@ -170,10 +165,8 @@ void lantern_client_note_vote_outcome(
  *
  * @note Thread safety: This function acquires status_lock
  */
-bool lantern_client_try_begin_status_request(
-    struct lantern_client *client,
-    const char *peer_id);
-
+bool lantern_client_try_begin_status_request(struct lantern_client *client,
+                                             const char *peer_id);
 
 /**
  * Note that a status request has failed.
@@ -184,14 +177,13 @@ bool lantern_client_try_begin_status_request(
  *
  * @note Thread safety: This function acquires status_lock
  */
-bool lantern_client_status_request_failed(
-    struct lantern_client *client,
-    const char *peer_id);
-
+bool lantern_client_status_request_failed(struct lantern_client *client,
+                                          const char *peer_id);
 
 /* ============================================================================
  * Network Functions
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /**
  * Reset connection counter and connected peer list.
@@ -202,14 +194,14 @@ bool lantern_client_status_request_failed(
  */
 void connection_counter_reset(struct lantern_client *client);
 
-
 /**
  * Update connection counter when a peer connects or disconnects.
  *
  * @spec subspecs/networking/connection.py - connection management
  *
  * @param client   Client instance
- * @param delta    Change in connection count (+1 for connect, -1 for disconnect)
+ * @param delta    Change in connection count (+1 for connect, -1 for
+ * disconnect)
  * @param conn     Transport connection handle (may be NULL)
  * @param peer     Peer ID (may be NULL)
  * @param inbound  True if inbound connection
@@ -219,21 +211,15 @@ void connection_counter_reset(struct lantern_client *client);
  *
  * @note Thread safety: This function acquires connection_lock
  */
-void connection_counter_update(
-    struct lantern_client *client,
-    int delta,
-    const void *conn,
-    const struct lantern_peer_id *peer,
-    bool inbound,
-    int reason,
-    bool locally_initiated,
-    uint64_t transport_error_code);
+void connection_counter_update(struct lantern_client *client, int delta,
+                               const void *conn,
+                               const struct lantern_peer_id *peer, bool inbound,
+                               int reason, bool locally_initiated,
+                               uint64_t transport_error_code);
 
 bool connection_tie_break_prefers_inbound(
-    const uint8_t *local_peer_id,
-    size_t local_peer_id_len,
+    const uint8_t *local_peer_id, size_t local_peer_id_len,
     const struct lantern_peer_id *remote_peer);
-
 
 /**
  * Check if a peer is currently connected.
@@ -244,8 +230,8 @@ bool connection_tie_break_prefers_inbound(
  *
  * @note Thread safety: This function acquires connection_lock
  */
-bool lantern_client_is_peer_connected(struct lantern_client *client, const char *peer_id);
-
+bool lantern_client_is_peer_connected(struct lantern_client *client,
+                                      const char *peer_id);
 
 /**
  * Request status from a peer immediately.
@@ -258,8 +244,9 @@ bool lantern_client_is_peer_connected(struct lantern_client *client, const char 
  *
  * @note Thread safety: This function acquires status_lock
  */
-void request_status_now(struct lantern_client *client, const struct lantern_peer_id *peer, const char *peer_text);
-
+void request_status_now(struct lantern_client *client,
+                        const struct lantern_peer_id *peer,
+                        const char *peer_text);
 
 /**
  * Check if a listen address is unspecified (0.0.0.0 or ::).
@@ -271,7 +258,6 @@ void request_status_now(struct lantern_client *client, const struct lantern_peer
  */
 bool listen_address_is_unspecified(const char *addr);
 
-
 /**
  * Adopt listen address from validator config if current address is unspecified.
  *
@@ -280,7 +266,6 @@ bool listen_address_is_unspecified(const char *addr);
  * @note Thread safety: This function is thread-safe
  */
 void adopt_validator_listen_address(struct lantern_client *client);
-
 
 /**
  * Dial a multiaddr using the identify protocol.
@@ -293,8 +278,8 @@ void adopt_validator_listen_address(struct lantern_client *client);
  *
  * @note Thread safety: This function is thread-safe
  */
-void identify_dial_multiaddr(struct lantern_client *client, const char *multiaddr, const char *peer_label);
-
+void identify_dial_multiaddr(struct lantern_client *client,
+                             const char *multiaddr, const char *peer_label);
 
 /**
  * Attempt to dial peers from genesis ENRs.
@@ -309,12 +294,10 @@ void peer_dialer_attempt(struct lantern_client *client);
 
 void peer_status_refresh(struct lantern_client *client);
 
-/** Run periodic dialing and status refresh work from the libp2p drive thread. */
-void peer_maintenance_drive(
-    struct lantern_libp2p_host *network,
-    libp2p_host_time_us_t now_us,
-    void *user_data);
-
+/** Run periodic dialing and status refresh work from the libp2p drive thread.
+ */
+void peer_maintenance_drive(struct lantern_libp2p_host *network,
+                            libp2p_host_time_us_t now_us, void *user_data);
 
 /**
  * Enable periodic peer maintenance on the libp2p drive thread.
@@ -326,7 +309,6 @@ void peer_maintenance_drive(
  */
 int start_peer_dialer(struct lantern_client *client);
 
-
 /**
  * Disable periodic peer maintenance.
  *
@@ -335,7 +317,6 @@ int start_peer_dialer(struct lantern_client *client);
  * @note Thread safety: This function is thread-safe
  */
 void stop_peer_dialer(struct lantern_client *client);
-
 
 /**
  * Connection event callback for the c-lean-libp2p host.
@@ -346,11 +327,8 @@ void stop_peer_dialer(struct lantern_client *client);
  *
  * @note Thread safety: This function is called from libp2p thread
  */
-void connection_events_cb(
-    struct lantern_libp2p_host *network,
-    const libp2p_host_event_t *evt,
-    void *user_data);
-
+void connection_events_cb(struct lantern_libp2p_host *network,
+                          const libp2p_host_event_t *evt, void *user_data);
 
 /**
  * Start the libp2p host and connection-level services.
@@ -363,11 +341,10 @@ void connection_events_cb(
  *
  * @note Thread safety: Must be called before networking threads start.
  */
-lantern_client_error client_start_network(
-    struct lantern_client *client,
-    const struct lantern_client_options *options,
-    uint8_t node_key[NODE_PRIVATE_KEY_SIZE]);
-
+lantern_client_error
+client_start_network(struct lantern_client *client,
+                     const struct lantern_client_options *options,
+                     uint8_t node_key[NODE_PRIVATE_KEY_SIZE]);
 
 /**
  * Start gossip, request/response, and peer protocols.
@@ -379,10 +356,9 @@ lantern_client_error client_start_network(
  *
  * @note Thread safety: Must be called after the libp2p host is prepared.
  */
-lantern_client_error client_start_protocols(
-    struct lantern_client *client,
-    uint8_t node_key[NODE_PRIVATE_KEY_SIZE]);
-
+lantern_client_error
+client_start_protocols(struct lantern_client *client,
+                       uint8_t node_key[NODE_PRIVATE_KEY_SIZE]);
 
 #ifdef __cplusplus
 }

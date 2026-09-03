@@ -101,6 +101,7 @@ set(LANTERN_LIBRARY_SOURCES
     src/http/server.c
     src/test_driver/driver.c
     src/storage/storage.c
+    src/support/hex.c
     src/support/log.c
     src/support/string_list.c
     src/support/strings.c

@@ -24,23 +24,25 @@
 #ifndef LANTERN_CLIENT_SYNC_INTERNAL_H
 #define LANTERN_CLIENT_SYNC_INTERNAL_H
 
-#include "network_internal.h"
-#include "lantern/core/client.h"
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/state.h"
+#include "lantern/core/client.h"
 #include "lantern/support/log.h"
+#include "network_internal.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /* ============================================================================
  * Constants
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /**
  * Maximum parent depth for ancestor backfill requests.
@@ -55,7 +57,8 @@ extern "C" {
 #define LANTERN_BLOCK_FETCH_INITIAL_BACKOFF_US 5000u
 /* ============================================================================
  * Internal Types
- * ============================================================================ */
+ * ============================================================================
+ */
 
 struct lantern_block_fetch
 {
@@ -75,11 +78,14 @@ struct lantern_vote_rejection_info
 {
     bool has_reason;       /**< True if rejection reason is set */
     char message[256];     /**< Rejection reason message */
-    bool has_unknown_root; /**< True if rejection is due to unknown checkpoint root */
-    LanternRoot unknown_root; /**< Unknown checkpoint root */
-    uint64_t unknown_slot; /**< Slot of unknown checkpoint */
-    bool should_retry_after_block_import; /**< True if block import may unblock the vote */
-    LanternRoot retry_root; /**< Root whose eventual import may unblock validation */
+    bool has_unknown_root; /**< True if rejection is due to unknown checkpoint
+                              root */
+    LanternRoot unknown_root;             /**< Unknown checkpoint root */
+    uint64_t unknown_slot;                /**< Slot of unknown checkpoint */
+    bool should_retry_after_block_import; /**< True if block import may unblock
+                                             the vote */
+    LanternRoot
+        retry_root; /**< Root whose eventual import may unblock validation */
     uint64_t retry_slot; /**< Slot associated with retry_root */
 };
 
@@ -93,31 +99,29 @@ struct lantern_blocks_request_completion
     bool exhausted;
 };
 
-
 /**
  * Persisted block entry for storage operations.
  */
 struct lantern_persisted_block
 {
-    LanternSignedBlock block;  /**< The signed block */
-    LanternRoot root;          /**< Block root hash */
+    LanternSignedBlock block; /**< The signed block */
+    LanternRoot root;         /**< Block root hash */
 };
-
 
 /**
  * List of persisted blocks.
  */
 struct lantern_persisted_block_list
 {
-    struct lantern_persisted_block *items;  /**< Array of persisted blocks */
-    size_t length;                          /**< Number of items in list */
-    size_t capacity;                        /**< Allocated capacity */
+    struct lantern_persisted_block *items; /**< Array of persisted blocks */
+    size_t length;                         /**< Number of items in list */
+    size_t capacity;                       /**< Allocated capacity */
 };
-
 
 /* ============================================================================
  * Vote Functions
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /**
  * Set vote rejection reason with printf-style formatting.
@@ -128,9 +132,8 @@ struct lantern_persisted_block_list
  *
  * @note Thread safety: This function is thread-safe
  */
-void lantern_vote_rejection_set(struct lantern_vote_rejection_info *info, const char *fmt, ...);
-
-
+void lantern_vote_rejection_set(struct lantern_vote_rejection_info *info,
+                                const char *fmt, ...);
 
 /**
  * Get current slot from fork choice.
@@ -141,8 +144,8 @@ void lantern_vote_rejection_set(struct lantern_vote_rejection_info *info, const 
  *
  * @note Thread safety: This function is thread-safe
  */
-bool lantern_client_current_slot(const struct lantern_client *client, uint64_t *out_slot);
-
+bool lantern_client_current_slot(const struct lantern_client *client,
+                                 uint64_t *out_slot);
 
 /**
  * Check if a block root is known in fork choice.
@@ -154,20 +157,17 @@ bool lantern_client_current_slot(const struct lantern_client *client, uint64_t *
  *
  * @note Thread safety: Caller must hold state_lock
  */
-bool lantern_client_block_known_locked(
-    struct lantern_client *client,
-    const LanternRoot *root,
-    uint64_t *out_slot);
+bool lantern_client_block_known_locked(struct lantern_client *client,
+                                       const LanternRoot *root,
+                                       uint64_t *out_slot);
 
 bool lantern_client_checkpoint_is_ancestor_locked(
-    struct lantern_client *client,
-    const LanternCheckpoint *ancestor,
+    struct lantern_client *client, const LanternCheckpoint *ancestor,
     const LanternCheckpoint *descendant);
 
-void lantern_client_set_sync_state_logged(
-    struct lantern_client *client,
-    LanternSyncState new_state,
-    const char *reason);
+void lantern_client_set_sync_state_logged(struct lantern_client *client,
+                                          LanternSyncState new_state,
+                                          const char *reason);
 
 /**
  * Get the post-state owned by fork choice for a specific block root.
@@ -178,28 +178,27 @@ void lantern_client_set_sync_state_logged(
  *
  * @note Thread safety: Caller must hold state_lock
  */
-const LanternState *lantern_client_state_for_root_locked(
-    struct lantern_client *client,
-    const LanternRoot *root);
+const LanternState *
+lantern_client_state_for_root_locked(struct lantern_client *client,
+                                     const LanternRoot *root);
 
 /**
  * Recover block-body aggregated proofs as local attestation material.
  *
  * This is an implementation optimization beyond Store.on_block(), which only
- * registers empty proof sets. Expensive proof splitting runs without state_lock.
+ * registers empty proof sets. Expensive proof splitting runs without
+ * state_lock.
  */
 void lantern_client_cache_block_aggregated_proofs(
-    struct lantern_client *client,
-    const LanternSignedBlock *block);
+    struct lantern_client *client, const LanternSignedBlock *block);
 
 int lantern_client_enqueue_block_aggregated_proofs(
-    struct lantern_client *client,
-    const LanternSignedBlock *block);
-
+    struct lantern_client *client, const LanternSignedBlock *block);
 
 /* ============================================================================
  * Pending Vote Functions
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /**
  * Reset and free a pending vote list.
@@ -210,7 +209,6 @@ int lantern_client_enqueue_block_aggregated_proofs(
  */
 void pending_vote_list_reset(struct lantern_pending_vote_list *list);
 
-
 /**
  * Append a pending gossip vote to the list.
  *
@@ -219,17 +217,17 @@ void pending_vote_list_reset(struct lantern_pending_vote_list *list);
  * @param peer_text Peer ID text (may be NULL)
  * @return Pointer to new entry, or NULL on failure
  *
- * @note Thread safety: Caller must hold state_lock when mutating client-owned lists
+ * @note Thread safety: Caller must hold state_lock when mutating client-owned
+ * lists
  */
-struct lantern_pending_vote *pending_vote_list_append(
-    struct lantern_pending_vote_list *list,
-    const LanternSignedVote *vote,
-    const char *peer_text);
-
+struct lantern_pending_vote *
+pending_vote_list_append(struct lantern_pending_vote_list *list,
+                         const LanternSignedVote *vote, const char *peer_text);
 
 /* ============================================================================
  * Pending Block Functions
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /**
  * Reset and free a pending block list.
@@ -240,7 +238,6 @@ struct lantern_pending_vote *pending_vote_list_append(
  */
 void pending_block_list_reset(struct lantern_pending_block_list *list);
 
-
 /**
  * Find a pending block by root.
  *
@@ -250,10 +247,9 @@ void pending_block_list_reset(struct lantern_pending_block_list *list);
  *
  * @note Thread safety: Caller must hold pending_lock
  */
-struct lantern_pending_block *pending_block_list_find(
-    struct lantern_pending_block_list *list,
-    const LanternRoot *root);
-
+struct lantern_pending_block *
+pending_block_list_find(struct lantern_pending_block_list *list,
+                        const LanternRoot *root);
 
 /**
  * Remove a pending block by index.
@@ -263,8 +259,8 @@ struct lantern_pending_block *pending_block_list_find(
  *
  * @note Thread safety: Caller must hold pending_lock
  */
-void pending_block_list_remove(struct lantern_pending_block_list *list, size_t index);
-
+void pending_block_list_remove(struct lantern_pending_block_list *list,
+                               size_t index);
 
 /**
  * Append a pending block to the list.
@@ -280,12 +276,9 @@ void pending_block_list_remove(struct lantern_pending_block_list *list, size_t i
  * @note Thread safety: Caller must hold pending_lock
  */
 struct lantern_pending_block *pending_block_list_append(
-    struct lantern_pending_block_list *list,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    const LanternRoot *parent_root,
-    const char *peer_text,
-    uint32_t backfill_depth);
+    struct lantern_pending_block_list *list, const LanternSignedBlock *block,
+    const LanternRoot *block_root, const LanternRoot *parent_root,
+    const char *peer_text, uint32_t backfill_depth);
 
 /**
  * Initialize a persisted block list.
@@ -296,7 +289,6 @@ struct lantern_pending_block *pending_block_list_append(
  */
 void persisted_block_list_init(struct lantern_persisted_block_list *list);
 
-
 /**
  * Reset and free a persisted block list.
  *
@@ -305,7 +297,6 @@ void persisted_block_list_init(struct lantern_persisted_block_list *list);
  * @note Thread safety: This function is thread-safe
  */
 void persisted_block_list_reset(struct lantern_persisted_block_list *list);
-
 
 /**
  * Append a persisted block to the list.
@@ -317,11 +308,9 @@ void persisted_block_list_reset(struct lantern_persisted_block_list *list);
  *
  * @note Thread safety: This function is thread-safe
  */
-int persisted_block_list_append(
-    struct lantern_persisted_block_list *list,
-    const LanternSignedBlock *block,
-    const LanternRoot *root);
-
+int persisted_block_list_append(struct lantern_persisted_block_list *list,
+                                const LanternSignedBlock *block,
+                                const LanternRoot *root);
 
 /**
  * Clone a signed block.
@@ -332,12 +321,13 @@ int persisted_block_list_append(
  *
  * @note Thread safety: This function is thread-safe
  */
-int clone_signed_block(const LanternSignedBlock *source, LanternSignedBlock *dest);
-
+int clone_signed_block(const LanternSignedBlock *source,
+                       LanternSignedBlock *dest);
 
 /* ============================================================================
  * Block Sync Functions
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /**
  * Validate vote constraints against fork choice.
@@ -358,12 +348,9 @@ int clone_signed_block(const LanternSignedBlock *source, LanternSignedBlock *des
  * @note Thread safety: Caller must hold state_lock if accessing state
  */
 bool lantern_client_validate_vote_constraints(
-    struct lantern_client *client,
-    const LanternVote *vote,
-    const char *facility,
-    const struct lantern_log_metadata *meta,
-    const char *context,
-    struct lantern_vote_rejection_info *out_rejection);
+    struct lantern_client *client, const LanternVote *vote,
+    const char *facility, const struct lantern_log_metadata *meta,
+    const char *context, struct lantern_vote_rejection_info *out_rejection);
 
 /**
  * Update sync progress using latest peer status and local slot snapshot.
@@ -373,10 +360,8 @@ bool lantern_client_validate_vote_constraints(
  *
  * @note Thread safety: This function acquires status_lock.
  */
-void lantern_client_update_sync_progress(
-    struct lantern_client *client,
-    uint64_t local_slot);
-
+void lantern_client_update_sync_progress(struct lantern_client *client,
+                                         uint64_t local_slot);
 
 /**
  * Import a block into the client state and fork choice.
@@ -396,13 +381,12 @@ void lantern_client_update_sync_progress(
  *
  * @note Thread safety: Acquires state_lock and pending_lock
  */
-bool lantern_client_import_block(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    const struct lantern_log_metadata *meta,
-    uint32_t backfill_depth,
-    bool allow_historical);
+bool lantern_client_import_block(struct lantern_client *client,
+                                 const LanternSignedBlock *block,
+                                 const LanternRoot *block_root,
+                                 const struct lantern_log_metadata *meta,
+                                 uint32_t backfill_depth,
+                                 bool allow_historical);
 
 /**
  * Import a block without recursively draining its pending descendants.
@@ -415,14 +399,10 @@ bool lantern_client_import_block(
  *                           for iterative replay.
  */
 bool lantern_client_import_block_without_pending_children(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    const struct lantern_log_metadata *meta,
-    uint32_t backfill_depth,
-    bool allow_historical,
-    bool cache_aggregated_proofs,
-    bool *out_children_ready);
+    struct lantern_client *client, const LanternSignedBlock *block,
+    const LanternRoot *block_root, const struct lantern_log_metadata *meta,
+    uint32_t backfill_depth, bool allow_historical,
+    bool cache_aggregated_proofs, bool *out_children_ready);
 
 /**
  * Commit a locally built block using a precomputed post-state, then publish it.
@@ -431,10 +411,8 @@ bool lantern_client_import_block_without_pending_children(
  * state transition before gossip publish.
  */
 int lantern_client_commit_and_publish_local_block(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    LanternState *post_state);
+    struct lantern_client *client, const LanternSignedBlock *block,
+    const LanternRoot *block_root, LanternState *post_state);
 
 /**
  * Record a received block and attempt import.
@@ -455,14 +433,9 @@ int lantern_client_commit_and_publish_local_block(
  * @note Thread safety: Acquires state_lock via lantern_client_import_block
  */
 lantern_client_error lantern_client_record_block(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *root,
-    const char *peer_text,
-    const char *context,
-    uint32_t backfill_depth,
-    bool allow_historical);
-
+    struct lantern_client *client, const LanternSignedBlock *block,
+    const LanternRoot *root, const char *peer_text, const char *context,
+    uint32_t backfill_depth, bool allow_historical);
 
 /**
  * Record and process a received vote.
@@ -475,10 +448,9 @@ lantern_client_error lantern_client_record_block(
  *
  * @note Thread safety: Acquires state_lock
  */
-void lantern_client_record_vote(
-    struct lantern_client *client,
-    const LanternSignedVote *vote,
-    const char *peer_text);
+void lantern_client_record_vote(struct lantern_client *client,
+                                const LanternSignedVote *vote,
+                                const char *peer_text);
 
 /**
  * Replay pending gossip votes after a successful block import.
@@ -487,7 +459,6 @@ void lantern_client_record_vote(
  * updated store. Votes that still fail are discarded.
  */
 void lantern_client_replay_pending_gossip_votes(struct lantern_client *client);
-
 
 /**
  * Handle a block received via gossip.
@@ -500,12 +471,9 @@ void lantern_client_replay_pending_gossip_votes(struct lantern_client *client);
  * @param context  Client instance
  * @return 0 on success
  */
-int gossip_block_handler(
-    const LanternSignedBlock *block,
-    const struct lantern_peer_id *from,
-    size_t raw_block_ssz_len,
-    void *context);
-
+int gossip_block_handler(const LanternSignedBlock *block,
+                         const struct lantern_peer_id *from,
+                         size_t raw_block_ssz_len, void *context);
 
 /**
  * Handle a vote received via gossip.
@@ -517,11 +485,9 @@ int gossip_block_handler(
  * @param context  Client instance
  * @return 0 on success
  */
-int gossip_vote_handler(
-    const LanternSignedVote *vote,
-    const struct lantern_peer_id *from,
-    size_t raw_vote_payload_len,
-    void *context);
+int gossip_vote_handler(const LanternSignedVote *vote,
+                        const struct lantern_peer_id *from,
+                        size_t raw_vote_payload_len, void *context);
 
 /**
  * Handle an aggregated attestation received via gossip.
@@ -535,10 +501,8 @@ int gossip_vote_handler(
  */
 int gossip_aggregated_attestation_handler(
     const LanternSignedAggregatedAttestation *attestation,
-    const struct lantern_peer_id *from,
-    size_t raw_attestation_payload_len,
+    const struct lantern_peer_id *from, size_t raw_attestation_payload_len,
     void *context);
-
 
 /**
  * Initialize fork choice from genesis state.
@@ -552,7 +516,6 @@ int gossip_aggregated_attestation_handler(
  */
 int initialize_fork_choice(struct lantern_client *client);
 
-
 /**
  * Restore persisted blocks from storage into fork choice.
  *
@@ -565,7 +528,6 @@ int initialize_fork_choice(struct lantern_client *client);
  */
 int restore_persisted_blocks(struct lantern_client *client);
 
-
 /**
  * Validate state validator pubkeys against local genesis validator pubkeys.
  *
@@ -575,10 +537,8 @@ int restore_persisted_blocks(struct lantern_client *client);
  * @return LANTERN_CLIENT_OK on match, negative lantern_client_error otherwise
  */
 int lantern_client_validate_state_validator_pubkeys(
-    const struct lantern_client *client,
-    const LanternState *state,
+    const struct lantern_client *client, const LanternState *state,
     const char *log_component);
-
 
 /**
  * Enqueue a pending block for later processing.
@@ -596,19 +556,15 @@ int lantern_client_validate_state_validator_pubkeys(
  * @note Thread safety: Acquires pending_lock
  */
 bool lantern_client_enqueue_pending_block(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    const LanternRoot *parent_root,
-    const char *peer_text,
-    uint32_t backfill_depth,
-    bool request_parent);
+    struct lantern_client *client, const LanternSignedBlock *block,
+    const LanternRoot *block_root, const LanternRoot *parent_root,
+    const char *peer_text, uint32_t backfill_depth, bool request_parent);
 
 /**
  * Attempt to request parents for pending blocks after a blocks_by_root success.
  *
- * Selects an available peer for backfill requests. A provided peer ID is treated
- * as a preference but is not required.
+ * Selects an available peer for backfill requests. A provided peer ID is
+ * treated as a preference but is not required.
  *
  * @param client    Client instance
  * @param peer_text Peer ID string (may be NULL/empty)
@@ -616,8 +572,7 @@ bool lantern_client_enqueue_pending_block(
  * @note Thread safety: Thread-safe; acquires pending_lock internally
  */
 void lantern_client_request_pending_parent_after_blocks(
-    struct lantern_client *client,
-    const char *peer_text,
+    struct lantern_client *client, const char *peer_text,
     const LanternRoot *request_root);
 
 /**
@@ -636,46 +591,38 @@ void lantern_client_request_pending_parent_after_blocks(
  * @note Thread safety: Acquires status_lock
  */
 bool lantern_client_try_schedule_blocks_request_batch(
-    struct lantern_client *client,
-    const char *peer_text,
-    const LanternRoot *roots,
-    size_t root_count);
+    struct lantern_client *client, const char *peer_text,
+    const LanternRoot *roots, size_t root_count);
 
 bool lantern_client_complete_blocks_request(
-    struct lantern_client *client,
-    uint64_t request_id,
+    struct lantern_client *client, uint64_t request_id,
     enum lantern_blocks_request_outcome outcome,
     struct lantern_blocks_request_completion *out_completion);
 
-/** Start or extend range catch-up for a received-block gap or an ahead peer status. */
-void lantern_client_update_range_sync_target(
-    struct lantern_client *client,
-    uint64_t local_head_slot,
-    uint64_t target_slot);
+/** Start or extend range catch-up for a received-block gap or an ahead peer
+ * status. */
+void lantern_client_update_range_sync_target(struct lantern_client *client,
+                                             uint64_t local_head_slot,
+                                             uint64_t target_slot);
 
 /** Schedule the next batch for an already-discovered range target. */
 bool lantern_client_schedule_next_range_request(struct lantern_client *client);
 
 /** Complete a tracked blocks-by-range request. */
 bool lantern_client_complete_range_request(
-    struct lantern_client *client,
-    uint64_t request_id,
+    struct lantern_client *client, uint64_t request_id,
     enum lantern_blocks_request_outcome outcome);
 
-/** Drive root-scoped block fetch retries whose exponential backoff has elapsed. */
-void lantern_client_drive_block_fetch_retries(
-    struct lantern_client *client,
-    libp2p_host_time_us_t now_us);
+/** Drive root-scoped block fetch retries whose exponential backoff has elapsed.
+ */
+void lantern_client_drive_block_fetch_retries(struct lantern_client *client,
+                                              libp2p_host_time_us_t now_us);
 
 /** Select a request peer while honoring the failed-peer set for retry_root. */
 bool lantern_client_select_blocks_request_peer_locked(
-    struct lantern_client *client,
-    const char *preferred_peer,
-    const LanternRoot *retry_root,
-    uint64_t now_ms,
-    char *out_peer,
+    struct lantern_client *client, const char *preferred_peer,
+    const LanternRoot *retry_root, uint64_t now_ms, char *out_peer,
     size_t out_peer_len);
-
 
 /**
  * Remove a pending block by root.
@@ -685,7 +632,8 @@ bool lantern_client_select_blocks_request_peer_locked(
  *
  * @note Thread safety: Acquires pending_lock
  */
-void lantern_client_pending_remove_by_root(struct lantern_client *client, const LanternRoot *root);
+void lantern_client_pending_remove_by_root(struct lantern_client *client,
+                                           const LanternRoot *root);
 
 /**
  * Remove a pending block and any pending descendants rooted under it.
@@ -695,10 +643,8 @@ void lantern_client_pending_remove_by_root(struct lantern_client *client, const 
  *
  * @note Thread safety: Acquires pending_lock
  */
-void lantern_client_pending_remove_branch_by_root(
-    struct lantern_client *client,
-    const LanternRoot *root);
-
+void lantern_client_pending_remove_branch_by_root(struct lantern_client *client,
+                                                  const LanternRoot *root);
 
 /**
  * Process pending children of a newly imported block.
@@ -712,11 +658,9 @@ void lantern_client_pending_remove_branch_by_root(
  *
  * @note Thread safety: Acquires pending_lock and state_lock
  */
-void lantern_client_process_pending_children(
-    struct lantern_client *client,
-    const LanternRoot *parent_root,
-    bool cache_aggregated_proofs);
-
+void lantern_client_process_pending_children(struct lantern_client *client,
+                                             const LanternRoot *parent_root,
+                                             bool cache_aggregated_proofs);
 
 /**
  * Persist anchor block to storage.
@@ -729,8 +673,9 @@ void lantern_client_process_pending_children(
  *
  * @note Thread safety: Thread-safe
  */
-void persist_anchor_block(struct lantern_client *client, const LanternBlock *anchor_block, const LanternRoot *anchor_root);
-
+void persist_anchor_block(struct lantern_client *client,
+                          const LanternBlock *anchor_block,
+                          const LanternRoot *anchor_root);
 
 #ifdef __cplusplus
 }

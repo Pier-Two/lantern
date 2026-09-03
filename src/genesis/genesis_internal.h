@@ -33,15 +33,16 @@ void genesis_free_validator_config(struct lantern_validator_config *config);
 
 uint64_t genesis_parse_u64(const char *value, int *ok);
 int genesis_decode_validator_pubkey_hex(
-    const char *hex,
-    uint8_t out[LANTERN_VALIDATOR_PUBKEY_SIZE]);
+    const char *hex, uint8_t out[LANTERN_VALIDATOR_PUBKEY_SIZE]);
 
-int genesis_parse_chain_config(const char *path, struct lantern_chain_config *config);
-int genesis_parse_genesis_validators(
-    const char *path,
-    LanternValidator **out_validators,
-    size_t *out_count);
-int genesis_parse_validator_config(const char *path, struct lantern_validator_config *config);
-int genesis_parse_nodes_file(const char *path, struct lantern_enr_record_list *list);
+int genesis_parse_chain_config(const char *path,
+                               struct lantern_chain_config *config);
+int genesis_parse_genesis_validators(const char *path,
+                                     LanternValidator **out_validators,
+                                     size_t *out_count);
+int genesis_parse_validator_config(const char *path,
+                                   struct lantern_validator_config *config);
+int genesis_parse_nodes_file(const char *path,
+                             struct lantern_enr_record_list *list);
 
 #endif /* LANTERN_GENESIS_INTERNAL_H */

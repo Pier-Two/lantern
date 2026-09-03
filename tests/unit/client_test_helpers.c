@@ -189,7 +189,7 @@ int client_test_pending_entry(
         *out_parent_root = entry->parent_root;
     }
     if (out_peer_text) {
-        (void)lantern_string_copy(out_peer_text, peer_text_len, entry->peer_text);
+        (void)lantern_string_copy(out_peer_text, peer_text_len, entry->peer_text, NULL);
     }
     lantern_client_unlock_pending(mutable_client, locked);
     return LANTERN_CLIENT_OK;
@@ -422,8 +422,8 @@ static int client_test_setup_vote_validation_client_common(
 
     uint64_t genesis_time = 0;
     if (client_test_load_fixture_genesis_time(&genesis_time) != 0) {
-        double now_seconds = lantern_time_now_seconds();
-        if (now_seconds < 0.0) {
+        double now_seconds;
+        if (lantern_time_now_seconds(&now_seconds) != LANTERN_TIME_OK) {
             now_seconds = 0.0;
         }
         double shifted = now_seconds >= 60.0 ? now_seconds - 60.0 : 0.0;

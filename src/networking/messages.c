@@ -9,8 +9,8 @@
 #include "lantern/consensus/state.h"
 #include "ssz.h"
 #include "lantern/networking/reqresp_service.h"
+#include "lantern/support/hex.h"
 #include "lantern/support/log.h"
-#include "lantern/support/strings.h"
 
 static int ensure_block_capacity(LanternSignedBlockList *resp, size_t required) {
     if (!resp) {
@@ -58,7 +58,7 @@ static void log_status_payload_debug(const char *label, const uint8_t *data, siz
             length);
         return;
     }
-    if (lantern_bytes_to_hex(data, preview_len, hex, hex_capacity, 0) != 0) {
+    if (lantern_hex_encode(data, preview_len, hex, hex_capacity, 0) != 0) {
         hex[0] = '\0';
     }
     lantern_log(LANTERN_LOG_LEVEL_WARN,

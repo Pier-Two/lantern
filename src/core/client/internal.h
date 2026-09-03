@@ -20,8 +20,8 @@
 #ifndef LANTERN_CLIENT_INTERNAL_H
 #define LANTERN_CLIENT_INTERNAL_H
 
-#include "lantern/core/client.h"
 #include "lantern/consensus/containers.h"
+#include "lantern/core/client.h"
 #include "lantern/support/log.h"
 
 #include <pthread.h>
@@ -30,13 +30,14 @@
 #include <stdint.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
-
 
 /* ============================================================================
  * Utility Functions
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /**
  * Get monotonic time in milliseconds.
@@ -47,7 +48,6 @@ extern "C" {
  */
 uint64_t monotonic_millis(void);
 
-
 /**
  * Get current wall clock time in milliseconds.
  *
@@ -57,7 +57,6 @@ uint64_t monotonic_millis(void);
  */
 uint64_t validator_wall_time_now_millis(void);
 
-
 /**
  * Sleep for specified milliseconds.
  *
@@ -66,7 +65,6 @@ uint64_t validator_wall_time_now_millis(void);
  * @note Thread safety: This function is thread-safe
  */
 void validator_sleep_ms(uint32_t ms);
-
 
 /**
  * Format a root hash as hex string.
@@ -81,9 +79,7 @@ void validator_sleep_ms(uint32_t ms);
  */
 void format_root_hex(const LanternRoot *root, char *out, size_t out_len);
 
-
 const char *lantern_sync_state_name(LanternSyncState state);
-
 
 /**
  * Set an owned string field, freeing previous value.
@@ -96,7 +92,6 @@ const char *lantern_sync_state_name(LanternSyncState state);
  */
 int set_owned_string(char **dest, const char *value);
 
-
 /**
  * Load node key bytes from options.
  *
@@ -108,8 +103,8 @@ int set_owned_string(char **dest, const char *value);
  *
  * @note Thread safety: This function is thread-safe
  */
-int load_node_key_bytes(const struct lantern_client_options *options, uint8_t out_key[32]);
-
+int load_node_key_bytes(const struct lantern_client_options *options,
+                        uint8_t out_key[32]);
 
 /**
  * Check if a string list contains a value.
@@ -121,7 +116,6 @@ int load_node_key_bytes(const struct lantern_client_options *options, uint8_t ou
  * @note Thread safety: This function is thread-safe
  */
 
-
 /**
  * Remove a value from a string list.
  *
@@ -130,7 +124,6 @@ int load_node_key_bytes(const struct lantern_client_options *options, uint8_t ou
  *
  * @note Thread safety: Caller must hold appropriate lock
  */
-
 
 /**
  * Get text description for connection reason code.
@@ -159,67 +152,65 @@ const char *connection_reason_text(int reason);
  *         checkpoint sync
  */
 bool lantern_client_persisted_state_is_stale_for_checkpoint_sync(
-    const LanternState *persisted_state,
-    uint64_t genesis_time,
-    uint64_t now_seconds,
-    uint64_t *out_expected_current_slot,
+    const LanternState *persisted_state, uint64_t genesis_time,
+    uint64_t now_seconds, uint64_t *out_expected_current_slot,
     uint64_t *out_gap);
 
-size_t lantern_client_attestation_committee_count(const struct lantern_client *client);
+size_t
+lantern_client_attestation_committee_count(const struct lantern_client *client);
 
 /**
- * Advance fork choice by exactly one interval and sync crossed payload-pool transitions.
+ * Advance fork choice by exactly one interval and sync crossed payload-pool
+ * transitions.
  *
  * Caller must hold state_lock or otherwise guarantee exclusive access to the
  * client store and fork-choice state.
  */
 int lantern_client_tick_fork_choice_interval_locked(
-    struct lantern_client *client,
-    bool has_proposal);
+    struct lantern_client *client, bool has_proposal);
 
 /**
- * Move fork choice time directly to a later interval without replaying skipped intervals.
+ * Move fork choice time directly to a later interval without replaying skipped
+ * intervals.
  *
  * Caller must hold state_lock or otherwise guarantee exclusive access to the
  * client store and fork-choice state.
  */
 int lantern_client_skip_fork_choice_intervals_locked(
-    struct lantern_client *client,
-    uint64_t target_interval);
+    struct lantern_client *client, uint64_t target_interval);
 
 /**
- * Catch fork choice up to a target interval using ChainService-style skip and yield semantics.
+ * Catch fork choice up to a target interval using ChainService-style skip and
+ * yield semantics.
  *
  * The helper may release state_lock between interval ticks so other threads can
  * process gossip and block imports while catch-up is in progress.
  */
-int lantern_client_chain_service_tick_to(
-    struct lantern_client *client,
-    uint64_t target_interval,
-    bool has_proposal,
-    uint64_t *out_skipped_to_interval,
-    uint64_t *out_ticked_intervals);
+int lantern_client_chain_service_tick_to(struct lantern_client *client,
+                                         uint64_t target_interval,
+                                         bool has_proposal,
+                                         uint64_t *out_skipped_to_interval,
+                                         uint64_t *out_ticked_intervals);
 
 /**
- * Advance fork choice time and sync the aggregated payload pools for crossed intervals.
+ * Advance fork choice time and sync the aggregated payload pools for crossed
+ * intervals.
  *
  * Caller must hold state_lock or otherwise guarantee exclusive access to the
  * client store and fork-choice state.
  */
 int lantern_client_advance_fork_choice_time_locked(
-    struct lantern_client *client,
-    uint64_t now_milliseconds,
+    struct lantern_client *client, uint64_t now_milliseconds,
     bool has_proposal);
 
 /* ============================================================================
  * Lock Functions
- * ============================================================================ */
+ * ============================================================================
+ */
 
-void lantern_client_unlock_mutex(
-    pthread_mutex_t *mutex,
-    const char *validator_id,
-    const char *name,
-    const char *component);
+void lantern_client_unlock_mutex(pthread_mutex_t *mutex,
+                                 const char *validator_id, const char *name,
+                                 const char *component);
 
 /**
  * Acquire the client state lock.
@@ -231,7 +222,6 @@ void lantern_client_unlock_mutex(
  */
 bool lantern_client_lock_state(struct lantern_client *client);
 
-
 /**
  * Release the client state lock.
  *
@@ -241,7 +231,6 @@ bool lantern_client_lock_state(struct lantern_client *client);
  * @note Thread safety: This function is thread-safe
  */
 void lantern_client_unlock_state(struct lantern_client *client, bool locked);
-
 
 /**
  * Acquire the client pending blocks lock.
@@ -253,7 +242,6 @@ void lantern_client_unlock_state(struct lantern_client *client, bool locked);
  */
 bool lantern_client_lock_pending(struct lantern_client *client);
 
-
 /**
  * Release the client pending blocks lock.
  *
@@ -264,10 +252,10 @@ bool lantern_client_lock_pending(struct lantern_client *client);
  */
 void lantern_client_unlock_pending(struct lantern_client *client, bool locked);
 
-
 /* ============================================================================
  * Initialization / Lifecycle helpers
- * ============================================================================ */
+ * ============================================================================
+ */
 
 /**
  * Prepare storage and genesis artifacts during client startup.
@@ -283,7 +271,6 @@ lantern_client_error client_prepare_storage_and_genesis(
     struct lantern_client *client,
     const struct lantern_client_options *options);
 
-
 /**
  * Load persisted state, checkpoint state, or construct a genesis state.
  *
@@ -295,11 +282,10 @@ lantern_client_error client_prepare_storage_and_genesis(
  *
  * @note Thread safety: Single-threaded initialization only.
  */
-lantern_client_error client_load_or_build_state(
-    struct lantern_client *client,
-    const struct lantern_client_options *options,
-    bool *loaded_from_storage);
-
+lantern_client_error
+client_load_or_build_state(struct lantern_client *client,
+                           const struct lantern_client_options *options,
+                           bool *loaded_from_storage);
 
 /**
  * Collect the set of attestation subnets to subscribe to at startup.
@@ -314,32 +300,29 @@ lantern_client_error client_load_or_build_state(
  *
  * @note Thread safety: Single-threaded initialization only.
  */
-int collect_startup_attestation_subnets(
-    const struct lantern_client *client,
-    size_t attestation_committee_count,
-    size_t primary_subnet_id,
-    size_t **out_subnet_ids,
-    size_t *out_count);
-
+int collect_startup_attestation_subnets(const struct lantern_client *client,
+                                        size_t attestation_committee_count,
+                                        size_t primary_subnet_id,
+                                        size_t **out_subnet_ids,
+                                        size_t *out_count);
 
 /* ============================================================================
  * Genesis helpers (defined in init.c)
- * ============================================================================ */
+ * ============================================================================
+ */
 
-int copy_genesis_paths(
-    struct lantern_genesis_paths *paths,
-    const struct lantern_client_options *options);
+int copy_genesis_paths(struct lantern_genesis_paths *paths,
+                       const struct lantern_client_options *options);
 void reset_genesis_paths(struct lantern_genesis_paths *paths);
 int append_genesis_bootnodes(struct lantern_client *client);
 int populate_local_validators(struct lantern_client *client);
-
 
 #ifdef __cplusplus
 }
 #endif
 
 /* Include specialized internal headers */
-#include "sync_internal.h"
 #include "services_internal.h"
+#include "sync_internal.h"
 
 #endif /* LANTERN_CLIENT_INTERNAL_H */

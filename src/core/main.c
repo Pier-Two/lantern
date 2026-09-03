@@ -513,7 +513,7 @@ int main(int argc, char **argv)
         client.genesis.chain_config.genesis_time,
         client.genesis.chain_config.validator_count,
         client.genesis.enrs.count,
-        client.bootnodes.len,
+        lantern_string_list_count(&client.bootnodes),
         client.local_enr.encoded ? client.local_enr.encoded : "-");
     exit_code = run_until_signal(&client) == 0 ? 0 : 1;
 
