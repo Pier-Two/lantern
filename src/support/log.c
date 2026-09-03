@@ -11,25 +11,24 @@
 
 static pthread_mutex_t s_log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static atomic_int s_min_level = LANTERN_LOG_LEVEL_INFO;
-
 static bool equals_ignore_case(const char *lhs, const char *rhs);
 
 static const char *level_to_string(enum lantern_log_level level)
 {
     switch (level)
     {
-    case LANTERN_LOG_LEVEL_TRACE:
-        return "TRACE";
-    case LANTERN_LOG_LEVEL_DEBUG:
-        return "DEBUG";
-    case LANTERN_LOG_LEVEL_INFO:
-        return "INFO";
-    case LANTERN_LOG_LEVEL_WARN:
-        return "WARN";
-    case LANTERN_LOG_LEVEL_ERROR:
-        return "ERROR";
-    default:
-        return "INFO";
+        case LANTERN_LOG_LEVEL_TRACE:
+            return "TRACE";
+        case LANTERN_LOG_LEVEL_DEBUG:
+            return "DEBUG";
+        case LANTERN_LOG_LEVEL_INFO:
+            return "INFO";
+        case LANTERN_LOG_LEVEL_WARN:
+            return "WARN";
+        case LANTERN_LOG_LEVEL_ERROR:
+            return "ERROR";
+        default:
+            return "INFO";
     }
 }
 
