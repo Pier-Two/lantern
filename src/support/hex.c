@@ -83,7 +83,6 @@ enum lantern_hex_result lantern_hex_decode(const char *hex, uint8_t *out,
     {
         uint8_t hi;
         uint8_t lo;
-
         (void)hex_value(hex[i * 2u], &hi);
         (void)hex_value(hex[i * 2u + 1u], &lo);
         out[i] = (uint8_t)((hi << 4) | lo);
@@ -143,7 +142,6 @@ enum lantern_hex_result lantern_hex_encode(const uint8_t *bytes, size_t len,
     for (size_t i = 0; i < len; ++i)
     {
         uint8_t byte = bytes[i];
-
         out[offset++] = hex_digits[(byte >> 4) & 0x0f];
         out[offset++] = hex_digits[byte & 0x0f];
     }
