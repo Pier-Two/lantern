@@ -22,8 +22,8 @@
 
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/ssz.h"
+#include "lantern/support/hex.h"
 #include "lantern/support/log.h"
-#include "lantern/support/strings.h"
 #include "ssz.h"
 
 #define STORAGE_BLOCKS_DIR "blocks"
@@ -239,7 +239,7 @@ static char *root_path(const char *directory, const LanternRoot *root)
         return NULL;
     }
     char filename[(2u * LANTERN_ROOT_SIZE) + sizeof(".ssz")];
-    if (lantern_bytes_to_hex(
+    if (lantern_hex_encode(
             root->bytes, LANTERN_ROOT_SIZE, filename, sizeof(filename) - 4u, 0) != 0)
     {
         return NULL;
@@ -457,7 +457,7 @@ static int verify_block_root(const LanternSignedBlock *block, const LanternRoot 
     {
         return -1;
     }
-    lantern_log_warn(
+    lantern_log(LANTERN_LOG_LEVEL_WARN,
         "storage",
         &(const struct lantern_log_metadata){0},
         "accepted synthetic anchor root alias at slot=%" PRIu64,

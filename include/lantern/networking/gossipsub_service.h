@@ -11,10 +11,12 @@ typedef struct libp2p_gossipsub libp2p_gossipsub_t;
 struct lantern_gossipsub_service;
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-struct lantern_gossipsub_config {
+struct lantern_gossipsub_config
+{
     struct lantern_libp2p_host *network;
     const char *topic_network_name;
     size_t attestation_subnet_id;
@@ -22,27 +24,23 @@ struct lantern_gossipsub_config {
 };
 
 typedef int (*lantern_gossipsub_block_handler)(
-    const LanternSignedBlock *block,
-    const struct lantern_peer_id *from,
-    size_t raw_block_ssz_len,
-    void *user_data);
+    const LanternSignedBlock *block, const struct lantern_peer_id *from,
+    size_t raw_block_ssz_len, void *user_data);
 typedef int (*lantern_gossipsub_vote_handler)(
-    const LanternSignedVote *vote,
-    const struct lantern_peer_id *from,
-    size_t raw_vote_payload_len,
-    void *user_data);
+    const LanternSignedVote *vote, const struct lantern_peer_id *from,
+    size_t raw_vote_payload_len, void *user_data);
 typedef int (*lantern_gossipsub_aggregated_attestation_handler)(
     const LanternSignedAggregatedAttestation *attestation,
-    const struct lantern_peer_id *from,
-    size_t raw_attestation_payload_len,
+    const struct lantern_peer_id *from, size_t raw_attestation_payload_len,
     void *user_data);
 
-#define LANTERN_GOSSIPSUB_MAX_TRACKED_PEERS      128u
-#define LANTERN_GOSSIPSUB_MAX_CONNS_PER_PEER     8u
-#define LANTERN_GOSSIPSUB_RETRY_INITIAL_US       250000ull
-#define LANTERN_GOSSIPSUB_RETRY_MAX_US           5000000ull
+#define LANTERN_GOSSIPSUB_MAX_TRACKED_PEERS 128u
+#define LANTERN_GOSSIPSUB_MAX_CONNS_PER_PEER 8u
+#define LANTERN_GOSSIPSUB_RETRY_INITIAL_US 250000ull
+#define LANTERN_GOSSIPSUB_RETRY_MAX_US 5000000ull
 
-struct lantern_gossipsub_peer_connection_state {
+struct lantern_gossipsub_peer_connection_state
+{
     struct lantern_peer_id peer;
     libp2p_host_conn_t *conns[LANTERN_GOSSIPSUB_MAX_CONNS_PER_PEER];
     uint8_t conn_inbound[LANTERN_GOSSIPSUB_MAX_CONNS_PER_PEER];
@@ -58,19 +56,22 @@ struct lantern_gossipsub_peer_connection_state {
     uint8_t used;
 };
 
-struct lantern_gossipsub_protocol_adapter {
+struct lantern_gossipsub_protocol_adapter
+{
     libp2p_host_protocol_open_fn_t on_open;
     libp2p_host_protocol_event_fn_t on_event;
     void *user_data;
 };
 
-struct lantern_gossipsub_service {
+struct lantern_gossipsub_service
+{
     struct lantern_libp2p_host *network;
     libp2p_gossipsub_t *gossipsub;
     void *gossipsub_storage;
     size_t gossipsub_storage_len;
     libp2p_host_protocol_t gossipsub_protocols[LIBP2P_GOSSIPSUB_PROTOCOL_COUNT];
-    struct lantern_gossipsub_protocol_adapter gossipsub_protocol_adapters[LIBP2P_GOSSIPSUB_PROTOCOL_COUNT];
+    struct lantern_gossipsub_protocol_adapter
+        gossipsub_protocol_adapters[LIBP2P_GOSSIPSUB_PROTOCOL_COUNT];
     size_t gossipsub_protocol_count;
     char block_topic[128];
     char vote_topic[128];
@@ -79,18 +80,21 @@ struct lantern_gossipsub_service {
     char topic_network_name[64];
     size_t attestation_subnet_id;
     int subscribe_attestation_subnet;
-    int (*publish_hook)(const char *topic, const uint8_t *payload, size_t payload_len, void *user_data);
+    int (*publish_hook)(const char *topic, const uint8_t *payload,
+                        size_t payload_len, void *user_data);
     void *publish_hook_user_data;
     int loopback_only;
     lantern_gossipsub_block_handler block_handler;
     void *block_handler_user_data;
     lantern_gossipsub_vote_handler vote_handler;
     void *vote_handler_user_data;
-    lantern_gossipsub_aggregated_attestation_handler aggregated_attestation_handler;
+    lantern_gossipsub_aggregated_attestation_handler
+        aggregated_attestation_handler;
     void *aggregated_attestation_handler_user_data;
     char (*extra_vote_subnet_topics)[128];
     size_t extra_vote_subnet_topic_count;
-    struct lantern_gossipsub_peer_connection_state peer_connections[LANTERN_GOSSIPSUB_MAX_TRACKED_PEERS];
+    struct lantern_gossipsub_peer_connection_state
+        peer_connections[LANTERN_GOSSIPSUB_MAX_TRACKED_PEERS];
 };
 
 void lantern_gossipsub_service_init(struct lantern_gossipsub_service *service);
@@ -100,20 +104,18 @@ int lantern_gossipsub_service_start(
     struct lantern_gossipsub_service *service,
     const struct lantern_gossipsub_config *config);
 int lantern_gossipsub_service_publish_block(
-    struct lantern_gossipsub_service *service,
-    const LanternSignedBlock *block);
+    struct lantern_gossipsub_service *service, const LanternSignedBlock *block);
 int lantern_gossipsub_service_publish_vote_subnet(
-    struct lantern_gossipsub_service *service,
-    const LanternSignedVote *vote,
+    struct lantern_gossipsub_service *service, const LanternSignedVote *vote,
     size_t subnet_id);
 int lantern_gossipsub_service_publish_aggregated_attestation(
     struct lantern_gossipsub_service *service,
     const LanternSignedAggregatedAttestation *attestation);
 int lantern_gossipsub_service_subscribe_attestation_subnet(
-    struct lantern_gossipsub_service *service,
-    size_t subnet_id);
+    struct lantern_gossipsub_service *service, size_t subnet_id);
 /** Sum of peer memberships across all locally joined topic meshes. */
-size_t lantern_gossipsub_service_mesh_peer_count(const struct lantern_gossipsub_service *service);
+size_t lantern_gossipsub_service_mesh_peer_count(
+    const struct lantern_gossipsub_service *service);
 
 #ifdef __cplusplus
 }

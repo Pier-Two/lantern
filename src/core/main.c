@@ -1,5 +1,6 @@
 #include "lantern/core/client.h"
 #include "lantern/support/log.h"
+#include "lantern/support/secure_mem.h"
 #include "lantern/support/strings.h"
 #include "lantern/support/version.h"
 
@@ -27,7 +28,7 @@ enum {
     OPT_USE_GENESIS_STATE,
     OPT_VALIDATOR_CONFIG,
     OPT_NODE_ID,
-    OPT_NODE_KEY,
+    OPT_REJECT_NODE_KEY,
     OPT_NODE_KEY_PATH,
     OPT_LISTEN_ADDRESS,
     OPT_CHECKPOINT_SYNC_URL,
@@ -65,7 +66,7 @@ static const struct option OPTIONS[] = {
     {"validator-keys-path", required_argument, NULL, OPT_LEGACY_VALIDATOR_KEYS_PATH},
     {"validator-config", required_argument, NULL, OPT_LEGACY_VALIDATOR_CONFIG_PATH},
     {"node-id", required_argument, NULL, OPT_NODE_ID},
-    {"node-key", required_argument, NULL, OPT_NODE_KEY},
+    {"node-key", required_argument, NULL, OPT_REJECT_NODE_KEY},
     {"node-key-path", required_argument, NULL, OPT_NODE_KEY_PATH},
     {"listen-address", required_argument, NULL, OPT_LISTEN_ADDRESS},
     {"checkpoint-sync-url", required_argument, NULL, OPT_CHECKPOINT_SYNC_URL},
@@ -241,7 +242,7 @@ static lantern_client_error set_shadow_rate(
 static lantern_client_error apply_option(
     struct lantern_client_options *options,
     int option,
-    const char *argument,
+    char *argument,
     bool *help,
     bool *version)
 {
@@ -269,9 +270,16 @@ static lantern_client_error apply_option(
     case OPT_NODE_ID:
         options->node_id = argument;
         return LANTERN_CLIENT_OK;
-    case OPT_NODE_KEY:
-        options->node_key_hex = argument;
-        return LANTERN_CLIENT_OK;
+    case OPT_REJECT_NODE_KEY:
+        if (argument)
+        {
+            lantern_secure_zero(argument, strlen(argument));
+        }
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
+            "main",
+            NULL,
+            "--node-key was removed; use --node-key-path");
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     case OPT_NODE_KEY_PATH:
         options->node_key_path = argument;
         return LANTERN_CLIENT_OK;
@@ -368,8 +376,7 @@ static int parse_arguments(
             return -1;
         }
     }
-    if ((options->node_key_hex && options->node_key_path)
-        || (options->aggregate_subnet_id_count > 0u && !options->is_aggregator))
+    if (options->aggregate_subnet_id_count > 0u && !options->is_aggregator)
     {
         return -1;
     }
@@ -386,7 +393,7 @@ static int run_until_signal(struct lantern_client *client)
         {
             if (errno != EINTR)
             {
-                lantern_log_error(
+                lantern_log(LANTERN_LOG_LEVEL_ERROR,
                     "cli",
                     &(const struct lantern_log_metadata){.validator = client->node_id},
                     "sleep failed: %s",
@@ -400,7 +407,7 @@ static int run_until_signal(struct lantern_client *client)
 
 static void print_usage(const char *program)
 {
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "main",
         NULL,
         "Usage: %s [options]\n"
@@ -411,11 +418,10 @@ static void print_usage(const char *program)
         "  --use-genesis-state          Deprecated; ignored\n"
         "  --validator_config DIR       Directory with validator artifacts\n"
         "  --node-id NAME               Node identifier\n"
-        "  --node-key HEX               Local 32-byte private key\n"
         "  --node-key-path PATH         File containing the private key",
         program,
         LANTERN_DEFAULT_DATA_DIR);
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "main",
         NULL,
         "  --listen-address ADDR        QUIC listen multiaddr\n"
@@ -430,7 +436,7 @@ static void print_usage(const char *program)
         "  --is-aggregator              Enable aggregation\n"
         "  --prover-arena               Use faster, high-memory leanVM proving\n"
         "  --aggregate-subnet-ids IDS   Comma-separated imported subnets");
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "main",
         NULL,
         "  --xmss-key-dir PATH          XMSS key directory\n"
@@ -464,7 +470,7 @@ int main(int argc, char **argv)
     }
     if (version)
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "main",
             NULL,
             "lantern %s (commit %s, branch %s)",
@@ -480,7 +486,7 @@ int main(int argc, char **argv)
         exit_code = 0;
         goto cleanup;
     }
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "cli",
         NULL,
         "lantern %s (commit %s, branch %s)",
@@ -493,13 +499,13 @@ int main(int argc, char **argv)
     }
     if (lantern_init(&client, &options) != LANTERN_CLIENT_OK)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "cli",
             &(const struct lantern_log_metadata){.validator = options.node_id},
             "initialization failed");
         goto cleanup;
     }
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "cli",
         &(const struct lantern_log_metadata){.validator = client.node_id},
         "lantern ready genesis_time=%" PRIu64 " validators=%" PRIu64
@@ -507,7 +513,7 @@ int main(int argc, char **argv)
         client.genesis.chain_config.genesis_time,
         client.genesis.chain_config.validator_count,
         client.genesis.enrs.count,
-        client.bootnodes.len,
+        lantern_string_list_count(&client.bootnodes),
         client.local_enr.encoded ? client.local_enr.encoded : "-");
     exit_code = run_until_signal(&client) == 0 ? 0 : 1;
 

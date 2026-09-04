@@ -8,14 +8,16 @@
 #include "lantern/metrics/lean_metrics.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 #define LANTERN_METRICS_MAX_PEER_VOTE_STATS 64u
 #define LANTERN_METRICS_CLIENT_LABEL_CAP 128u
 #define LANTERN_METRICS_CONTENT_TYPE "text/plain; version=0.0.4; charset=utf-8"
 
-struct lantern_peer_vote_metric {
+struct lantern_peer_vote_metric
+{
     char peer_id[128];
     uint64_t received_total;
     uint64_t accepted_total;
@@ -24,7 +26,8 @@ struct lantern_peer_vote_metric {
     uint64_t last_slot;
 };
 
-struct lantern_metrics_snapshot {
+struct lantern_metrics_snapshot
+{
     uint64_t lean_node_start_time_seconds;
     uint64_t lean_head_slot;
     uint64_t lean_current_slot;
@@ -46,38 +49,40 @@ struct lantern_metrics_snapshot {
     uint64_t lean_node_sync_status;
     struct lean_metrics_snapshot lean_metrics;
     size_t peer_vote_metrics_count;
-    struct lantern_peer_vote_metric peer_vote_metrics[LANTERN_METRICS_MAX_PEER_VOTE_STATS];
+    struct lantern_peer_vote_metric
+        peer_vote_metrics[LANTERN_METRICS_MAX_PEER_VOTE_STATS];
 };
 
-struct lantern_metrics_callbacks {
+struct lantern_metrics_callbacks
+{
     void *context;
-    int (*snapshot)(void *context, struct lantern_metrics_snapshot *out_snapshot);
+    int (*snapshot)(void *context,
+                    struct lantern_metrics_snapshot *out_snapshot);
 };
 
-struct lantern_metrics_http_handler {
+struct lantern_metrics_http_handler
+{
     struct lantern_metrics_callbacks callbacks;
     const char *log_module;
     const char *unavailable_json;
     const char *formatting_failed_json;
 };
 
-struct lantern_metrics_server {
+struct lantern_metrics_server
+{
     struct lantern_http_core_server core;
     struct lantern_metrics_http_handler handler;
 };
 
-int lantern_metrics_handle_http(
-    void *context,
-    const struct lantern_http_request *request);
+int lantern_metrics_handle_http(void *context,
+                                const struct lantern_http_request *request);
 void lantern_metrics_server_init(struct lantern_metrics_server *server);
 int lantern_metrics_server_start(
-    struct lantern_metrics_server *server,
-    uint16_t port,
+    struct lantern_metrics_server *server, uint16_t port,
     const struct lantern_metrics_callbacks *callbacks);
 void lantern_metrics_server_stop(struct lantern_metrics_server *server);
 int lantern_metrics_format_prometheus(
-    const struct lantern_metrics_snapshot *snapshot,
-    char **out_body,
+    const struct lantern_metrics_snapshot *snapshot, char **out_body,
     size_t *out_len);
 
 #ifdef __cplusplus

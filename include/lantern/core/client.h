@@ -3,19 +3,19 @@
 
 #include <pthread.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
-#include "lantern/consensus/state.h"
-#include "lantern/consensus/store.h"
-#include "lantern/consensus/slot_clock.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/signature.h"
+#include "lantern/consensus/slot_clock.h"
+#include "lantern/consensus/state.h"
+#include "lantern/consensus/store.h"
 #include "lantern/genesis/genesis.h"
-#include "lantern/metrics/server.h"
 #include "lantern/http/server.h"
-#include "lantern/networking/libp2p.h"
+#include "lantern/metrics/server.h"
 #include "lantern/networking/gossipsub_service.h"
+#include "lantern/networking/libp2p.h"
 #include "lantern/networking/reqresp_service.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/string_list.h"
@@ -23,7 +23,8 @@
 #include "pq-bindings-c-rust.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 #define LANTERN_DEFAULT_DATA_DIR "./data"
@@ -59,13 +60,16 @@ typedef enum
     LANTERN_SYNC_STATE_SYNCED = 2
 } LanternSyncState;
 
-struct lantern_client_options {
+struct lantern_client_options
+{
     const char *data_dir;
     const char *genesis_config_path;
     const char *validator_config_dir;
     const char *nodes_path;
     const char *node_id;
+    /** Borrowed key text. The caller clears it after lantern_init returns. */
     const char *node_key_hex;
+    /** Borrowed path to the node-key file. */
     const char *node_key_path;
     const char *listen_address;
     const char *checkpoint_sync_url;
@@ -92,7 +96,8 @@ struct lantern_block_fetch;
 struct lantern_async_block_import_job;
 struct lantern_async_block_proposal_job;
 
-struct lantern_pending_block {
+struct lantern_pending_block
+{
     LanternSignedBlock block;
     LanternRoot root;
     LanternRoot parent_root;
@@ -100,32 +105,38 @@ struct lantern_pending_block {
     uint32_t backfill_depth;
 };
 
-struct lantern_pending_block_list {
+struct lantern_pending_block_list
+{
     struct lantern_pending_block *items;
     size_t length;
     size_t capacity;
 };
 
-struct lantern_pending_vote {
+struct lantern_pending_vote
+{
     LanternSignedVote vote;
     char peer_text[128];
 };
 
-struct lantern_pending_vote_list {
+struct lantern_pending_vote_list
+{
     struct lantern_pending_vote *items;
     size_t length;
     size_t capacity;
 };
 
-struct lantern_active_blocks_request {
+struct lantern_active_blocks_request
+{
     uint64_t request_id;
     char peer_id[128];
     LanternRoot *roots;
     size_t root_count;
 };
 
-struct lantern_range_sync_state {
-    uint64_t next_request_slot;  /**< Slot immediately after the imported head. */
+struct lantern_range_sync_state
+{
+    uint64_t
+        next_request_slot; /**< Slot immediately after the imported head. */
     uint64_t imported_head_slot; /**< Latest connected local head. */
     uint64_t target_slot;
     uint64_t request_id;
@@ -136,7 +147,8 @@ struct lantern_range_sync_state {
     bool peers_exhausted;
 };
 
-struct lantern_validator_duty_state {
+struct lantern_validator_duty_state
+{
     uint64_t slot_marker;
     bool slot_proposed;
     bool slot_attested;
@@ -145,26 +157,30 @@ struct lantern_validator_duty_state {
     bool duty_gate_closed;
 };
 
-struct lantern_connection_peer_ref {
+struct lantern_connection_peer_ref
+{
     const void *conn;
     struct lantern_peer_id peer;
     bool inbound;
     bool closing;
 };
 
-struct lantern_validator_signature_record {
+struct lantern_validator_signature_record
+{
     uint64_t slot;
     LanternRoot message;
     LanternSignature signature;
 };
 
-struct lantern_validator_signature_history {
+struct lantern_validator_signature_history
+{
     struct lantern_validator_signature_record *records;
     size_t length;
     size_t capacity;
 };
 
-struct lantern_local_validator {
+struct lantern_local_validator
+{
     uint64_t global_index;
     struct PQSignatureSchemeSecretKey *attestation_secret_key;
     struct PQSignatureSchemeSecretKey *proposal_secret_key;
@@ -174,7 +190,8 @@ struct lantern_local_validator {
     struct lantern_validator_signature_history proposal_signature_history;
 };
 
-struct lantern_client {
+struct lantern_client
+{
     char *data_dir;
     struct lantern_storage storage;
     char *node_id;
@@ -261,26 +278,21 @@ struct lantern_client {
 
 void lantern_client_options_init(struct lantern_client_options *options);
 void lantern_client_options_free(struct lantern_client_options *options);
-lantern_client_error lantern_client_options_add_bootnode(
-    struct lantern_client_options *options,
-    const char *bootnode);
+lantern_client_error
+lantern_client_options_add_bootnode(struct lantern_client_options *options,
+                                    const char *bootnode);
 lantern_client_error lantern_client_options_add_bootnodes_from_file(
-    struct lantern_client_options *options,
-    const char *path);
+    struct lantern_client_options *options, const char *path);
 lantern_client_error lantern_client_options_add_bootnodes_argument(
-    struct lantern_client_options *options,
-    const char *value);
+    struct lantern_client_options *options, const char *value);
 lantern_client_error lantern_client_options_add_aggregate_subnet_id(
-    struct lantern_client_options *options,
-    size_t subnet_id);
+    struct lantern_client_options *options, size_t subnet_id);
 
-lantern_client_error lantern_init(
-    struct lantern_client *client,
-    const struct lantern_client_options *options);
+lantern_client_error lantern_init(struct lantern_client *client,
+                                  const struct lantern_client_options *options);
 void lantern_shutdown(struct lantern_client *client);
-int lantern_client_aggregation_subnet_id(
-    const struct lantern_client *client,
-    size_t *out_subnet_id);
+int lantern_client_aggregation_subnet_id(const struct lantern_client *client,
+                                         size_t *out_subnet_id);
 
 /**
  * Publish a signed block to the gossip network.
@@ -292,7 +304,8 @@ int lantern_client_aggregation_subnet_id(
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
  * @return LANTERN_CLIENT_ERR_NETWORK if gossip is inactive or publish fails
  */
-int lantern_client_publish_block(struct lantern_client *client, const LanternSignedBlock *block);
+int lantern_client_publish_block(struct lantern_client *client,
+                                 const LanternSignedBlock *block);
 
 #ifdef __cplusplus
 }

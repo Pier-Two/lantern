@@ -117,7 +117,7 @@ static void log_status_failure(
     {
         if (first_failure)
         {
-            lantern_log_info(
+            lantern_log(LANTERN_LOG_LEVEL_INFO,
                 "reqresp",
                 &meta,
                 "peer does not support %s error=%d (%s)",
@@ -127,7 +127,7 @@ static void log_status_failure(
         }
         else
         {
-            lantern_log_trace(
+            lantern_log(LANTERN_LOG_LEVEL_TRACE,
                 "reqresp",
                 &meta,
                 "peer still misses %s support error=%d (%s)",
@@ -142,7 +142,7 @@ static void log_status_failure(
     {
         if (first_failure)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "reqresp",
                 &meta,
                 "status request to peer timed out error=%d (%s)",
@@ -151,7 +151,7 @@ static void log_status_failure(
         }
         else
         {
-            lantern_log_debug(
+            lantern_log(LANTERN_LOG_LEVEL_DEBUG,
                 "reqresp",
                 &meta,
                 "status request still timing out error=%d (%s)",
@@ -163,7 +163,7 @@ static void log_status_failure(
 
     if (first_failure)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "reqresp",
             &meta,
             "status request failed error=%d (%s)",
@@ -172,7 +172,7 @@ static void log_status_failure(
     }
     else
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "reqresp",
             &meta,
             "status request still failing error=%d (%s)",
@@ -433,7 +433,7 @@ static void maybe_log_sync_progress(
             }
             char duration[32];
             format_duration_seconds(elapsed_s, duration, sizeof(duration));
-            lantern_log_info(
+            lantern_log(LANTERN_LOG_LEVEL_INFO,
                 "sync",
                 &meta,
                 "sync complete local_slot=%" PRIu64 " target_slot=%" PRIu64 " duration=%s",
@@ -453,7 +453,7 @@ static void maybe_log_sync_progress(
         client->sync_started_ms = now_ms ? now_ms : 1u;
         client->sync_last_log_ms = 0;
         client->sync_target_slot = has_network_head ? network_head_slot : network_finalized;
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "sync",
             &meta,
             "sync starting local_slot=%" PRIu64 " target_slot=%" PRIu64 " pending=%zu",
@@ -476,7 +476,7 @@ static void maybe_log_sync_progress(
 
     if (pending > 0)
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "sync",
             &meta,
             "sync progress local_slot=%" PRIu64 " target_slot=%" PRIu64
@@ -488,7 +488,7 @@ static void maybe_log_sync_progress(
     }
     else
     {
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "sync",
             &meta,
             "sync progress local_slot=%" PRIu64 " target_slot=%" PRIu64 " remaining=%" PRIu64,
@@ -672,7 +672,8 @@ static void lantern_client_peer_status_update(
         && range->next_request_slot != 0u
         && range->next_request_slot <= range->target_slot)
     {
-        if (lantern_string_list_remove(&range->failed_peers, peer_id_text))
+        if (lantern_string_list_remove(&range->failed_peers, peer_id_text) ==
+            LANTERN_STRING_LIST_OK)
         {
             range->peers_exhausted = false;
         }
@@ -842,7 +843,7 @@ int reqresp_handle_status(
     format_root_hex(&peer_status->head.root, head_hex, sizeof(head_hex));
     format_root_hex(&peer_status->finalized.root, finalized_hex, sizeof(finalized_hex));
 
-    lantern_log_debug(
+    lantern_log(LANTERN_LOG_LEVEL_DEBUG,
         "network",
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
@@ -884,7 +885,7 @@ void reqresp_status_failure(void *context, const char *peer_id, int error)
     }
     struct lantern_client *client = context;
     char peer_copy[sizeof(((struct lantern_peer_status_entry *)0)->peer_id)];
-    (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_id);
+    (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_id, NULL);
     if (error == 0)
     {
         error = LIBP2P_HOST_ERR_INTERNAL;
@@ -1194,7 +1195,7 @@ static int import_block_response_now(
         }
         if (known && !imported)
         {
-            lantern_log_debug(
+            lantern_log(LANTERN_LOG_LEVEL_DEBUG,
                 "backfill",
                 &meta,
                 "slot %" PRIu64 ", %s, response duplicate",
@@ -1203,7 +1204,7 @@ static int import_block_response_now(
         }
         else
         {
-            lantern_log_info(
+            lantern_log(LANTERN_LOG_LEVEL_INFO,
                 "backfill",
                 &meta,
                 "slot %" PRIu64 ", %s, response %s",
@@ -1215,7 +1216,7 @@ static int import_block_response_now(
     }
     if (block_response_is_pre_finalized(client, block->block.slot))
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "backfill",
             &meta,
             "slot %" PRIu64 ", %s, response pre-finalized",
@@ -1224,7 +1225,7 @@ static int import_block_response_now(
         return LANTERN_CLIENT_OK;
     }
 
-    lantern_log_warn(
+    lantern_log(LANTERN_LOG_LEVEL_WARN,
         "backfill",
         &meta,
         "slot %" PRIu64 ", %s, response rejected",
@@ -1294,7 +1295,7 @@ static void *block_import_worker_main(void *arg)
         }
         if (rc != LANTERN_CLIENT_OK)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "reqresp",
                 &(const struct lantern_log_metadata){
                     .validator = client->node_id,
@@ -1508,7 +1509,7 @@ int reqresp_collect_blocks(
             != 0)
         {
             lantern_signed_block_list_reset(&storage_blocks);
-            lantern_log_error(
+            lantern_log(LANTERN_LOG_LEVEL_ERROR,
                 "reqresp",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "failed to collect blocks from storage");
@@ -1539,7 +1540,7 @@ int reqresp_collect_blocks(
     }
 
     lantern_signed_block_list_reset(&storage_blocks);
-    lantern_log_debug(
+    lantern_log(LANTERN_LOG_LEVEL_DEBUG,
         "reqresp",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "blocks_by_root collect roots=%zu served=%zu storage_hits=%zu pending_hits=%zu",
@@ -1849,7 +1850,7 @@ static void lantern_client_on_peer_status(
     }
 
     char peer_copy[sizeof(((struct lantern_peer_status_entry *)0)->peer_id)];
-    (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_id);
+    (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_id, NULL);
 
     LanternCheckpoint local_head = {0};
     bool head_known = false;
@@ -1863,7 +1864,7 @@ static void lantern_client_on_peer_status(
         .validator = client->node_id,
         .peer = peer_copy[0] ? peer_copy : NULL,
     };
-    lantern_log_debug(
+    lantern_log(LANTERN_LOG_LEVEL_DEBUG,
         "sync",
         &meta,
         "peer status view head_slot=%" PRIu64 " finalized_slot=%" PRIu64 " head_known=%s local_slot=%" PRIu64,
@@ -1929,7 +1930,7 @@ void lantern_client_on_blocks_request_complete_batch_with_id(
     const char *outcome_text = lantern_blocks_request_outcome_text(outcome);
     if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS && client->sync_started_ms != 0u)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "backfill",
             &(const struct lantern_log_metadata){
                 .validator = client->node_id,
@@ -1944,7 +1945,7 @@ void lantern_client_on_blocks_request_complete_batch_with_id(
     {
         if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS)
         {
-            lantern_log_info(
+            lantern_log(LANTERN_LOG_LEVEL_INFO,
                 "backfill",
                 &(const struct lantern_log_metadata){
                     .validator = client->node_id,
@@ -1957,7 +1958,7 @@ void lantern_client_on_blocks_request_complete_batch_with_id(
         }
         else
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "backfill",
                 &(const struct lantern_log_metadata){
                     .validator = client->node_id,

@@ -164,7 +164,7 @@ struct lantern_pending_vote *pending_vote_list_append(
     entry->vote = *vote;
     if (peer_text && *peer_text)
     {
-        (void)lantern_string_copy(entry->peer_text, sizeof(entry->peer_text), peer_text);
+        (void)lantern_string_copy(entry->peer_text, sizeof(entry->peer_text), peer_text, NULL);
     }
     list->length += 1u;
 
@@ -467,7 +467,7 @@ struct lantern_pending_block *pending_block_list_append(
 
     if (peer_text && *peer_text)
     {
-        (void)lantern_string_copy(entry->peer_text, sizeof(entry->peer_text), peer_text);
+        (void)lantern_string_copy(entry->peer_text, sizeof(entry->peer_text), peer_text, NULL);
     }
 
     list->length += 1u;

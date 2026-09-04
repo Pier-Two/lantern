@@ -7,7 +7,7 @@
 
 #include "lantern/consensus/state.h"
 #include "lantern/genesis/genesis.h"
-#include "lantern/support/strings.h"
+#include "lantern/support/hex.h"
 static int write_temp_nodes_file(char *buffer, size_t length) {
     if (!buffer || length == 0) {
         return -1;

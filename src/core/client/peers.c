@@ -114,7 +114,7 @@ struct lantern_peer_status_entry *lantern_client_ensure_status_entry_locked(
     entry = &client->peer_status_entries[client->peer_status_count++];
     memset(entry, 0, sizeof(*entry));
 
-    (void)lantern_string_copy(entry->peer_id, sizeof(entry->peer_id), peer_id);
+    (void)lantern_string_copy(entry->peer_id, sizeof(entry->peer_id), peer_id, NULL);
 
     return entry;
 }

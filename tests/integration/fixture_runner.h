@@ -4,10 +4,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-struct lantern_fixture_run_config {
+struct lantern_fixture_run_config
+{
     const char *suite_name;
     const char *state_transition_subdir;
-    const char *fork_choice_subdir; /* Optional when include_fork_choice is false */
+    const char
+        *fork_choice_subdir; /* Optional when include_fork_choice is false */
     bool include_fork_choice;
 };
 

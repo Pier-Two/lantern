@@ -182,7 +182,7 @@ int append_genesis_bootnodes(struct lantern_client *client)
         {
             return -1;
         }
-        lantern_log_info(
+        lantern_log(LANTERN_LOG_LEVEL_INFO,
             "network",
             &(const struct lantern_log_metadata){
                 .validator = client->node_id,
@@ -238,7 +238,7 @@ int populate_local_validators(struct lantern_client *client)
         }
         written += (size_t)n;
     }
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "client",
         &meta,
         "local validator assignment start=%" PRIu64 " count=%zu indices=%s",
@@ -287,7 +287,7 @@ int populate_local_validators(struct lantern_client *client)
 
     pthread_mutex_unlock(&client->validator_lock);
 
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "client",
         &meta,
         "local validators ready count=%zu",
@@ -317,7 +317,7 @@ lantern_client_error client_prepare_storage_and_genesis(
 {
     if (lantern_storage_open(&client->storage, client->data_dir) != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "storage",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to prepare data directory '%s'",
@@ -345,7 +345,7 @@ lantern_client_error client_prepare_storage_and_genesis(
             client->genesis.chain_config.validator_count)
         != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "validator-config does not cover %" PRIu64 " validators",
@@ -359,7 +359,7 @@ lantern_client_error client_prepare_storage_and_genesis(
             client->genesis.chain_config.validator_count)
         != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "annotated_validators.yaml assignment mapping invalid or incomplete");

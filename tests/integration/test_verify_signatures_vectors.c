@@ -24,7 +24,7 @@ static void configure_logging(void) {
         }
         return;
     }
-    lantern_log_set_level(LANTERN_LOG_LEVEL_WARN);
+    (void)lantern_log_set_level(LANTERN_LOG_LEVEL_WARN);
 }
 
 static int run_verify_signatures_fixture(const char *path);

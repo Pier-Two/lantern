@@ -33,6 +33,7 @@
 #endif
 
 #include "lantern/consensus/fork_choice.h"
+#include "lantern/support/hex.h"
 #include "lantern/support/log.h"
 #include "lantern/support/secure_mem.h"
 #include "lantern/support/strings.h"
@@ -233,7 +234,7 @@ void lantern_client_unlock_mutex(
     int unlock_rc = pthread_mutex_unlock(mutex);
     if (unlock_rc != 0)
     {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             component,
             &(const struct lantern_log_metadata){.validator = validator_id},
             "failed to unlock %s: %d",
@@ -351,10 +352,10 @@ void format_root_hex(const LanternRoot *root, char *out, size_t out_len)
 
     if (lantern_root_is_zero(root))
     {
-        (void)lantern_string_copy(out, out_len, "0x0");
+        (void)lantern_string_copy(out, out_len, "0x0", NULL);
         return;
     }
-    if (lantern_bytes_to_hex(root->bytes, sizeof(root->bytes), out, out_len, 1) != 0)
+    if (lantern_hex_encode(root->bytes, sizeof(root->bytes), out, out_len, 1) != 0)
     {
         out[0] = '\0';
     }
@@ -559,20 +560,24 @@ int set_owned_string(char **dest, const char *value)
 
 
 /**
- * Read file contents and trim whitespace.
+ * Read node-key text into a length-tracked buffer.
  *
- * @param path      File path
- * @param out_text  Output buffer (caller owns)
+ * @param path          File path
+ * @param out_text      Output buffer (caller owns)
+ * @param out_capacity  Allocated buffer size in bytes
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if path or out_text is NULL
  * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
- * @return LANTERN_CLIENT_ERR_CONFIG if the file cannot be read or trimmed
+ * @return LANTERN_CLIENT_ERR_CONFIG if the file cannot be read
  *
  * @note Thread safety: This function is thread-safe
  */
-int read_trimmed_file(const char *path, char **out_text)
+static int read_node_key_file(
+    const char *path,
+    char **out_text,
+    size_t *out_capacity)
 {
-    if (!path || !out_text)
+    if (!path || !out_text || !out_capacity)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
@@ -580,13 +585,15 @@ int read_trimmed_file(const char *path, char **out_text)
     int result = LANTERN_CLIENT_OK;
     FILE *fp = NULL;
     char *buffer = NULL;
+    size_t alloc_size = 0u;
 
     *out_text = NULL;
+    *out_capacity = 0u;
 
     fp = fopen(path, "rb");
     if (!fp)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){0},
             "unable to open %s for reading",
@@ -611,7 +618,7 @@ int read_trimmed_file(const char *path, char **out_text)
         goto cleanup;
     }
 
-    size_t alloc_size = (size_t)file_size + 1;
+    alloc_size = (size_t)file_size + 1u;
     buffer = malloc(alloc_size);
     if (!buffer)
     {
@@ -622,7 +629,7 @@ int read_trimmed_file(const char *path, char **out_text)
     size_t read_len = fread(buffer, 1, (size_t)file_size, fp);
     if (read_len != (size_t)file_size)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){0},
             "unable to read %s: read %zu of %ld bytes",
@@ -634,15 +641,8 @@ int read_trimmed_file(const char *path, char **out_text)
     }
     buffer[read_len] = '\0';
 
-    char *trimmed = lantern_trim_whitespace(buffer);
-    if (!trimmed)
-    {
-        result = LANTERN_CLIENT_ERR_CONFIG;
-        goto cleanup;
-    }
-    size_t trimmed_len = strlen(trimmed);
-    memmove(buffer, trimmed, trimmed_len + 1);
     *out_text = buffer;
+    *out_capacity = alloc_size;
     buffer = NULL;
     result = LANTERN_CLIENT_OK;
 
@@ -651,7 +651,7 @@ cleanup:
     {
         if (fclose(fp) != 0)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "client",
                 &(const struct lantern_log_metadata){0},
                 "failed to close %s: errno=%d",
@@ -659,6 +659,7 @@ cleanup:
                 errno);
         }
     }
+    lantern_secure_zero(buffer, alloc_size);
     free(buffer);
     return result;
 }
@@ -669,7 +670,7 @@ cleanup:
  *
  * Reads from either node_key_hex or node_key_path.
  *
- * @param options  Client options
+ * @param options  Client options with caller-owned key input
  * @param out_key  Output buffer (32 bytes)
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if options or out_key is NULL
@@ -688,54 +689,52 @@ int load_node_key_bytes(const struct lantern_client_options *options, uint8_t ou
     lantern_secure_zero(out_key, CLIENT_UTILS_NODE_KEY_SIZE);
 
     int result = LANTERN_CLIENT_OK;
-    char *owned = NULL;
+    char *key_text = NULL;
+    size_t key_text_capacity = 0u;
+    const char *encoded_key = options->node_key_hex;
 
-    if (options->node_key_hex)
+    if (!encoded_key && options->node_key_path)
     {
-        owned = lantern_string_duplicate(options->node_key_hex);
-        if (!owned)
-        {
-            return LANTERN_CLIENT_ERR_ALLOC;
-        }
-    }
-    else if (options->node_key_path)
-    {
-        int rc = read_trimmed_file(options->node_key_path, &owned);
+        int rc = read_node_key_file(
+            options->node_key_path,
+            &key_text,
+            &key_text_capacity);
         if (rc != LANTERN_CLIENT_OK)
         {
             return rc;
         }
+        encoded_key = key_text;
     }
-    else
+    if (!encoded_key)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = options->node_id},
-            "--node-key or --node-key-path is required");
+            "node key input is required");
         return LANTERN_CLIENT_ERR_CONFIG;
     }
 
-    char *trimmed = lantern_trim_whitespace(owned);
-    if (!trimmed)
+    if (lantern_hex_decode(
+            encoded_key,
+            out_key,
+            CLIENT_UTILS_NODE_KEY_SIZE)
+        != 0)
     {
-        result = LANTERN_CLIENT_ERR_CONFIG;
-        goto cleanup;
-    }
-
-    if (lantern_hex_decode(trimmed, out_key, CLIENT_UTILS_NODE_KEY_SIZE) != 0)
-    {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "client",
             &(const struct lantern_log_metadata){.validator = options->node_id},
             "invalid node key (expected 32-byte hex string)");
         result = LANTERN_CLIENT_ERR_CONFIG;
     }
 
-cleanup:
-    if (owned)
+    if (key_text)
     {
-        lantern_secure_zero(owned, strlen(owned));
-        free(owned);
+        lantern_secure_zero(key_text, key_text_capacity);
+        free(key_text);
+    }
+    if (result != LANTERN_CLIENT_OK)
+    {
+        lantern_secure_zero(out_key, CLIENT_UTILS_NODE_KEY_SIZE);
     }
     return result;
 }

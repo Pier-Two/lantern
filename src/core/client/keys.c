@@ -856,7 +856,7 @@ static int load_xmss_secret_keys(
         && (client->local_validator_count == 1u);
     if (!has_template && !has_dir && !has_single)
     {
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "crypto",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "xmss secret key sources unavailable; skipping local key load");
@@ -880,7 +880,7 @@ static int load_xmss_secret_keys(
                 &attestation_path)
             != 0)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "crypto",
                 &meta,
                 "unable to resolve attestation xmss secret key path for validator=%" PRIu64 "; skipping",
@@ -895,7 +895,7 @@ static int load_xmss_secret_keys(
                 &proposal_path)
             != 0)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "crypto",
                 &meta,
                 "unable to resolve proposal xmss secret key path for validator=%" PRIu64 "; skipping",
@@ -905,7 +905,7 @@ static int load_xmss_secret_keys(
             continue;
         }
         ++resolved;
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "crypto",
             &meta,
             "xmss secret key paths resolved validator=%" PRIu64 " attestation=%s proposal=%s",
@@ -916,7 +916,7 @@ static int load_xmss_secret_keys(
         struct PQSignatureSchemeSecretKey *attestation_secret = NULL;
         if (lantern_xmss_load_secret_file(attestation_path, &attestation_secret) != 0)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "crypto",
                 &meta,
                 "failed to load attestation xmss secret key validator=%" PRIu64 " path=%s; skipping",
@@ -929,7 +929,7 @@ static int load_xmss_secret_keys(
         char *owned_proposal_path = lantern_string_duplicate(proposal_path);
         if (!owned_proposal_path)
         {
-            lantern_log_warn(
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
                 "crypto",
                 &meta,
                 "failed to retain proposal xmss secret key path validator=%" PRIu64 " path=%s; skipping",
@@ -948,7 +948,7 @@ static int load_xmss_secret_keys(
         validator->proposal_secret_path = owned_proposal_path;
         ++loaded;
     }
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "crypto",
         &meta,
         "xmss secret key pairs loaded=%zu/%zu resolved=%zu dir=%s template=%s",
@@ -1046,7 +1046,7 @@ int lantern_client_configure_xmss_sources(
             return LANTERN_CLIENT_ERR_ALLOC;
         }
     }
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "crypto",
         &meta,
         "xmss sources resolved dir=%s annotated_validators=%s sk_path=%s sk_template=%s",
@@ -1084,7 +1084,7 @@ int lantern_client_load_xmss_keys(struct lantern_client *client)
     struct lantern_log_metadata meta = {.validator = client->node_id};
     if (!lantern_xmss_is_available())
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "crypto",
             &meta,
             "xmss bindings unavailable");
@@ -1112,7 +1112,7 @@ int lantern_client_load_xmss_keys(struct lantern_client *client)
     }
 
     const struct xmss_manifest *manifest_ptr = manifest_loaded ? &manifest : NULL;
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "crypto",
         &meta,
         "xmss load start key_dir=%s annotated_validators=%s manifest=%s validators=%" PRIu64 " local=%zu",

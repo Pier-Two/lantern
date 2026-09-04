@@ -6,59 +6,38 @@
 
 #include "lantern/support/strings.h"
 
-void lantern_string_list_init(struct lantern_string_list *list)
+struct lantern_string_list_storage
 {
-    if (!list)
+    char **items;
+    size_t len;
+    size_t capacity;
+};
+
+static enum lantern_string_list_result string_list_reserve(
+    struct lantern_string_list *list, size_t new_capacity)
+{
+    struct lantern_string_list_storage *storage = list->storage;
+    if (storage && new_capacity <= storage->capacity)
     {
-        return;
+        return LANTERN_STRING_LIST_OK;
+    }
+    if (new_capacity > SIZE_MAX / sizeof(*storage->items))
+    {
+        return LANTERN_STRING_LIST_ERR_RANGE;
     }
 
-    list->items = NULL;
-    list->len = 0;
-    list->capacity = 0;
-}
-
-void lantern_string_list_reset(struct lantern_string_list *list)
-{
-    if (!list)
+    bool created = false;
+    if (!storage)
     {
-        return;
-    }
-
-    if (list->items)
-    {
-        size_t limit = list->len;
-        if (list->capacity > 0 && limit > list->capacity)
+        storage = calloc(1u, sizeof(*storage));
+        if (!storage)
         {
-            limit = list->capacity;
+            return LANTERN_STRING_LIST_ERR_ALLOC;
         }
-
-        for (size_t i = 0; i < limit; ++i)
-        {
-            free(list->items[i]);
-            list->items[i] = NULL;
-        }
-        free(list->items);
+        created = true;
     }
 
-    list->items = NULL;
-    list->len = 0;
-    list->capacity = 0;
-}
-
-static int string_list_reserve(struct lantern_string_list *list,
-                               size_t new_capacity)
-{
-    if (new_capacity <= list->capacity)
-    {
-        return 0;
-    }
-    if (new_capacity > SIZE_MAX / sizeof(*list->items))
-    {
-        return -1;
-    }
-
-    size_t adjusted = list->capacity == 0 ? 4 : list->capacity;
+    size_t adjusted = storage->capacity == 0 ? 4u : storage->capacity;
     while (adjusted < new_capacity)
     {
         if (adjusted > SIZE_MAX / 2u)
@@ -68,57 +47,101 @@ static int string_list_reserve(struct lantern_string_list *list,
         }
         adjusted *= 2u;
     }
+    if (adjusted > SIZE_MAX / sizeof(*storage->items))
+    {
+        if (created)
+        {
+            free(storage);
+        }
+        return LANTERN_STRING_LIST_ERR_RANGE;
+    }
 
-    char **items = realloc(list->items, adjusted * sizeof(*items));
+    char **items = realloc(storage->items, adjusted * sizeof(*items));
     if (!items)
     {
-        return -1;
+        if (created)
+        {
+            free(storage);
+        }
+        return LANTERN_STRING_LIST_ERR_ALLOC;
     }
 
-    for (size_t i = list->capacity; i < adjusted; ++i)
-    {
-        items[i] = NULL;
-    }
-
-    list->items = items;
-    list->capacity = adjusted;
-    return 0;
+    storage->items = items;
+    storage->capacity = adjusted;
+    list->storage = storage;
+    return LANTERN_STRING_LIST_OK;
 }
 
-int lantern_string_list_append(struct lantern_string_list *list,
-                               const char *value)
+void lantern_string_list_init(struct lantern_string_list *list)
 {
-    if (!list || !value || list->len == SIZE_MAX)
+    if (list)
     {
-        return -1;
+        list->storage = NULL;
+    }
+}
+
+void lantern_string_list_reset(struct lantern_string_list *list)
+{
+    if (!list || !list->storage)
+    {
+        return;
     }
 
-    if (string_list_reserve(list, list->len + 1u) != 0)
+    struct lantern_string_list_storage *storage = list->storage;
+    for (size_t i = 0; i < storage->len; ++i)
     {
-        return -1;
+        free(storage->items[i]);
+    }
+    free(storage->items);
+    free(storage);
+    list->storage = NULL;
+}
+
+enum lantern_string_list_result lantern_string_list_append(
+    struct lantern_string_list *list, const char *value)
+{
+    if (!list || !value)
+    {
+        return LANTERN_STRING_LIST_ERR_INVALID;
     }
 
+    size_t len = list->storage ? list->storage->len : 0u;
+    if (len == SIZE_MAX)
+    {
+        return LANTERN_STRING_LIST_ERR_RANGE;
+    }
+
+    /* Copy first so allocation failure leaves the list unchanged. */
     char *copy = lantern_string_duplicate(value);
     if (!copy)
     {
-        return -1;
+        return LANTERN_STRING_LIST_ERR_ALLOC;
     }
 
-    list->items[list->len++] = copy;
-    return 0;
+    enum lantern_string_list_result reserve_result =
+        string_list_reserve(list, len + 1u);
+    if (reserve_result != LANTERN_STRING_LIST_OK)
+    {
+        free(copy);
+        return reserve_result;
+    }
+
+    list->storage->items[len] = copy;
+    list->storage->len = len + 1u;
+    return LANTERN_STRING_LIST_OK;
 }
 
 bool lantern_string_list_contains(const struct lantern_string_list *list,
                                   const char *value)
 {
-    if (!list || !value)
+    if (!list || !list->storage || !value)
     {
         return false;
     }
 
-    for (size_t i = 0; i < list->len; ++i)
+    for (size_t i = 0; i < list->storage->len; ++i)
     {
-        if (list->items[i] && strcmp(list->items[i], value) == 0)
+        if (strcmp(list->storage->items[i], value) == 0)
         {
             return true;
         }
@@ -127,84 +150,112 @@ bool lantern_string_list_contains(const struct lantern_string_list *list,
     return false;
 }
 
-bool lantern_string_list_remove(struct lantern_string_list *list,
-                                const char *value)
+enum lantern_string_list_result
+lantern_string_list_remove(struct lantern_string_list *list,
+                           const char *value)
 {
     if (!list || !value)
     {
-        return false;
+        return LANTERN_STRING_LIST_ERR_INVALID;
+    }
+    if (!list->storage)
+    {
+        return LANTERN_STRING_LIST_NOT_FOUND;
     }
 
-    for (size_t i = 0; i < list->len; ++i)
+    struct lantern_string_list_storage *storage = list->storage;
+    for (size_t i = 0; i < storage->len; ++i)
     {
-        if (!list->items[i] || strcmp(list->items[i], value) != 0)
+        if (strcmp(storage->items[i], value) != 0)
         {
             continue;
         }
 
-        free(list->items[i]);
-        if (i + 1u < list->len)
+        free(storage->items[i]);
+        if (i + 1u < storage->len)
         {
-            memmove(&list->items[i], &list->items[i + 1u],
-                    (list->len - i - 1u) * sizeof(*list->items));
+            memmove(&storage->items[i], &storage->items[i + 1u],
+                    (storage->len - i - 1u) * sizeof(*storage->items));
         }
-        list->len -= 1u;
-        list->items[list->len] = NULL;
-        return true;
+        storage->len -= 1u;
+        storage->items[storage->len] = NULL;
+        return LANTERN_STRING_LIST_OK;
     }
 
-    return false;
+    return LANTERN_STRING_LIST_NOT_FOUND;
 }
 
-int lantern_string_list_append_unique(struct lantern_string_list *list,
-                                      const char *value)
+enum lantern_string_list_result lantern_string_list_append_unique(
+    struct lantern_string_list *list, const char *value)
 {
     if (!list || !value)
     {
-        return -1;
+        return LANTERN_STRING_LIST_ERR_INVALID;
     }
-
     if (*value == '\0' || lantern_string_list_contains(list, value))
     {
-        return 0;
+        return LANTERN_STRING_LIST_OK;
     }
 
     return lantern_string_list_append(list, value);
 }
 
-int lantern_string_list_copy(struct lantern_string_list *dst,
-                             const struct lantern_string_list *src)
+enum lantern_string_list_result lantern_string_list_copy(
+    struct lantern_string_list *dst, const struct lantern_string_list *src)
 {
     if (!dst || !src)
     {
-        return -1;
+        return LANTERN_STRING_LIST_ERR_INVALID;
     }
     if (dst == src)
     {
-        return 0;
+        return LANTERN_STRING_LIST_OK;
     }
 
     struct lantern_string_list copy;
     lantern_string_list_init(&copy);
 
-    if (src->len > 0 && string_list_reserve(&copy, src->len) != 0)
+    /* Build a separate replacement so failure preserves the destination. */
+    size_t count = lantern_string_list_count(src);
+    if (count > 0)
     {
-        return -1;
+        enum lantern_string_list_result result =
+            string_list_reserve(&copy, count);
+        if (result != LANTERN_STRING_LIST_OK)
+        {
+            return result;
+        }
     }
 
-    for (size_t i = 0; i < src->len; ++i)
+    for (size_t i = 0; i < count; ++i)
     {
-        char *item = lantern_string_duplicate(src->items[i]);
+        char *item = lantern_string_duplicate(lantern_string_list_get(src, i));
         if (!item)
         {
             lantern_string_list_reset(&copy);
-            return -1;
+            return LANTERN_STRING_LIST_ERR_ALLOC;
         }
 
-        copy.items[copy.len++] = item;
+        copy.storage->items[copy.storage->len++] = item;
     }
 
     lantern_string_list_reset(dst);
     *dst = copy;
-    return 0;
+    return LANTERN_STRING_LIST_OK;
+}
+
+size_t lantern_string_list_count(const struct lantern_string_list *list)
+{
+    return list && list->storage ? list->storage->len : 0u;
+}
+
+const char *lantern_string_list_get(const struct lantern_string_list *list,
+                                   size_t index)
+{
+    if (!list || !list->storage || index >= list->storage->len)
+    {
+        return NULL;
+    }
+
+    return list->storage->items[index];
 }

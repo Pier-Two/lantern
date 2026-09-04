@@ -93,7 +93,7 @@ static int load_chain_config_and_validators(
     int result = genesis_parse_chain_config(config_path, config);
     if (result != LANTERN_GENESIS_OK)
     {
-        lantern_log_error("genesis", NULL, "failed to parse chain config at %s", config_path);
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, "genesis", NULL, "failed to parse chain config at %s", config_path);
         return result;
     }
 
@@ -105,14 +105,14 @@ static int load_chain_config_and_validators(
         &validator_count);
     if (result != LANTERN_GENESIS_OK)
     {
-        lantern_log_error("genesis", NULL, "failed to parse genesis pubkeys at %s", config_path);
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, "genesis", NULL, "failed to parse genesis pubkeys at %s", config_path);
         return result;
     }
 
     if (!validators || validator_count == 0)
     {
         free(validators);
-        lantern_log_error("genesis", NULL, "genesis pubkeys missing from %s", config_path);
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, "genesis", NULL, "genesis pubkeys missing from %s", config_path);
         return LANTERN_GENESIS_ERR_INVALID_DATA;
     }
 
@@ -123,7 +123,7 @@ static int load_chain_config_and_validators(
     else if (config->validator_count != validator_count)
     {
         free(validators);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "genesis",
             NULL,
             "validator count mismatch in %s config=%" PRIu64 " entries=%zu",
@@ -134,7 +134,7 @@ static int load_chain_config_and_validators(
     }
 
     config->validators = validators;
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "genesis",
         NULL,
         "loaded %zu genesis pubkeys from %s",
@@ -178,7 +178,7 @@ int lantern_genesis_load(
         || !paths->nodes_path
         || !paths->validator_config_path)
     {
-        lantern_log_error("genesis", NULL, "missing required genesis path");
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, "genesis", NULL, "missing required genesis path");
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
 
@@ -193,7 +193,7 @@ int lantern_genesis_load(
     result = genesis_parse_nodes_file(paths->nodes_path, &artifacts->enrs);
     if (result != LANTERN_GENESIS_OK)
     {
-        lantern_log_error("genesis", NULL, "failed to parse nodes at %s", paths->nodes_path);
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, "genesis", NULL, "failed to parse nodes at %s", paths->nodes_path);
         goto error;
     }
 
@@ -202,7 +202,7 @@ int lantern_genesis_load(
         &artifacts->validator_config);
     if (result != LANTERN_GENESIS_OK)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             "genesis",
             NULL,
             "failed to parse validator-config at %s",

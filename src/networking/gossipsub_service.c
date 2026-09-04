@@ -77,7 +77,7 @@ static libp2p_host_err_t gossipsub_protocol_event_locked(
     libp2p_host_err_t rc = adapter->on_event(host, stream, kind, adapter->user_data);
     unlock_gossipsub();
     if (rc != LIBP2P_HOST_OK) {
-        lantern_log_warn(
+        lantern_log(LANTERN_LOG_LEVEL_WARN,
             "gossip",
             NULL,
             "gossipsub protocol event failed event=%s error=%d",
@@ -389,7 +389,7 @@ static int open_primary_writer(
         char peer_text[128];
         peer_id_to_text_safe(&state->peer, peer_text, sizeof(peer_text));
         state->opening_conn = state->primary_conn;
-        lantern_log_debug(
+        lantern_log(LANTERN_LOG_LEVEL_DEBUG,
             "gossip",
             &(const struct lantern_log_metadata){.peer = peer_text[0] ? peer_text : NULL},
             "opening gossipsub writer on primary connection inbound=%u",
@@ -820,15 +820,12 @@ static void drain_gossipsub_events(struct lantern_gossipsub_service *service, li
             libp2p_gossipsub_validation_result_t validation_result =
                 validation_result_from_delivery_rc(delivery_rc);
             if (event.validation && validation_result != LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT) {
-                void (*log_validation_result)(
-                    const char *,
-                    const struct lantern_log_metadata *,
-                    const char *,
-                    ...) =
+                enum lantern_log_level log_level =
                     validation_result == LIBP2P_GOSSIPSUB_VALIDATION_REJECT
-                        ? lantern_log_warn
-                        : lantern_log_debug;
-                log_validation_result(
+                        ? LANTERN_LOG_LEVEL_WARN
+                        : LANTERN_LOG_LEVEL_DEBUG;
+                lantern_log(
+                    log_level,
                     "gossip",
                     NULL,
                     "gossipsub validation result=%s rc=%d topic=%.*s",
@@ -869,16 +866,13 @@ static void drain_gossipsub_events(struct lantern_gossipsub_service *service, li
             if (peer_from_gossipsub_event(&event, &peer) == 0) {
                 peer_id_to_text_safe(&peer, peer_text, sizeof(peer_text));
             }
-            void (*log_event)(
-                const char *,
-                const struct lantern_log_metadata *,
-                const char *,
-                ...) =
+            enum lantern_log_level log_level =
                 event.type == LIBP2P_GOSSIPSUB_EVENT_ERROR ||
                         event.drop_reason == LIBP2P_GOSSIPSUB_DROP_IDONTWANT_TX_QUEUE_FULL
-                    ? lantern_log_warn
-                    : lantern_log_debug;
-            log_event(
+                    ? LANTERN_LOG_LEVEL_WARN
+                    : LANTERN_LOG_LEVEL_DEBUG;
+            lantern_log(
+                log_level,
                 "gossip",
                 &(const struct lantern_log_metadata){.peer = peer_text[0] ? peer_text : NULL},
                 "gossipsub event type=%d reason=%d drop_reason=%s tx_queue=%zu/%zu topic=%.*s",
@@ -1177,7 +1171,7 @@ int lantern_gossipsub_service_start(
         return -1;
     }
 
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         "network",
         &(const struct lantern_log_metadata){.peer = config->topic_network_name},
         "gossipsub topics ready");

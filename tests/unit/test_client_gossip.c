@@ -137,7 +137,8 @@ static int test_enable_blocks_request_peer(
     (void)lantern_string_copy(
         client->peer_status_entries[0].peer_id,
         sizeof(client->peer_status_entries[0].peer_id),
-        peer_id);
+        peer_id,
+        NULL);
 
     return 0;
 }

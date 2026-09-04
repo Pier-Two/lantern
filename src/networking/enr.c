@@ -855,7 +855,7 @@ int lantern_enr_record_build_v4(
     uint64_t sequence,
     bool is_aggregator) {
     if (!record || !private_key || !ip_string) {
-        lantern_log_error("enr", NULL, "ENR build missing inputs");
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, "enr", NULL, "ENR build missing inputs");
         return -1;
     }
 
@@ -1030,7 +1030,7 @@ error:
         secp256k1_context_destroy(ctx);
     }
     if (error_reason) {
-        lantern_log_error("enr", NULL, "ENR build error: %s", error_reason);
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, "enr", NULL, "ENR build error: %s", error_reason);
     }
     return -1;
 }

@@ -16,6 +16,7 @@
 #include "lantern/consensus/slot_clock.h"
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/store.h"
+#include "lantern/support/hex.h"
 #include "lantern/support/strings.h"
 #include "tests/support/fixture_loader.h"
 #include "tests/support/state_store_adapter.h"
@@ -108,7 +109,7 @@ static void driver_format_root_hex(const LanternRoot *root, char *buf, size_t bu
         return;
     }
     if (!root
-        || lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, buf, buf_len, 1) != 0)
+        || lantern_hex_encode(root->bytes, LANTERN_ROOT_SIZE, buf, buf_len, 1) != 0)
     {
         buf[0] = '\0';
     }

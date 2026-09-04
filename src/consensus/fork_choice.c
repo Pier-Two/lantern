@@ -606,7 +606,9 @@ int lantern_fork_choice_add_block_with_state(
     if (!store || store->block_len == 0u || !block) {
         return -1;
     }
-    double metrics_start = lantern_time_now_seconds();
+    double metrics_start;
+    enum lantern_time_result metrics_start_result =
+        lantern_time_now_seconds(&metrics_start);
     LanternRoot block_root;
     if (block_root_hint) {
         block_root = *block_root_hint;
@@ -670,10 +672,18 @@ int lantern_fork_choice_add_block_with_state(
         goto rollback;
     }
     lantern_state_reset(&previous_state);
-    lean_metrics_record_fork_choice_block_time(
-        lantern_time_elapsed_seconds(
-            metrics_start,
-            lantern_time_now_seconds()));
+    double metrics_end;
+    double metrics_elapsed = 0.0;
+    if (metrics_start_result != LANTERN_TIME_OK
+        || lantern_time_now_seconds(&metrics_end) != LANTERN_TIME_OK
+        || lantern_time_elapsed_seconds(
+               metrics_start,
+               metrics_end,
+               &metrics_elapsed)
+               != LANTERN_TIME_OK) {
+        metrics_elapsed = 0.0;
+    }
+    lean_metrics_record_fork_choice_block_time(metrics_elapsed);
     fork_choice_publish_current_checkpoints(store);
     return 0;
 

@@ -375,7 +375,7 @@ static int append_peer_vote_metric(
     {
         const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
         char peer_id[sizeof(metric->peer_id)];
-        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id);
+        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id, NULL);
 
         rc = lantern_http_buffer_appendf(
             buf,
@@ -857,7 +857,7 @@ int lantern_metrics_handle_http(
             503,
             "Service Unavailable",
             unavailable_json);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             log_module,
             &(const struct lantern_log_metadata){.peer = request->peer},
             "metrics callback missing rc=%d",
@@ -874,7 +874,7 @@ int lantern_metrics_handle_http(
             503,
             "Service Unavailable",
             unavailable_json);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             log_module,
             &(const struct lantern_log_metadata){.peer = request->peer},
             "snapshot failed rc=%d",
@@ -892,7 +892,7 @@ int lantern_metrics_handle_http(
             500,
             "Internal Server Error",
             formatting_json);
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             log_module,
             &(const struct lantern_log_metadata){.peer = request->peer},
             "formatting failed result=%d send_rc=%d",
@@ -911,7 +911,7 @@ int lantern_metrics_handle_http(
     free(body);
     if (result != 0)
     {
-        lantern_log_error(
+        lantern_log(LANTERN_LOG_LEVEL_ERROR,
             log_module,
             &(const struct lantern_log_metadata){.peer = request->peer},
             "send failed rc=%d",
@@ -919,7 +919,7 @@ int lantern_metrics_handle_http(
         return result;
     }
 
-    lantern_log_info(
+    lantern_log(LANTERN_LOG_LEVEL_INFO,
         log_module,
         &(const struct lantern_log_metadata){.peer = request->peer},
         "%s %s -> 200",

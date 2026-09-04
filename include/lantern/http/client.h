@@ -5,7 +5,8 @@
 #include <stdint.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 enum
@@ -15,17 +16,16 @@ enum
     LANTERN_HTTP_CLIENT_ERR = -1,
 };
 
-struct lantern_http_fetch_result {
+struct lantern_http_fetch_result
+{
     int status_code;
     uint8_t *body;
     size_t body_len;
 };
 
-int lantern_http_get_bytes(
-    const char *url,
-    const char *accept,
-    size_t max_response_bytes,
-    struct lantern_http_fetch_result *out_result);
+int lantern_http_get_bytes(const char *url, const char *accept,
+                           size_t max_response_bytes,
+                           struct lantern_http_fetch_result *out_result);
 void lantern_http_fetch_result_reset(struct lantern_http_fetch_result *result);
 
 #ifdef __cplusplus
