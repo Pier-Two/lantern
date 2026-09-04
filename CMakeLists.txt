@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(lantern LANGUAGES C)
+project(lantern VERSION 0.0.5 LANGUAGES C)
+
+file(MAKE_DIRECTORY "${PROJECT_BINARY_DIR}/include/lantern/support")
+configure_file(
+    include/lantern/support/version.h.in
+    "${PROJECT_BINARY_DIR}/include/lantern/support/version.h"
+    @ONLY
+)
 
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
@@ -117,6 +124,7 @@ function(lantern_define_library target_name wrapper_target)
     add_library(${target_name} STATIC ${LANTERN_LIBRARY_SOURCES})
     target_include_directories(${target_name}
         PUBLIC
+            ${PROJECT_BINARY_DIR}/include
             ${PROJECT_SOURCE_DIR}/include
         PRIVATE
             ${PROJECT_SOURCE_DIR}
