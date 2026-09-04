@@ -1,6 +1,16 @@
 #ifndef LANTERN_SUPPORT_HEX_H
 #define LANTERN_SUPPORT_HEX_H
 
+/**
+ * @file
+ * Convert between caller-owned byte buffers and hexadecimal text.
+ *
+ * Decoding accepts surrounding whitespace and an optional `0x` prefix, and it
+ * validates the complete input before changing the output buffer. Encoding
+ * produces lowercase text with an optional prefix. Both operations report
+ * invalid arguments and unsafe sizes through `lantern_hex_result`.
+ */
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

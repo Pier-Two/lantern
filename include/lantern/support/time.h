@@ -1,6 +1,16 @@
 #ifndef LANTERN_SUPPORT_TIME_H
 #define LANTERN_SUPPORT_TIME_H
 
+/**
+ * @file
+ * Read platform monotonic-clock values and calculate elapsed durations.
+ *
+ * Clock readings use seconds from a platform-defined origin and are comparable
+ * only when they come from the same clock. Failures are reported through
+ * `lantern_time_result`, with documented sentinel values written to valid
+ * output destinations.
+ */
+
 #ifdef __cplusplus
 extern "C"
 {

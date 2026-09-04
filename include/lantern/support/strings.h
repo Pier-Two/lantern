@@ -1,6 +1,16 @@
 #ifndef LANTERN_SUPPORT_STRINGS_H
 #define LANTERN_SUPPORT_STRINGS_H
 
+/**
+ * @file
+ * Allocate string duplicates, perform bounded string copies, and trim writable
+ * strings in place.
+ *
+ * Allocation functions transfer ownership of successful results to the caller.
+ * Copy and trim operations modify caller-owned buffers. All operations are
+ * thread-safe when concurrent calls use separate writable storage.
+ */
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -8,14 +18,6 @@
 extern "C"
 {
 #endif
-
-/**
- * @file
- * Declare string allocation, bounded copy, and whitespace trimming.
- *
- * Functions are thread-safe when concurrent calls use separate writable
- * buffers.
- */
 
 /** Distinguishes a complete copy from truncation and invalid input. */
 enum lantern_string_copy_result
