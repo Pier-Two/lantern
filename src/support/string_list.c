@@ -17,27 +17,33 @@ static enum lantern_string_list_result string_list_reserve(
     struct lantern_string_list *list, size_t new_capacity)
 {
     struct lantern_string_list_storage *storage = list->storage;
+
     if (storage && new_capacity <= storage->capacity)
     {
         return LANTERN_STRING_LIST_OK;
     }
+
     if (new_capacity > SIZE_MAX / sizeof(*storage->items))
     {
         return LANTERN_STRING_LIST_ERR_RANGE;
     }
 
     bool created = false;
+
     if (!storage)
     {
         storage = calloc(1u, sizeof(*storage));
+
         if (!storage)
         {
             return LANTERN_STRING_LIST_ERR_ALLOC;
         }
+
         created = true;
     }
 
     size_t adjusted = storage->capacity == 0 ? 4u : storage->capacity;
+
     while (adjusted < new_capacity)
     {
         if (adjusted > SIZE_MAX / 2u)
@@ -45,24 +51,29 @@ static enum lantern_string_list_result string_list_reserve(
             adjusted = new_capacity;
             break;
         }
+
         adjusted *= 2u;
     }
+
     if (adjusted > SIZE_MAX / sizeof(*storage->items))
     {
         if (created)
         {
             free(storage);
         }
+
         return LANTERN_STRING_LIST_ERR_RANGE;
     }
 
     char **items = realloc(storage->items, adjusted * sizeof(*items));
+
     if (!items)
     {
         if (created)
         {
             free(storage);
         }
+
         return LANTERN_STRING_LIST_ERR_ALLOC;
     }
 
@@ -88,10 +99,12 @@ void lantern_string_list_reset(struct lantern_string_list *list)
     }
 
     struct lantern_string_list_storage *storage = list->storage;
+
     for (size_t i = 0; i < storage->len; ++i)
     {
         free(storage->items[i]);
     }
+
     free(storage->items);
     free(storage);
     list->storage = NULL;
@@ -106,6 +119,7 @@ enum lantern_string_list_result lantern_string_list_append(
     }
 
     size_t len = list->storage ? list->storage->len : 0u;
+
     if (len == SIZE_MAX)
     {
         return LANTERN_STRING_LIST_ERR_RANGE;
@@ -113,6 +127,7 @@ enum lantern_string_list_result lantern_string_list_append(
 
     /* Copy first so allocation failure leaves the list unchanged. */
     char *copy = lantern_string_duplicate(value);
+
     if (!copy)
     {
         return LANTERN_STRING_LIST_ERR_ALLOC;
@@ -120,6 +135,7 @@ enum lantern_string_list_result lantern_string_list_append(
 
     enum lantern_string_list_result reserve_result =
         string_list_reserve(list, len + 1u);
+
     if (reserve_result != LANTERN_STRING_LIST_OK)
     {
         free(copy);
@@ -158,12 +174,14 @@ lantern_string_list_remove(struct lantern_string_list *list,
     {
         return LANTERN_STRING_LIST_ERR_INVALID;
     }
+
     if (!list->storage)
     {
         return LANTERN_STRING_LIST_NOT_FOUND;
     }
 
     struct lantern_string_list_storage *storage = list->storage;
+
     for (size_t i = 0; i < storage->len; ++i)
     {
         if (strcmp(storage->items[i], value) != 0)
@@ -172,11 +190,13 @@ lantern_string_list_remove(struct lantern_string_list *list,
         }
 
         free(storage->items[i]);
+
         if (i + 1u < storage->len)
         {
             memmove(&storage->items[i], &storage->items[i + 1u],
                     (storage->len - i - 1u) * sizeof(*storage->items));
         }
+
         storage->len -= 1u;
         storage->items[storage->len] = NULL;
         return LANTERN_STRING_LIST_OK;
@@ -192,6 +212,7 @@ enum lantern_string_list_result lantern_string_list_append_unique(
     {
         return LANTERN_STRING_LIST_ERR_INVALID;
     }
+
     if (*value == '\0' || lantern_string_list_contains(list, value))
     {
         return LANTERN_STRING_LIST_OK;
@@ -207,6 +228,7 @@ enum lantern_string_list_result lantern_string_list_copy(
     {
         return LANTERN_STRING_LIST_ERR_INVALID;
     }
+
     if (dst == src)
     {
         return LANTERN_STRING_LIST_OK;
@@ -217,10 +239,12 @@ enum lantern_string_list_result lantern_string_list_copy(
 
     /* Build a separate replacement so failure preserves the destination. */
     size_t count = lantern_string_list_count(src);
+
     if (count > 0)
     {
         enum lantern_string_list_result result =
             string_list_reserve(&copy, count);
+
         if (result != LANTERN_STRING_LIST_OK)
         {
             return result;
@@ -230,6 +254,7 @@ enum lantern_string_list_result lantern_string_list_copy(
     for (size_t i = 0; i < count; ++i)
     {
         char *item = lantern_string_duplicate(lantern_string_list_get(src, i));
+
         if (!item)
         {
             lantern_string_list_reset(&copy);

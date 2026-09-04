@@ -14,6 +14,7 @@ enum lantern_time_result lantern_time_now_seconds(double *out_seconds)
 
     LARGE_INTEGER counter;
     LARGE_INTEGER frequency;
+
     if (!QueryPerformanceCounter(&counter) ||
         !QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0)
     {
@@ -35,6 +36,7 @@ enum lantern_time_result lantern_time_now_seconds(double *out_seconds)
     }
 
     struct timespec value;
+
     if (clock_gettime(CLOCK_MONOTONIC, &value) != 0)
     {
         *out_seconds = -1.0;
@@ -54,6 +56,7 @@ lantern_time_elapsed_seconds(double started_seconds, double finished_seconds,
     {
         return LANTERN_TIME_ERR_INVALID;
     }
+
     if (!isfinite(started_seconds) || !isfinite(finished_seconds) ||
         started_seconds < 0.0 || finished_seconds < started_seconds)
     {

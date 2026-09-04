@@ -11,6 +11,7 @@ void lantern_secure_zero(void *ptr, size_t len)
 
     /* Volatile stores keep the compiler from removing the secret clear. */
     volatile uint8_t *bytes = ptr;
+
     while (len > 0)
     {
         *bytes = 0;
