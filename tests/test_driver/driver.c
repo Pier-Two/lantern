@@ -1,4 +1,4 @@
-#include "test_driver/driver.h"
+#include "tests/test_driver/driver.h"
 
 #include <inttypes.h>
 #include <pthread.h>
