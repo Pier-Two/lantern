@@ -51,6 +51,7 @@ static bool equals_ignore_case(const char *lhs, const char *rhs)
     {
         unsigned char a = (unsigned char)(*lhs);
         unsigned char b = (unsigned char)(*rhs);
+
         if (tolower(a) != tolower(b))
         {
             return false;
@@ -108,16 +109,19 @@ enum lantern_log_result lantern_log_set_level_from_string(
     const char *text, enum lantern_log_level *out_level)
 {
     enum lantern_log_level parsed = LANTERN_LOG_LEVEL_INFO;
+
     if (parse_level(text, &parsed) != LANTERN_LOG_OK)
     {
         return LANTERN_LOG_ERR_INVALID;
     }
 
     enum lantern_log_result result = lantern_log_set_level(parsed);
+
     if (result != LANTERN_LOG_OK)
     {
         return result;
     }
+
     if (out_level)
     {
         *out_level = parsed;
@@ -132,12 +136,14 @@ static enum lantern_log_timestamp_result default_timestamp(
     (void)context;
 
     struct timespec ts;
+
     if (timespec_get(&ts, TIME_UTC) != TIME_UTC)
     {
         return LANTERN_LOG_TIMESTAMP_UNAVAILABLE;
     }
 
     struct tm tm_result;
+
     if (!gmtime_r(&ts.tv_sec, &tm_result))
     {
         return LANTERN_LOG_TIMESTAMP_UNAVAILABLE;
@@ -158,10 +164,12 @@ static void format_component_tag(const char *component, char out[16])
     char lowered[11];
     const char *text = component && component[0] ? component : "?";
     size_t i = 0;
+
     for (; i < sizeof(lowered) - 1u && text[i]; ++i)
     {
         lowered[i] = (char)tolower((unsigned char)text[i]);
     }
+
     lowered[i] = '\0';
 
     (void)snprintf(out, 16, "[%s]", lowered);
@@ -180,32 +188,38 @@ static enum lantern_log_sink_result default_sink(
     enum lantern_log_sink_result result = LANTERN_LOG_SINK_OK;
     /* Keep one record contiguous when threads share the default stream. */
     flockfile(target);
+
     if (fprintf(target, "%s  %-5s  %-12s", record->timestamp,
                 level_to_string(record->level), tag) < 0)
     {
         result = LANTERN_LOG_SINK_ERR_WRITE;
     }
+
     if (record->metadata && record->metadata->validator &&
         fprintf(target, " validator=%s",
                 record->metadata->validator) < 0)
     {
         result = LANTERN_LOG_SINK_ERR_WRITE;
     }
+
     if (record->metadata && record->metadata->peer &&
         fprintf(target, " peer=%s", record->metadata->peer) < 0)
     {
         result = LANTERN_LOG_SINK_ERR_WRITE;
     }
+
     if (record->metadata && record->metadata->has_slot &&
         fprintf(target, " slot=%" PRIu64, record->metadata->slot) < 0)
     {
         result = LANTERN_LOG_SINK_ERR_WRITE;
     }
+
     if (fprintf(target, " %s\n", record->message) < 0 ||
         fflush(target) != 0)
     {
         result = LANTERN_LOG_SINK_ERR_WRITE;
     }
+
     funlockfile(target);
     return result;
 }
@@ -226,6 +240,7 @@ static enum lantern_log_result log_emit_v(
     {
         return LANTERN_LOG_ERR_INVALID;
     }
+
     if (level < config->min_level)
     {
         return LANTERN_LOG_OK;
@@ -233,10 +248,12 @@ static enum lantern_log_result log_emit_v(
 
     char message[1024];
     int written = vsnprintf(message, sizeof(message), fmt, args);
+
     if (written < 0)
     {
         return LANTERN_LOG_ERR_FORMAT;
     }
+
     message[sizeof(message) - 1u] = '\0';
     bool truncated = (size_t)written >= sizeof(message);
 
@@ -245,6 +262,7 @@ static enum lantern_log_result log_emit_v(
                                             "-??T??:??:??.???Z";
     char timestamp[32];
     const char *timestamp_text = unknown_timestamp;
+
     if (config->timestamp &&
         config->timestamp(config->context, timestamp) ==
             LANTERN_LOG_TIMESTAMP_AVAILABLE)
@@ -252,17 +270,20 @@ static enum lantern_log_result log_emit_v(
         timestamp_text = timestamp;
     }
 
-    const struct lantern_log_record record = {
+    const struct lantern_log_record record =
+    {
         .level = level,
         .timestamp = timestamp_text,
         .component = component,
         .metadata = metadata,
         .message = message,
     };
+
     if (config->sink(config->context, &record) != LANTERN_LOG_SINK_OK)
     {
         return LANTERN_LOG_ERR_SINK;
     }
+
     return truncated ? LANTERN_LOG_TRUNCATED : LANTERN_LOG_OK;
 }
 
@@ -286,7 +307,8 @@ void lantern_log(enum lantern_log_level level, const char *component,
                  const struct lantern_log_metadata *metadata, const char *fmt,
                  ...)
 {
-    const struct lantern_log_config config = {
+    const struct lantern_log_config config =
+    {
         .min_level = (enum lantern_log_level)atomic_load_explicit(
             &s_default_min_level, memory_order_relaxed),
         .timestamp = default_timestamp,

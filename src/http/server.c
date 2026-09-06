@@ -31,9 +31,7 @@
 
 #include "lantern/support/hex.h"
 #include "lantern/support/log.h"
-#include "test_driver/driver.h"
 
-static const size_t LANTERN_HTTP_MAX_TEST_DRIVER_BODY_SIZE = 64u * 1024u * 1024u;
 static const char LANTERN_HTTP_PATH_HEALTH[] = "/lean/v0/health";
 static const char LANTERN_HTTP_PATH_METRICS[] = "/metrics";
 static const char LANTERN_HTTP_PATH_FINALIZED[] = "/lean/v0/states/finalized";
@@ -41,12 +39,6 @@ static const char LANTERN_HTTP_PATH_FINALIZED_BLOCK[] = "/lean/v0/blocks/finaliz
 static const char LANTERN_HTTP_PATH_JUSTIFIED[] = "/lean/v0/checkpoints/justified";
 static const char LANTERN_HTTP_PATH_FORK_CHOICE[] = "/lean/v0/fork_choice";
 static const char LANTERN_HTTP_PATH_ADMIN_AGGREGATOR[] = "/lean/v0/admin/aggregator";
-static const char LANTERN_HTTP_PATH_TEST_FC_INIT[] = "/lean/v0/test_driver/fork_choice/init";
-static const char LANTERN_HTTP_PATH_TEST_FC_STEP[] = "/lean/v0/test_driver/fork_choice/step";
-static const char LANTERN_HTTP_PATH_TEST_STATE_RUN[] =
-    "/lean/v0/test_driver/state_transition/run";
-static const char LANTERN_HTTP_PATH_TEST_VERIFY_RUN[] =
-    "/lean/v0/test_driver/verify_signatures/run";
 static const char LANTERN_HTTP_JSON_HEALTH[] = "{\"status\":\"healthy\",\"service\":\"lean-rpc-api\"}";
 static const char LANTERN_HTTP_JSON_UNKNOWN_ENDPOINT[] = "{\"error\":\"unknown endpoint\"}";
 static const char LANTERN_HTTP_JSON_UNAVAILABLE[] = "{\"error\":\"service unavailable\"}";
@@ -397,133 +389,6 @@ static int handle_admin_aggregator(
         rc);
     return 0;
 }
-
-static int handle_test_driver(
-    void *context,
-    const struct lantern_http_request *request)
-{
-    (void)context;
-    if (!request)
-    {
-        return LANTERN_HTTP_SERVER_ERR_INVALID_PARAM;
-    }
-    const char *method = request->method;
-    const char *path = request->path;
-    const char *peer_text = request->peer;
-    if (strcmp(method, "POST") != 0)
-    {
-        int rc = send_method_not_allowed(request);
-        lantern_log(LANTERN_LOG_LEVEL_INFO,
-            "http",
-            &(const struct lantern_log_metadata){.peer = peer_text},
-            "%s %s -> 405 (rc=%d)",
-            method,
-            path,
-            rc);
-        return 0;
-    }
-
-    const char *request_body = request->body;
-    size_t request_body_len = request->body_len;
-    if (request_body_len > LANTERN_HTTP_MAX_TEST_DRIVER_BODY_SIZE)
-    {
-        int rc = send_bad_request(request);
-        lantern_log(LANTERN_LOG_LEVEL_INFO,
-            "http",
-            &(const struct lantern_log_metadata){.peer = peer_text},
-            "POST %s -> 400 (body read failed, rc=%d)",
-            path,
-            rc);
-        return 0;
-    }
-
-    if (strcmp(path, LANTERN_HTTP_PATH_TEST_FC_INIT) == 0)
-    {
-        char *error = NULL;
-        int driver_rc =
-            lantern_test_driver_fork_choice_init(request_body, request_body_len, &error);
-        if (driver_rc != 0)
-        {
-            int rc = send_bad_request(request);
-            lantern_log(LANTERN_LOG_LEVEL_INFO,
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "POST %s -> 400 (driver_rc=%d error=%s rc=%d)",
-                path,
-                driver_rc,
-                error ? error : "-",
-                rc);
-            free(error);
-            return 0;
-        }
-        int rc = lantern_http_send_response(request, 204, "No Content", "application/json", NULL, 0);
-        lantern_log(LANTERN_LOG_LEVEL_INFO,
-            "http",
-            &(const struct lantern_log_metadata){.peer = peer_text},
-            "POST %s -> 204 (rc=%d)",
-            path,
-            rc);
-        return 0;
-    }
-
-    char *response_body = NULL;
-    size_t response_body_len = 0;
-    int driver_rc = -1;
-    if (strcmp(path, LANTERN_HTTP_PATH_TEST_FC_STEP) == 0)
-    {
-        driver_rc = lantern_test_driver_fork_choice_step(
-            request_body,
-            request_body_len,
-            &response_body,
-            &response_body_len);
-    }
-    else if (strcmp(path, LANTERN_HTTP_PATH_TEST_STATE_RUN) == 0)
-    {
-        driver_rc = lantern_test_driver_state_transition_run(
-            request_body,
-            request_body_len,
-            &response_body,
-            &response_body_len);
-    }
-    else if (strcmp(path, LANTERN_HTTP_PATH_TEST_VERIFY_RUN) == 0)
-    {
-        driver_rc = lantern_test_driver_verify_signatures_run(
-            request_body,
-            request_body_len,
-            &response_body,
-            &response_body_len);
-    }
-    if (driver_rc != 0 || !response_body)
-    {
-        free(response_body);
-        int rc = send_internal(request);
-        lantern_log(LANTERN_LOG_LEVEL_ERROR,
-            "http",
-            &(const struct lantern_log_metadata){.peer = peer_text},
-            "POST %s -> 500 (driver_rc=%d rc=%d)",
-            path,
-            driver_rc,
-            rc);
-        return 0;
-    }
-
-    int rc = lantern_http_send_response(
-        request,
-        200,
-        "OK",
-        "application/json",
-        response_body,
-        response_body_len);
-    free(response_body);
-    lantern_log(LANTERN_LOG_LEVEL_INFO,
-        "http",
-        &(const struct lantern_log_metadata){.peer = peer_text},
-        "POST %s -> 200 (rc=%d)",
-        path,
-        rc);
-    return 0;
-}
-
 
 static int handle_health(
     void *context,
@@ -936,10 +801,6 @@ static int handle_fork_choice(
 
 static const struct lantern_http_route kHttpRoutes[] = {
     {NULL, LANTERN_HTTP_PATH_ADMIN_AGGREGATOR, handle_admin_aggregator},
-    {NULL, LANTERN_HTTP_PATH_TEST_FC_INIT, handle_test_driver},
-    {NULL, LANTERN_HTTP_PATH_TEST_FC_STEP, handle_test_driver},
-    {NULL, LANTERN_HTTP_PATH_TEST_STATE_RUN, handle_test_driver},
-    {NULL, LANTERN_HTTP_PATH_TEST_VERIFY_RUN, handle_test_driver},
     {"GET", LANTERN_HTTP_PATH_HEALTH, handle_health},
     {"GET", LANTERN_HTTP_PATH_METRICS, handle_metrics},
     {"GET", LANTERN_HTTP_PATH_FINALIZED, handle_finalized_state},

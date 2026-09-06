@@ -23,6 +23,7 @@ char *lantern_string_duplicate_len(const char *source, size_t length)
     }
 
     char *copy = malloc(length + 1u);
+
     if (!copy)
     {
         return NULL;
@@ -43,8 +44,10 @@ lantern_string_copy(char *dst, size_t dst_len, const char *src,
         {
             dst[0] = '\0';
         }
+
         return LANTERN_STRING_COPY_ERR_INVALID;
     }
+
     if (!dst || dst_len == 0)
     {
         return LANTERN_STRING_COPY_ERR_INVALID;
@@ -52,20 +55,24 @@ lantern_string_copy(char *dst, size_t dst_len, const char *src,
 
     const size_t src_len = strlen(src);
     size_t copy_len = src_len;
+
     if (copy_len >= dst_len)
     {
         copy_len = dst_len - 1u;
     }
+
     if (copy_len > 0)
     {
         memcpy(dst, src, copy_len);
     }
 
     dst[copy_len] = '\0';
+
     if (out_source_len)
     {
         *out_source_len = src_len;
     }
+
     return copy_len == src_len ? LANTERN_STRING_COPY_OK
                                : LANTERN_STRING_COPY_TRUNCATED;
 }
@@ -83,6 +90,7 @@ char *lantern_trim_whitespace(char *value)
     }
 
     char *end = value + strlen(value);
+
     while (end > value && isspace((unsigned char)*(end - 1)))
     {
         --end;

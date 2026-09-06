@@ -1,6 +1,16 @@
 #ifndef LANTERN_SUPPORT_LOG_H
 #define LANTERN_SUPPORT_LOG_H
 
+/**
+ * @file
+ * Configure and emit structured Lantern log records.
+ *
+ * This interface defines severity levels, optional record metadata, injectable
+ * timestamp and sink callbacks, and a process-default logger. Callers retain
+ * ownership of configurations and referenced data. Callback implementations
+ * determine whether shared contexts can be used concurrently.
+ */
+
 #include <stdbool.h>
 #include <stdint.h>
 

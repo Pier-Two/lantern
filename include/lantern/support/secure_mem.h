@@ -1,6 +1,15 @@
 #ifndef LANTERN_SUPPORT_SECURE_MEM_H
 #define LANTERN_SUPPORT_SECURE_MEM_H
 
+/**
+ * @file
+ * Clear caller-owned writable memory through volatile byte stores.
+ *
+ * The volatile access prevents the compiler from removing the overwrite as a
+ * dead store. Calls with a null pointer or zero length have no effect, and
+ * concurrent calls require separate ranges or external synchronization.
+ */
+
 #include <stddef.h>
 
 #ifdef __cplusplus

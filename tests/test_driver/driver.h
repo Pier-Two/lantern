@@ -1,5 +1,10 @@
-#ifndef LANTERN_TEST_DRIVER_DRIVER_H
-#define LANTERN_TEST_DRIVER_DRIVER_H
+#ifndef LANTERN_TESTS_TEST_DRIVER_DRIVER_H
+#define LANTERN_TESTS_TEST_DRIVER_DRIVER_H
+
+/**
+ * @file
+ * Declare fixture-driven consensus operations used by Lantern tests.
+ */
 
 #include <stddef.h>
 
@@ -17,4 +22,4 @@ int lantern_test_driver_verify_signatures_run(const char *body, size_t body_len,
                                               char **out_body,
                                               size_t *out_body_len);
 
-#endif /* LANTERN_TEST_DRIVER_DRIVER_H */
+#endif /* LANTERN_TESTS_TEST_DRIVER_DRIVER_H */

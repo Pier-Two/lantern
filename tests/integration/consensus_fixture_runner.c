@@ -9,7 +9,7 @@
 #include "lantern/support/log.h"
 #include "fixture_runner.h"
 #include "tests/support/fixture_loader.h"
-#include "src/test_driver/driver.h"
+#include "tests/test_driver/driver.h"
 #include "../support/state_store_adapter.h"
 #include "../../src/core/client/sync_internal.h"
 

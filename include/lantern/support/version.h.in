@@ -1,0 +1,28 @@
+#ifndef LANTERN_SUPPORT_VERSION_H
+#define LANTERN_SUPPORT_VERSION_H
+
+/**
+ * @file
+ * Expose Lantern build identity through generated preprocessor constants.
+ *
+ * CMake configures this template with the complete release string and its
+ * major, minor, and patch components. The generated header also publishes the
+ * lowercase client identifier used by the command-line interface and metrics.
+ */
+
+/** Defines the release string shown by the CLI and metrics, including `v`. */
+#define LANTERN_VERSION "v@PROJECT_VERSION@"
+
+/** Defines the release version's major component. */
+#define LANTERN_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+
+/** Defines the release version's minor component. */
+#define LANTERN_VERSION_MINOR @PROJECT_VERSION_MINOR@
+
+/** Defines the release version's patch component. */
+#define LANTERN_VERSION_PATCH @PROJECT_VERSION_PATCH@
+
+/** Defines the lowercase client identifier shown by the CLI and metrics. */
+#define LANTERN_CLIENT_NAME "lantern"
+
+#endif /* LANTERN_SUPPORT_VERSION_H */

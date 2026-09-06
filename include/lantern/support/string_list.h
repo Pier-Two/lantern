@@ -1,6 +1,16 @@
 #ifndef LANTERN_SUPPORT_STRING_LIST_H
 #define LANTERN_SUPPORT_STRING_LIST_H
 
+/**
+ * @file
+ * Manage an initialized list that owns duplicated null-terminated strings.
+ *
+ * The interface supports append, unique append, lookup, removal, independent
+ * copying, and reset. The module owns its private storage, while callers own
+ * the list handle. Mutations invalidate borrowed item pointers, and shared
+ * access requires external synchronization when any thread can mutate a list.
+ */
+
 #include <stdbool.h>
 #include <stddef.h>
 

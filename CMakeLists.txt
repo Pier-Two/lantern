@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(lantern LANGUAGES C)
+project(lantern VERSION 0.0.5 LANGUAGES C)
+
+file(MAKE_DIRECTORY "${PROJECT_BINARY_DIR}/include/lantern/support")
+configure_file(
+    include/lantern/support/version.h.in
+    "${PROJECT_BINARY_DIR}/include/lantern/support/version.h"
+    @ONLY
+)
 
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
@@ -99,7 +106,6 @@ set(LANTERN_LIBRARY_SOURCES
     src/http/client.c
     src/http/core.c
     src/http/server.c
-    src/test_driver/driver.c
     src/storage/storage.c
     src/support/hex.c
     src/support/log.c
@@ -109,14 +115,13 @@ set(LANTERN_LIBRARY_SOURCES
     src/support/secure_mem.c
     src/crypto/xmss.c
     src/internal/yaml_parser.c
-    tests/support/fixture_loader.c
-    tests/support/state_store_adapter.c
 )
 
 function(lantern_define_library target_name wrapper_target)
     add_library(${target_name} STATIC ${LANTERN_LIBRARY_SOURCES})
     target_include_directories(${target_name}
         PUBLIC
+            ${PROJECT_BINARY_DIR}/include
             ${PROJECT_SOURCE_DIR}/include
         PRIVATE
             ${PROJECT_SOURCE_DIR}
@@ -208,6 +213,12 @@ option(LANTERN_BUILD_TESTS "Build lantern unit tests" ON)
 if(LANTERN_BUILD_TESTS)
     enable_testing()
     lantern_define_library(lantern_test lantern_c_leanvm_xmss_test)
+    target_sources(lantern_test
+        PRIVATE
+            tests/test_driver/driver.c
+            tests/support/fixture_loader.c
+            tests/support/state_store_adapter.c
+    )
     set(LANTERN_TEST_LINK_LIB lantern_test)
 
     set(_lantern_state_transition_fixture_dir
@@ -366,7 +377,7 @@ if(LANTERN_BUILD_TESTS)
     add_executable(lantern_networking_messages_test
         tests/unit/test_networking_messages.c
     )
-    target_link_libraries(lantern_networking_messages_test PRIVATE lantern)
+    target_link_libraries(lantern_networking_messages_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     target_include_directories(
         lantern_networking_messages_test
         PRIVATE
