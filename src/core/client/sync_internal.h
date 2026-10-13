@@ -446,10 +446,12 @@ lantern_client_error lantern_client_record_block(
  * @param client    Client instance
  * @param vote      Signed vote to record
  * @param peer_text Peer ID string (may be NULL)
+ * @return true if the vote was validated and recorded; false if it was
+ *         rejected or only buffered for replay
  *
  * @note Thread safety: Acquires state_lock
  */
-void lantern_client_record_vote(struct lantern_client *client,
+bool lantern_client_record_vote(struct lantern_client *client,
                                 const LanternSignedVote *vote,
                                 const char *peer_text);
 

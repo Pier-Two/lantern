@@ -382,12 +382,9 @@ static int test_idle_gossip_ignored(void)
         return 1;
     }
 
+    /* Once syncing, votes reach validation; a valid vote returning OK is
+     * covered by test_gossip_vote_metrics_attribute_sender. */
     client.sync_state = LANTERN_SYNC_STATE_SYNCING;
-    if (lantern_client_debug_gossip_vote(&client, &vote) != LANTERN_CLIENT_OK)
-    {
-        fprintf(stderr, "syncing vote gossip should be accepted by handler\n");
-        return 1;
-    }
     if (lantern_client_debug_gossip_aggregated_attestation(&client, &attestation)
         == LANTERN_CLIENT_ERR_IGNORED)
     {
@@ -396,11 +393,6 @@ static int test_idle_gossip_ignored(void)
     }
 
     client.sync_state = LANTERN_SYNC_STATE_SYNCED;
-    if (lantern_client_debug_gossip_vote(&client, &vote) != LANTERN_CLIENT_OK)
-    {
-        fprintf(stderr, "synced vote gossip should be accepted by handler\n");
-        return 1;
-    }
     if (lantern_client_debug_gossip_aggregated_attestation(&client, &attestation)
         == LANTERN_CLIENT_ERR_IGNORED)
     {
@@ -533,6 +525,85 @@ cleanup:
         pthread_mutex_destroy(&client.status_lock);
         client.status_lock_initialized = false;
     }
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+/* A vote the client does not accept must not be reported as accepted, or
+ * gossipsub forwards it to the mesh. */
+static int test_gossip_vote_ignores_unaccepted_votes(void)
+{
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    LanternSignedVote vote;
+    int rc = 1;
+
+    if (client_test_setup_vote_validation_client_with_validator_count(
+            &client,
+            "gossip_vote_unaccepted",
+            2u,
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+    client.sync_state = LANTERN_SYNC_STATE_SYNCED;
+
+    uint64_t child_slot = 0;
+    if (client_test_slot_for_root(&client, &child_root, &child_slot) != 0) {
+        fprintf(stderr, "failed to resolve child slot for unaccepted vote test\n");
+        goto cleanup;
+    }
+
+    /* Invalid signature: rejected, so not forwarded. */
+    memset(&vote, 0, sizeof(vote));
+    vote.data.validator_id = 1u;
+    vote.data.slot = child_slot;
+    vote.data.head.slot = child_slot;
+    vote.data.head.root = child_root;
+    vote.data.target = vote.data.head;
+    vote.data.source.slot = 0u;
+    vote.data.source.root = anchor_root;
+    if (client_test_sign_vote_with_secret(&vote, secret) != 0) {
+        fprintf(stderr, "failed to sign vote for unaccepted vote test\n");
+        goto cleanup;
+    }
+    vote.signature.bytes[0] ^= 0xFFu;
+    int bad_sig_rc = client_test_gossip_vote(&client, &vote);
+    if (bad_sig_rc != LANTERN_CLIENT_ERR_IGNORED) {
+        fprintf(stderr, "vote with invalid signature returned rc=%d, want ignored\n", bad_sig_rc);
+        goto cleanup;
+    }
+    if (lantern_client_pending_vote_count(&client) != 0u) {
+        fprintf(stderr, "vote with invalid signature should not be buffered\n");
+        goto cleanup;
+    }
+
+    /* Unknown head: buffered for replay, but not forwarded before it is checked. */
+    client_test_fill_root(&vote.data.head.root, 0xEEu);
+    vote.data.target = vote.data.head;
+    if (client_test_sign_vote_with_secret(&vote, secret) != 0) {
+        fprintf(stderr, "failed to sign unknown-head vote\n");
+        goto cleanup;
+    }
+    int buffered_rc = client_test_gossip_vote(&client, &vote);
+    if (buffered_rc != LANTERN_CLIENT_ERR_IGNORED) {
+        fprintf(stderr, "buffered vote returned rc=%d, want ignored\n", buffered_rc);
+        goto cleanup;
+    }
+    if (lantern_client_pending_vote_count(&client) != 1u) {
+        fprintf(stderr, "unknown-head vote should still be buffered for replay\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
     client_test_teardown_vote_validation_client(&client, pub, secret);
     return rc;
 }
@@ -995,6 +1066,10 @@ int main(void)
         return 1;
     }
     if (test_gossip_vote_metrics_attribute_sender() != 0)
+    {
+        return 1;
+    }
+    if (test_gossip_vote_ignores_unaccepted_votes() != 0)
     {
         return 1;
     }

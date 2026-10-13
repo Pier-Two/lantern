@@ -201,8 +201,10 @@ int gossip_block_handler(
  * @param vote     Received vote
  * @param from     Peer ID of sender
  * @param context  Client instance
- * @return 0 on success
+ * @return 0 if the vote was validated and recorded
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if vote or context is NULL
+ * @return LANTERN_CLIENT_ERR_IGNORED if the vote was rejected or only
+ *         buffered, so gossipsub does not forward it
  *
  * @note Thread safety: This function is thread-safe
  */
@@ -231,7 +233,10 @@ int gossip_vote_handler(
     const char *peer_id_text = peer_id_to_text(from, peer_text, sizeof(peer_text));
 
     lantern_client_note_vote_delivery(client, peer_id_text, vote);
-    lantern_client_record_vote(client, vote, peer_id_text);
+    if (!lantern_client_record_vote(client, vote, peer_id_text))
+    {
+        return LANTERN_CLIENT_ERR_IGNORED;
+    }
     return LANTERN_CLIENT_OK;
 }
 
